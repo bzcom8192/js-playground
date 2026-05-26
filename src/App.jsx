@@ -697,6 +697,7 @@ export default function App() {
                   autoComplete="off"
                   placeholder="// Type your JavaScript code here..."
                   style={{ fontFamily: "'Fira Code', 'Consolas', monospace" }}
+                  lang="javascript"
                 />
                }
              />
