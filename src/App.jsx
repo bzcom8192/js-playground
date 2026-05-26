@@ -324,13 +324,7 @@ export default function App() {
   const [logs, setLogs] = useState([]);
   const [error, setError] = useState(null);
 
-  const [isAutoRun, setIsAutoRun] = useState(() => {
-    try {
-      return localStorage.getItem('playground_autorun') === 'true';
-    } catch (e) {
-      return false;
-    }
-  });
+  const [isAutoRun, setIsAutoRun] = useState(false);
 
   // History State
   const [history, setHistory] = useState(() => {
