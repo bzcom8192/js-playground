@@ -148,6 +148,10 @@ export default function MonacoEditor({ value, onChange, fallback }) {
       monaco.languages.setMonarchTokensProvider("javascript", {
         tokenizer: {
           root: [
+            // Comments
+            [/\/\/.*$/, "comment"],
+            [/\/\*/, "comment", "@block_comment"],
+
             [/\.[a-zA-Z_$][\w$]*/, "method"],
             [
               /[a-zA-Z_$][\w$]*/,
@@ -163,11 +167,19 @@ export default function MonacoEditor({ value, onChange, fallback }) {
             [/'([^'\\]|\\.)*$/, "string.invalid"],
             [/'/, "string", "@string_single"],
             [/`/, "string", "@string_backtick"],
-            [/\d+/, "number"],
+            [/0[xX][0-9a-fA-F]+/, "number.hex"],
+            [/0[bB][01]+/, "number.binary"],
+            [/0[oO][0-7]+/, "number.octal"],
+            [/\d+(\.\d+)?([eE][+-]?\d+)?/, "number"],
             [/[;,.]/, "delimiter"],
             [/[()]/, "delimiter.parenthesis"],
             [/[[\]]/, "delimiter.bracket"],
             [/[{}]/, "delimiter.brace"],
+          ],
+          block_comment: [
+            [/[^/*]+/, "comment"],
+            [/\*\//, "comment", "@pop"],
+            [/[/*]/, "comment"],
           ],
           string_double: [
             [/[^\\"]+/, "string"],
