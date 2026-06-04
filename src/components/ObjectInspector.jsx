@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { ChevronRight } from "./icons/ChevronRight";
 
 export default function ObjectInspector({ value }) {
   const [expanded, setExpanded] = useState(false);
