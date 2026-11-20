@@ -381,5 +381,12 @@ for them.
 - **Inherited:** the playground limitations listed in AUDIT.md (#11, #12b–e).
 
 ## Git
-Branch `farmer-game` was committed with a conventional message. Push status is in the
-section below, written after the push attempt.
+- **Committed locally** on branch `farmer-game`:
+  `feat: add JS Farmer page and fix editor/keyboard-shortcut audit findings`, followed by a
+  small docs commit with this push status.
+- **Push failed (auth):** `git push -u origin farmer-game` returned
+  `remote: Permission to bzcom8192/js-playground.git denied to develop-swf.` / `403`.
+  The credentials stored on the build box belong to a GitHub account without write access to
+  this repo.
+- **To publish:** run `git push -u origin farmer-game` from an account that can push.
+- `BRIEF.md` was left untracked, as it was found.
