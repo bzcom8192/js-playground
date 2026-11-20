@@ -178,3 +178,9 @@ $ npm run build         → ✓ built (FarmerPage 79.6 kB; FarmBoard3D chunk inc
 
 ## Commit / push
 Committed on `farmer-game`. The push result is in the section below.
+
+### Push status
+- Committed locally on `farmer-game` as `7e95a86`, with the same author as the earlier farmer commits.
+- `git push origin farmer-game` **failed**: `remote: Permission to bzcom8192/js-playground.git denied to
+  develop-swf` (HTTP 403). This is the same auth problem as in RESULT/RESULT2. The commits stay local; pull them
+  via bundle.
