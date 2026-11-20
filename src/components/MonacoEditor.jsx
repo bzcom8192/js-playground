@@ -412,6 +412,25 @@ export default function MonacoEditor({
         );
       }
 
+      // Duplicate line with Alt+Shift+Arrow like on Windows. Monaco remaps
+      // its built-in Copy Line actions to Ctrl+Alt+Shift+Arrow on Linux
+      // (Alt+Shift is the classic X11 layout-switch combo), so the Windows
+      // chord does nothing there — rebind it explicitly.
+      disposables.push(
+        editor.addAction({
+          id: "jsplay.copyLinesDown",
+          label: "Copy Line Down",
+          keybindings: [monaco.KeyMod.Alt | monaco.KeyMod.Shift | monaco.KeyCode.DownArrow],
+          run: (ed) => ed.trigger("keyboard", "editor.action.copyLinesDownAction", {}),
+        }),
+        editor.addAction({
+          id: "jsplay.copyLinesUp",
+          label: "Copy Line Up",
+          keybindings: [monaco.KeyMod.Alt | monaco.KeyMod.Shift | monaco.KeyCode.UpArrow],
+          run: (ed) => ed.trigger("keyboard", "editor.action.copyLinesUpAction", {}),
+        }),
+      );
+
       const runLint = () => {
         const model = editor.getModel();
         if (!isMounted || !model || model.isDisposed()) return;
