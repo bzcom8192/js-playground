@@ -13,7 +13,7 @@ import { formatCount } from "./format.js";
 import * as W from "./world.js";
 import useFarmEngine from "./useFarmEngine.js";
 import useFarmerFiles from "./useFarmerFiles.js";
-import FarmBoard from "./FarmBoard.jsx";
+import FarmBoardView from "./FarmBoardView.jsx";
 import FloatingWindow, { SquareButton } from "./FloatingWindow.jsx";
 import { Glyph, OLIVE, ORANGE } from "./farmerUi.jsx";
 import UnlocksPanel from "./UnlocksPanel.jsx";
@@ -690,7 +690,7 @@ export default function FarmerPage() {
       {/* Farm: center-left hero, floating on the background. */}
       <div className="relative w-full h-[92vw] max-h-[72vh] md:max-h-none md:h-auto md:absolute md:left-0 md:top-[84px] md:bottom-0 md:w-[55%]">
         <div className="absolute inset-0 pb-10 md:pb-14">
-          <FarmBoard game={game} moveMs={moveMs} paused={paused} />
+          <FarmBoardView game={game} moveMs={moveMs} paused={paused} />
         </div>
         <div className="absolute left-3 bottom-2 md:left-6 md:bottom-4 z-[50] max-w-[calc(100%-1.5rem)]">
           <StatusPill game={game} stats={view.stats} status={status} paused={paused} demo={demo} toast={toast} />
