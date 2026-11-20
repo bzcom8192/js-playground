@@ -13,7 +13,7 @@ const MAX_LOGS = 500;
 
 function loadGame() {
   if (typeof window !== "undefined" && isDemoHash(window.location.hash)) {
-    return { game: createDemoGame(), uiSpeed: 1, demo: true };
+    return { game: createDemoGame(), demo: true };
   }
   return loadSavedGame();
 }
@@ -23,12 +23,12 @@ function loadSavedGame() {
     const raw = localStorage.getItem(SAVE_KEY);
     if (raw) {
       const data = JSON.parse(raw);
-      return { game: W.deserialize(data), uiSpeed: [1, 2, 4, 8].includes(data.uiSpeed) ? data.uiSpeed : 1 };
+      return { game: W.deserialize(data) };
     }
   } catch (e) {
     void e;
   }
-  return { game: W.createGame(), uiSpeed: 1 };
+  return { game: W.createGame() };
 }
 
 let logId = 0;
@@ -36,14 +36,12 @@ let logId = 0;
 export default function useFarmEngine() {
   const [initial] = useState(loadGame);
   const gameRef = useRef(initial.game);
-  const uiSpeedRef = useRef(initial.uiSpeed);
   const runtimeRef = useRef(null);
   const logBuffer = useRef([]);
   const dirtyRef = useRef(true);
   const demoRef = useRef(!!initial.demo);
   const pausedRef = useRef(false);
 
-  const [uiSpeed, setUiSpeedState] = useState(initial.uiSpeed);
   const [status, setStatus] = useState("idle");
   const [paused, setPausedState] = useState(false);
   const [demo, setDemo] = useState(!!initial.demo);
@@ -63,7 +61,7 @@ export default function useFarmEngine() {
     try {
       localStorage.setItem(
         SAVE_KEY,
-        JSON.stringify({ ...W.serialize(gameRef.current), uiSpeed: uiSpeedRef.current }),
+        JSON.stringify(W.serialize(gameRef.current)),
       );
       return true;
     } catch (e) {
@@ -96,7 +94,6 @@ export default function useFarmEngine() {
           setPausedState(false);
         }
       },
-      getUiSpeed: () => uiSpeedRef.current,
     });
     runtimeRef.current = rt;
     return () => {
@@ -167,8 +164,6 @@ export default function useFarmEngine() {
     setStatus("idle");
     const real = loadSavedGame();
     gameRef.current = real.game;
-    uiSpeedRef.current = real.uiSpeed;
-    setUiSpeedState(real.uiSpeed);
     dirtyRef.current = true;
     if (typeof window !== "undefined" && isDemoHash(window.location.hash)) {
       window.history.replaceState(null, "", "#/farmer");
@@ -202,11 +197,6 @@ export default function useFarmEngine() {
     dirtyRef.current = true;
   }, []);
   const isRunning = useCallback(() => !!runtimeRef.current?.isRunning(), []);
-
-  const setUiSpeed = useCallback((s) => {
-    uiSpeedRef.current = s;
-    setUiSpeedState(s);
-  }, []);
 
   const clearFarm = useCallback(() => {
     exitDemo();
@@ -266,8 +256,6 @@ export default function useFarmEngine() {
     view,
     status,
     logs,
-    uiSpeed,
-    setUiSpeed,
     paused,
     setPaused,
     demo,

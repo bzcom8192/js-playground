@@ -354,7 +354,7 @@ function FilesPanel({ files, windows, active, onToggle, onRename, onDelete, onNe
 
 export default function FarmerPage() {
   const engine = useFarmEngine();
-  const { view, status, logs, uiSpeed, paused, demo } = engine;
+  const { view, status, logs, paused, demo } = engine;
   const game = view.game;
   const running = status === "running";
   const desktop = useIsDesktop();
@@ -503,7 +503,7 @@ export default function FarmerPage() {
   const toggleWindow = (key) => fm.setOpen(key, !windows[key]?.open);
 
   const power = game.items.Power > 0 ? 2 : 1;
-  const moveMs = Math.min(150, 200 / (W.speedMultiplier(game) * uiSpeed * power));
+  const moveMs = Math.min(150, 200 / (W.speedMultiplier(game) * power));
   const affordable = Object.keys(game.unlocks).filter((id) => W.unlockStatus(game, id) === "affordable").length;
 
   const windowProps = (key, extra = {}) => ({
@@ -604,22 +604,6 @@ export default function FarmerPage() {
         <UnlocksPanel game={game} onBuy={engine.buy} />
       </div>
       <div className="shrink-0 flex items-center gap-2 px-3 py-2 border-t border-stone-200 bg-white text-xs text-stone-700">
-        <label htmlFor="farmer-speed" className="font-semibold">
-          Speed
-        </label>
-        <select
-          id="farmer-speed"
-          value={uiSpeed}
-          onChange={(e) => engine.setUiSpeed(Number(e.target.value))}
-          className="bg-white border border-stone-300 rounded px-2 py-1"
-          title="Execution speed (on top of the Speed unlock)"
-        >
-          {[1, 2, 4, 8].map((s) => (
-            <option key={s} value={s}>
-              {s}×
-            </option>
-          ))}
-        </select>
         <button
           onClick={handleClearFarm}
           className="ml-auto px-3 py-1 rounded border border-stone-300 hover:border-red-400 hover:text-red-600 font-semibold"
