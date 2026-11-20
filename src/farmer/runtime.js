@@ -26,6 +26,8 @@ export const RUNAWAY_GUARDS = 200_000;
 export const SYNC_LOOP_LIMIT = 10_000_000;
 const MIN_SLEEP_MS = 4;
 const YIELD_EVERY_MS = 16;
+// Actions sleep in slices of at most this many ms, checking pause/stop between.
+export const SLICE_MS = 50;
 
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 
@@ -92,6 +94,7 @@ export function createRuntime(opts) {
   } = opts;
 
   let current = null;
+  let paused = false;
 
   const log = (kind, text) => onLog({ kind, text });
 
@@ -99,6 +102,11 @@ export function createRuntime(opts) {
     if (ctx.finished) return;
     ctx.finished = true;
     ctx.endTime = now();
+    if (ctx.pauseStart !== null) {
+      ctx.pausedMs += ctx.endTime - ctx.pauseStart;
+      ctx.pauseStart = null;
+    }
+    if (current === ctx) paused = false;
     if (current === ctx && !silent) onStatus(status, info);
     ctx.resolveDone(status);
   }
@@ -127,7 +135,16 @@ export function createRuntime(opts) {
       donePromise,
       resolveDone,
       lastMeasure: null,
+      pausedMs: 0,
+      pauseStart: null,
     };
+  }
+
+  // While paused, wait in small slices until resumed or stopped.
+  async function waitWhilePaused(ctx) {
+    while (paused && !ctx.stopped) {
+      await Promise.race([sleep(SLICE_MS), ctx.stopPromise]);
+    }
   }
 
   function buildApi(ctx) {
@@ -136,6 +153,7 @@ export function createRuntime(opts) {
     // Throws STOP once; afterwards — e.g. if the player
     // swallowed it in a try/catch, or for un-awaited callbacks — park forever.
     const gate = async () => {
+      if (paused) await waitWhilePaused(ctx);
       if (!ctx.stopped) return;
       if (ctx.thrown) await new Promise(() => {});
       ctx.thrown = true;
@@ -160,9 +178,16 @@ export function createRuntime(opts) {
     const spend = async (ms) => {
       ctx.debt += ms;
       if (ctx.debt >= MIN_SLEEP_MS) {
-        const t0 = now();
-        await sleepAbortable(ctx.debt);
-        ctx.debt = Math.max(-50, ctx.debt - (now() - t0));
+        // Sleep in slices so Pause/Stop react within SLICE_MS.
+        while (ctx.debt >= MIN_SLEEP_MS && !ctx.stopped) {
+          const chunk = Math.min(ctx.debt, SLICE_MS);
+          const t0 = now();
+          await sleepAbortable(chunk);
+          const spent = now() - t0;
+          ctx.debt -= spent > 0 ? spent : chunk;
+          if (paused) await waitWhilePaused(ctx);
+        }
+        ctx.debt = Math.max(-50, ctx.debt);
         ctx.lastYield = now();
       } else if (now() - ctx.lastYield > YIELD_EVERY_MS) {
         await yieldFn();
@@ -314,7 +339,7 @@ export function createRuntime(opts) {
         },
         false,
       ),
-      get_time: sense("get_time", () => (now() - ctx.startTime) / 1000, false),
+      get_time: sense("get_time", () => runSeconds(ctx), false),
       get_tick_count: sense("get_tick_count", () => ctx.ticks, false),
 
       // output
@@ -330,7 +355,7 @@ export function createRuntime(opts) {
 
       // injected by the transform
       __loopGuard: async () => {
-        if (ctx.stopped) await gate();
+        if (ctx.stopped || paused) await gate();
         ctx.syncGuards = 0;
         if (++ctx.guardsSinceAction > RUNAWAY_GUARDS) {
           if (!ctx.warnedRunaway) {
@@ -388,8 +413,20 @@ export function createRuntime(opts) {
     return { fn, args: names.map((n) => api[n]) };
   }
 
-  function run(code) {
+  // Seconds the program has been running, excluding paused time.
+  function runSeconds(ctx) {
+    const end = ctx.endTime ?? now();
+    const pausing = ctx.pauseStart !== null ? end - ctx.pauseStart : 0;
+    return Math.max(0, end - ctx.startTime - ctx.pausedMs - pausing) / 1000;
+  }
+
+  /**
+   * run(code, { mapLine }) — mapLine(line) → { name, line, main } maps a line of
+   * the combined multi-file program back to its file (see program.js).
+   */
+  function run(code, { mapLine } = {}) {
     stop(true);
+    setPaused(false);
     const ctx = makeCtx();
     current = ctx;
     let compiled;
@@ -407,8 +444,11 @@ export function createRuntime(opts) {
         if (err === STOP || ctx.stopped) return finish(ctx, "stopped");
         const line = errorLine(err);
         const msg = err instanceof Error ? `${err.name}: ${err.message}` : `Uncaught ${formatValue(err)}`;
-        log("error", line ? `Line ${line}: ${msg}` : msg);
-        finish(ctx, "error", { error: err, line });
+        const where = line && mapLine ? mapLine(line) : null;
+        let prefix = line ? `Line ${line}: ` : "";
+        if (where) prefix = where.main ? `Line ${where.line}: ` : `${where.name}, line ${where.line}: `;
+        log("error", prefix + msg);
+        finish(ctx, "error", { error: err, line: where ? where.line : line, file: where?.name });
       },
     );
     // Resolves with "done" | "stopped" | "error" — even if the player's code
@@ -419,6 +459,7 @@ export function createRuntime(opts) {
   function stop(silent = false) {
     const ctx = current;
     if (!ctx || ctx.stopped || ctx.finished) return;
+    setPaused(false);
     ctx.stopped = true;
     ctx.resolveStop();
     finish(ctx, "stopped", null, silent);
@@ -427,7 +468,7 @@ export function createRuntime(opts) {
   function stats() {
     const ctx = current;
     if (!ctx) return { running: false, ticks: 0, actions: 0, elapsed: 0, lastMeasure: null };
-    const elapsed = ((ctx.endTime ?? now()) - ctx.startTime) / 1000;
+    const elapsed = runSeconds(ctx);
     return {
       running: !ctx.finished,
       ticks: ctx.ticks,
@@ -437,5 +478,27 @@ export function createRuntime(opts) {
     };
   }
 
-  return { run, stop, stats, isRunning: () => !!current && !current.finished };
+  // Pause / resume the running program (actions and loops wait; time stops).
+  function setPaused(p) {
+    p = !!p;
+    if (p === paused) return;
+    const ctx = current;
+    if (p && (!ctx || ctx.finished)) return; // nothing to pause
+    paused = p;
+    if (!ctx) return;
+    if (p) ctx.pauseStart = now();
+    else if (ctx.pauseStart !== null) {
+      ctx.pausedMs += now() - ctx.pauseStart;
+      ctx.pauseStart = null;
+    }
+  }
+
+  return {
+    run,
+    stop,
+    stats,
+    setPaused,
+    isPaused: () => paused,
+    isRunning: () => !!current && !current.finished,
+  };
 }

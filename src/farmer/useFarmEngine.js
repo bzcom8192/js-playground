@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as W from "./world.js";
 import { createRuntime } from "./runtime.js";
+import { createDemoGame, isDemoHash } from "./demo.js";
 
 export const SAVE_KEY = "farmer_save_v1";
 const FRAME_MS = 33; // UI refresh (~30 fps)
@@ -11,6 +12,13 @@ const SAVE_EVERY_MS = 3000;
 const MAX_LOGS = 500;
 
 function loadGame() {
+  if (typeof window !== "undefined" && isDemoHash(window.location.hash)) {
+    return { game: createDemoGame(), uiSpeed: 1, demo: true };
+  }
+  return loadSavedGame();
+}
+
+function loadSavedGame() {
   try {
     const raw = localStorage.getItem(SAVE_KEY);
     if (raw) {
@@ -32,9 +40,13 @@ export default function useFarmEngine() {
   const runtimeRef = useRef(null);
   const logBuffer = useRef([]);
   const dirtyRef = useRef(true);
+  const demoRef = useRef(!!initial.demo);
+  const pausedRef = useRef(false);
 
   const [uiSpeed, setUiSpeedState] = useState(initial.uiSpeed);
   const [status, setStatus] = useState("idle");
+  const [paused, setPausedState] = useState(false);
+  const [demo, setDemo] = useState(!!initial.demo);
   const [logs, setLogs] = useState([]);
   const [view, setView] = useState(() => ({
     game: initial.game,
@@ -47,6 +59,7 @@ export default function useFarmEngine() {
   }, []);
 
   const save = useCallback(() => {
+    if (demoRef.current) return false; // the demo farm is never saved
     try {
       localStorage.setItem(
         SAVE_KEY,
@@ -76,7 +89,13 @@ export default function useFarmEngine() {
           }
         }
       },
-      onStatus: (s) => setStatus(s),
+      onStatus: (s) => {
+        setStatus(s);
+        if (s !== "running") {
+          pausedRef.current = false;
+          setPausedState(false);
+        }
+      },
       getUiSpeed: () => uiSpeedRef.current,
     });
     runtimeRef.current = rt;
@@ -96,8 +115,12 @@ export default function useFarmEngine() {
       if (t - lastTick >= TICK_MS) {
         const dt = Math.min(2, (t - lastTick) / 1000); // clamp (background tabs)
         lastTick = t;
-        W.tick(gameRef.current, dt);
-        changed = true;
+        if (!pausedRef.current && !demoRef.current) {
+          // Pause freezes the world too (growth, water, regrowth). The demo
+          // farm is a static showcase (frozen until you leave demo mode).
+          W.tick(gameRef.current, dt);
+          changed = true;
+        }
       }
       if (logBuffer.current.length) {
         const batch = logBuffer.current;
@@ -135,17 +158,49 @@ export default function useFarmEngine() {
     };
   }, [save]);
 
+  // Leave demo mode: back to the real save (nothing of the demo is kept).
+  const exitDemo = useCallback(() => {
+    if (!demoRef.current) return false;
+    runtimeRef.current?.stop(true);
+    demoRef.current = false;
+    setDemo(false);
+    setStatus("idle");
+    const real = loadSavedGame();
+    gameRef.current = real.game;
+    uiSpeedRef.current = real.uiSpeed;
+    setUiSpeedState(real.uiSpeed);
+    dirtyRef.current = true;
+    if (typeof window !== "undefined" && isDemoHash(window.location.hash)) {
+      window.history.replaceState(null, "", "#/farmer");
+    }
+    pushLog("info", "Left the demo farm, back to your saved farm.");
+    return true;
+  }, [pushLog]);
+
+  /** run(code, { label, mapLine }) — label is shown in the log ("▶ Run crops"). */
   const run = useCallback(
-    (code) => {
+    (code, { label, mapLine } = {}) => {
       const rt = runtimeRef.current;
       if (!rt) return;
-      pushLog("info", "▶ Run");
-      rt.run(code);
+      exitDemo();
+      pausedRef.current = false;
+      setPausedState(false);
+      pushLog("info", label ? `▶ Run ${label}` : "▶ Run");
+      rt.run(code, { mapLine });
     },
-    [pushLog],
+    [pushLog, exitDemo],
   );
 
   const stop = useCallback(() => runtimeRef.current?.stop(), []);
+
+  const setPaused = useCallback((p) => {
+    const rt = runtimeRef.current;
+    if (!rt) return;
+    rt.setPaused(p);
+    pausedRef.current = rt.isPaused();
+    setPausedState(rt.isPaused());
+    dirtyRef.current = true;
+  }, []);
   const isRunning = useCallback(() => !!runtimeRef.current?.isRunning(), []);
 
   const setUiSpeed = useCallback((s) => {
@@ -154,12 +209,14 @@ export default function useFarmEngine() {
   }, []);
 
   const clearFarm = useCallback(() => {
+    exitDemo();
     W.clearFarm(gameRef.current);
     dirtyRef.current = true;
-  }, []);
+  }, [exitDemo]);
 
   const buy = useCallback(
     (id) => {
+      exitDemo();
       const res = W.buyUnlock(gameRef.current, id);
       if (res.ok) {
         pushLog("info", `🔓 ${id} → level ${gameRef.current.unlocks[id]}`);
@@ -170,11 +227,15 @@ export default function useFarmEngine() {
       dirtyRef.current = true;
       return res.ok;
     },
-    [pushLog, save],
+    [pushLog, save, exitDemo],
   );
 
   const resetSave = useCallback(() => {
     runtimeRef.current?.stop(true);
+    if (demoRef.current) {
+      demoRef.current = false;
+      setDemo(false);
+    }
     setStatus("idle");
     gameRef.current = W.createGame();
     try {
@@ -207,6 +268,10 @@ export default function useFarmEngine() {
     logs,
     uiSpeed,
     setUiSpeed,
+    paused,
+    setPaused,
+    demo,
+    exitDemo,
     run,
     stop,
     isRunning,

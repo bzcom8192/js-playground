@@ -11,6 +11,19 @@ while (true) {
 }
 `;
 
+// Seeded second file ("f0"): a small helper module, like the reference's second window.
+export const HELPER_CODE = `// f0 — helper functions.
+// Top-level functions in this file can be called from any other file
+// (like Python's "from f0 import *"). Other top-level code here is
+// ignored when another file runs.
+
+// Fly back to (0, 0). Needs: Senses.
+function go_home() {
+  while (get_pos_x() > 0) move(West);
+  while (get_pos_y() > 0) move(South);
+}
+`;
+
 export const EXAMPLES = [
   {
     id: "first-harvest",

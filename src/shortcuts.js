@@ -24,8 +24,8 @@ export const PLAYGROUND_SHORTCUTS = [
 ];
 
 export const FARMER_SHORTCUTS = [
-  { keys: [MOD, "Enter"], desc: "Run / Stop the drone" },
-  { keys: [MOD, "S"], desc: "Save code + farm now" },
+  { keys: [MOD, "Enter"], desc: "Run / Stop the focused file's window" },
+  { keys: [MOD, "S"], desc: "Save all files + farm now" },
   { keys: ["Esc"], desc: "Close dialogs / menus" },
   { keys: ["?"], desc: "Show shortcuts (when not typing)" },
 ];

@@ -1,117 +1,374 @@
-import { lazy, Suspense, useCallback, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "../monacoEnv";
 import ShortcutsModal from "../components/ShortcutsModal";
-import PlayIcon from "../components/icons/PlayIcon";
 import usePageShortcuts from "../hooks/usePageShortcuts";
 import { EDITOR_SHORTCUTS, FARMER_SHORTCUTS } from "../shortcuts";
 import { ROUTES } from "../router";
 import { lintCode } from "../utils/linter";
-import { ENTITY_INFO, ITEM_ICONS, ITEM_ORDER } from "./constants.js";
-import { DEFAULT_CODE } from "./examples.js";
+import { ENTITY_INFO, ITEM_ICONS } from "./constants.js";
 import { FARMER_GLOBALS, FARMER_LIB, FARMER_LIB_FILE } from "./farmerLib.js";
+import { listDeclarations } from "./transform.js";
+import { buildProgram, mapLine } from "./program.js";
+import { formatCount } from "./format.js";
 import * as W from "./world.js";
 import useFarmEngine from "./useFarmEngine.js";
-import FarmGrid from "./FarmGrid.jsx";
+import useFarmerFiles from "./useFarmerFiles.js";
+import FarmBoard from "./FarmBoard.jsx";
+import FloatingWindow, { SquareButton } from "./FloatingWindow.jsx";
+import { Glyph, OLIVE, ORANGE } from "./farmerUi.jsx";
 import UnlocksPanel from "./UnlocksPanel.jsx";
 import DocsPanel from "./DocsPanel.jsx";
 import LogPanel from "./LogPanel.jsx";
 
 const MonacoEditor = lazy(() => import("../components/MonacoEditor"));
 
-const CODE_KEY = "farmer_code";
 const EXTRA_LIB = { content: FARMER_LIB, fileName: FARMER_LIB_FILE };
 const SHORTCUT_SECTIONS = [
   { title: "JS Farmer", items: FARMER_SHORTCUTS },
   { title: "Editor", items: EDITOR_SHORTCUTS },
 ];
+// ESLint globals per set of imported helper names (stable identity per set).
+const GLOBALS_CACHE = new Map();
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 
-const STATUS_STYLE = {
-  idle: ["bg-gray-600", "Idle"],
-  running: ["bg-green-400 animate-pulse", "Running"],
-  done: ["bg-sky-400", "Finished"],
-  stopped: ["bg-gray-400", "Stopped"],
+// Inventory order from the reference: Hay, Wood, Carrot, Pumpkin, Power, Cactus, Water, Fertilizer.
+const INVENTORY = ["Hay", "Wood", "Carrot", "Pumpkin", "Power", "Cactus", "Water", "Fertilizer"];
+
+const STATUS_LABEL = {
+  idle: ["bg-white/50", "Idle"],
+  running: ["bg-lime-400 animate-pulse", "Running"],
+  paused: ["bg-orange-400", "Paused"],
+  done: ["bg-sky-300", "Finished"],
+  stopped: ["bg-white/60", "Stopped"],
   error: ["bg-red-500", "Error"],
 };
 
-function loadCode() {
-  try {
-    const saved = localStorage.getItem(CODE_KEY);
-    return saved !== null ? saved : DEFAULT_CODE;
-  } catch {
-    return DEFAULT_CODE;
-  }
+function useIsDesktop() {
+  const q = "(min-width: 768px)";
+  const [ok, setOk] = useState(() => typeof window !== "undefined" && window.matchMedia(q).matches);
+  useEffect(() => {
+    const m = window.matchMedia(q);
+    const on = () => setOk(m.matches);
+    m.addEventListener("change", on);
+    return () => m.removeEventListener("change", on);
+  }, []);
+  return ok;
 }
+
+// ---------- top bar ----------
 
 function Inventory({ items }) {
   return (
-    <div className="flex flex-wrap gap-1.5 justify-center">
-      {ITEM_ORDER.map((k) => (
-        <span
+    <div className="flex flex-wrap md:flex-nowrap items-start gap-x-3 gap-y-2 sm:gap-x-5 pb-1">
+      {INVENTORY.map((k) => (
+        <div
           key={k}
-          title={k}
-          className={`flex items-center gap-1 px-2 py-0.5 rounded-full border text-xs font-mono ${
-            items[k] > 0 ? "border-gray-700 bg-gray-800/70 text-gray-100" : "border-gray-800 text-gray-600"
-          }`}
+          title={`${k}: ${(items[k] || 0).toLocaleString("en-US")}`}
+          className={`flex flex-col items-center shrink-0 select-none ${items[k] > 0 ? "" : "opacity-55"}`}
         >
-          <span className={items[k] > 0 ? "" : "grayscale opacity-50"}>{ITEM_ICONS[k]}</span>
-          {items[k].toLocaleString("en-US")}
-        </span>
+          <span className="text-[26px] sm:text-[30px] leading-none drop-shadow-[0_3px_2px_rgba(20,40,60,.35)]">
+            {ITEM_ICONS[k]}
+          </span>
+          <span className="farmer-count mt-1 text-[13px] sm:text-[15px] font-extrabold text-white leading-none tabular-nums">
+            {formatCount(items[k])}
+          </span>
+        </div>
       ))}
     </div>
   );
 }
 
-function StatusLine({ game, stats, status }) {
+function BigButton({ title, onClick, children, active }) {
+  return (
+    <button
+      type="button"
+      title={title}
+      aria-label={title}
+      onClick={onClick}
+      className={`relative w-11 h-11 md:w-12 md:h-12 flex items-center justify-center rounded-lg text-white shadow-[0_3px_8px_rgba(20,40,60,.35),inset_0_1px_0_rgba(255,255,255,.25)] hover:brightness-115 active:brightness-95 transition-[filter] ${
+        active ? "ring-2 ring-white/70" : ""
+      }`}
+      style={{ background: OLIVE }}
+    >
+      {children}
+    </button>
+  );
+}
+
+const GridIcon = (
+  <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" strokeWidth="2.4" aria-hidden="true">
+    <rect x="9" y="2.5" width="6" height="6" rx="1" />
+    <rect x="3" y="14.5" width="6" height="6" rx="1" />
+    <rect x="15" y="14.5" width="6" height="6" rx="1" />
+  </svg>
+);
+
+function FilesMenu({ files, windows, onNew, onToggle, onDelete, onClose }) {
+  return (
+    <>
+      <div className="fixed inset-0 z-[9000]" onClick={onClose} />
+      <div
+        role="menu"
+        className="absolute right-0 top-full mt-2 z-[9001] w-64 rounded-xl bg-white/95 backdrop-blur shadow-2xl border border-black/10 text-stone-800 text-sm overflow-hidden"
+      >
+        <button
+          role="menuitem"
+          onClick={onNew}
+          className="w-full flex items-center gap-2 px-3 py-2 font-semibold hover:bg-stone-100"
+        >
+          <span className="w-5 h-5 rounded flex items-center justify-center text-white text-xs" style={{ background: OLIVE }}>
+            +
+          </span>
+          New file
+        </button>
+        <div className="border-t border-stone-200 px-3 pt-2 pb-1 text-[11px] uppercase tracking-wider text-stone-400 font-semibold">
+          Files
+        </div>
+        <div className="max-h-72 overflow-y-auto pb-1">
+          {files.map((f) => {
+            const open = windows[f.id]?.open;
+            return (
+              <div key={f.id} className="flex items-center group hover:bg-stone-100">
+                <button
+                  role="menuitem"
+                  onClick={() => onToggle(f.id)}
+                  className="flex-1 min-w-0 text-left px-3 py-1.5 flex items-center gap-2"
+                  title={open ? "Bring to front" : "Reopen"}
+                >
+                  <span className={`w-2 h-2 rounded-full ${open ? "bg-[#6f9419]" : "bg-stone-300"}`} />
+                  <span className="truncate font-mono">{f.name}</span>
+                  {!open && <span className="ml-auto text-[11px] text-stone-400">reopen</span>}
+                </button>
+                <button
+                  onClick={() => onDelete(f.id)}
+                  disabled={files.length <= 1}
+                  className="px-2 py-1.5 text-stone-400 hover:text-red-600 disabled:opacity-30 disabled:hover:text-stone-400"
+                  title={files.length <= 1 ? "Can't delete the last file" : `Delete ${f.name}…`}
+                  aria-label={`Delete ${f.name}`}
+                >
+                  🗑
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ---------- status pill ----------
+
+function StatusPill({ game, stats, status, paused, demo, toast }) {
   const tile = W.droneTile(game);
   const e = tile.entity;
-  const [dot, label] = STATUS_STYLE[status] || STATUS_STYLE.idle;
-  const aps = stats.elapsed > 0 ? stats.actions / stats.elapsed : 0;
-  const part = "whitespace-nowrap";
+  const [dot, label] = STATUS_LABEL[paused ? "paused" : status] || STATUS_LABEL.idle;
+  const what = e
+    ? `${ENTITY_INFO[e.type]?.icon ?? ""} ${e.type.replace("_", " ")}${e.progress < 1 ? ` ${Math.floor(e.progress * 100)}%` : ""} / ${tile.ground}`
+    : tile.ground;
   return (
-    <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-0.5 text-[11px] text-gray-400 font-mono">
-      <span className={part}>
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 px-3 py-1.5 rounded-full bg-black/40 backdrop-blur-md text-white text-[11px] sm:text-xs font-mono shadow-lg max-w-full">
+      <span className="whitespace-nowrap">
         📍 ({game.drone.x}, {game.drone.y})
       </span>
-      <span className={part}>
-        {e
-          ? `${ENTITY_INFO[e.type]?.icon} ${e.type}${e.progress < 1 ? ` ${Math.floor(e.progress * 100)}%` : " ✓"}`
-          : "∅ empty"}
-      </span>
-      <span className={part}>{tile.ground}</span>
-      <span className={part}>💧 {Math.round(tile.water * 100)}%</span>
-      <span className={part}>⏱ {stats.elapsed.toFixed(1)}s</span>
-      <span className={part}>{stats.ticks.toLocaleString("en-US")} ticks</span>
-      <span className={part}>{aps.toFixed(1)} act/s</span>
+      <span className="opacity-50">·</span>
+      <span className="whitespace-nowrap">{what}</span>
+      {tile.water > 0.005 && <span className="whitespace-nowrap">💧{Math.round(tile.water * 100)}%</span>}
+      <span className="opacity-50">·</span>
+      <span className="whitespace-nowrap">⏱ {stats.elapsed.toFixed(1)}s</span>
+      <span className="opacity-50">·</span>
+      <span className="whitespace-nowrap">{stats.ticks.toLocaleString("en-US")} ticks</span>
       {stats.lastMeasure !== null && stats.lastMeasure !== undefined && (
-        <span className={part}>📏 {stats.lastMeasure}</span>
+        <>
+          <span className="opacity-50">·</span>
+          <span className="whitespace-nowrap">📏 {stats.lastMeasure}</span>
+        </>
       )}
-      <span className={`${part} flex items-center gap-1.5 text-gray-300`}>
+      <span className="opacity-50">·</span>
+      <span className="whitespace-nowrap flex items-center gap-1.5">
         <span className={`w-2 h-2 rounded-full ${dot}`} /> {label}
       </span>
+      {demo && (
+        <span
+          className="ml-1 px-1.5 rounded bg-orange-500/90 text-[10px] font-bold uppercase"
+          title="Demo farm (not saved). Any edit, run, save or purchase returns to your saved farm."
+        >
+          Demo
+        </span>
+      )}
+      {toast && <span className="ml-1 text-lime-300">{toast}</span>}
     </div>
   );
 }
 
+// ---------- code window ----------
+
+function CodeWindow({ file, win, floating, isRunning, paused, lintGlobals, ownFunctions, onRun, onStop, onPause, onSave, onChange, windowProps }) {
+  const ownRef = useRef(ownFunctions);
+  useEffect(() => {
+    ownRef.current = ownFunctions;
+  });
+  // A helper file's top-level functions are used by OTHER files → not "unused".
+  const lintFilter = useCallback(
+    (msgs) =>
+      msgs.filter((m) => {
+        if (m.ruleId !== "no-unused-vars") return true;
+        const name = /'([^']+)'/.exec(m.message)?.[1];
+        return !ownRef.current.has(name);
+      }),
+    [],
+  );
+
+  const left = isRunning ? (
+    <>
+      <SquareButton color={ORANGE} title={`Stop ${file.name}`} onClick={onStop}>
+        {Glyph.stop}
+      </SquareButton>
+      <SquareButton color={ORANGE} title={paused ? "Resume" : "Pause (program + farm)"} onClick={onPause}>
+        {paused ? Glyph.play : Glyph.pause}
+      </SquareButton>
+    </>
+  ) : (
+    <SquareButton color={OLIVE} title={`Run ${file.name} (Ctrl/⌘+Enter)`} onClick={onRun}>
+      {Glyph.play}
+    </SquareButton>
+  );
+
+  return (
+    <FloatingWindow {...windowProps} title={file.name} rect={win} floating={floating} left={left} label={`Code: ${file.name}`}>
+      <Suspense fallback={<div className="p-4 text-gray-500 text-sm">Loading editor…</div>}>
+        <MonacoEditor
+          value={file.code}
+          onChange={onChange}
+          onRun={() => (isRunning ? onStop() : onRun())}
+          onSave={onSave}
+          extraLib={EXTRA_LIB}
+          lintGlobals={lintGlobals}
+          lintFilter={lintFilter}
+          fallback={
+            <textarea
+              value={file.code}
+              onChange={(e) => onChange(e.target.value)}
+              className="absolute inset-0 w-full h-full p-4 bg-[#1e1e1e] text-gray-300 font-mono text-sm leading-6 resize-none focus:outline-none custom-scrollbar"
+              spellCheck="false"
+              autoCapitalize="off"
+              autoComplete="off"
+              style={{ fontFamily: "'Fira Code', 'Consolas', monospace" }}
+            />
+          }
+        />
+      </Suspense>
+    </FloatingWindow>
+  );
+}
+
+// ---------- files tab ----------
+
+function FilesPanel({ files, windows, active, onToggle, onRename, onDelete, onNew }) {
+  const [editing, setEditing] = useState(null);
+  const [draft, setDraft] = useState("");
+  const commit = () => {
+    if (editing !== null) onRename(editing, draft);
+    setEditing(null);
+  };
+  return (
+    <div className="p-3 space-y-2 text-sm">
+      <div className="flex items-center justify-between">
+        <span className="text-[11px] uppercase tracking-wider font-semibold text-gray-500">Files</span>
+        <button onClick={onNew} className="px-2.5 py-1 rounded text-xs font-semibold text-white hover:brightness-110" style={{ background: OLIVE }}>
+          + New File
+        </button>
+      </div>
+      <ul className="space-y-1">
+        {files.map((f) => {
+          const open = windows[f.id]?.open;
+          return (
+            <li key={f.id} className={`flex items-center gap-2 px-2 py-1.5 rounded border ${f.id === active ? "border-gray-600 bg-white/5" : "border-gray-800"}`}>
+              <input
+                type="checkbox"
+                checked={!!open}
+                onChange={() => onToggle(f.id, !open)}
+                title={open ? "Close window" : "Open window"}
+                aria-label={`${open ? "Close" : "Open"} ${f.name}`}
+                className="accent-[#6f9419]"
+              />
+              {editing === f.id ? (
+                <input
+                  autoFocus
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  onBlur={commit}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") commit();
+                    if (e.key === "Escape") setEditing(null);
+                  }}
+                  className="flex-1 min-w-0 bg-gray-900 border border-gray-600 rounded px-1.5 py-0.5 font-mono text-gray-100 text-xs"
+                  aria-label="File name"
+                />
+              ) : (
+                <button
+                  className="flex-1 min-w-0 text-left font-mono text-gray-200 truncate hover:text-white"
+                  onClick={() => onToggle(f.id, true)}
+                  onDoubleClick={() => {
+                    setEditing(f.id);
+                    setDraft(f.name);
+                  }}
+                  title="Click: open / bring to front · Double-click: rename"
+                >
+                  {f.name}
+                </button>
+              )}
+              <span className="text-[11px] text-gray-600 tabular-nums">{f.code.split("\n").length} ln</span>
+              <button
+                onClick={() => {
+                  setEditing(f.id);
+                  setDraft(f.name);
+                }}
+                className="text-gray-500 hover:text-gray-200 px-1"
+                title={`Rename ${f.name}`}
+                aria-label={`Rename ${f.name}`}
+              >
+                ✎
+              </button>
+              <button
+                onClick={() => onDelete(f.id)}
+                disabled={files.length <= 1}
+                className="text-gray-500 hover:text-red-400 px-1 disabled:opacity-30"
+                title={files.length <= 1 ? "Can't delete the last file" : `Delete ${f.name}…`}
+                aria-label={`Delete ${f.name}`}
+              >
+                🗑
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+      <p className="text-[11px] text-gray-500 leading-relaxed">
+        ▶ in a window runs that file. All other files share only their top-level functions with it.
+      </p>
+    </div>
+  );
+}
+
+// ---------- page ----------
+
 export default function FarmerPage() {
   const engine = useFarmEngine();
-  const { view, status, logs, uiSpeed } = engine;
+  const { view, status, logs, uiSpeed, paused, demo } = engine;
   const game = view.game;
   const running = status === "running";
+  const desktop = useIsDesktop();
 
-  const [code, setCode] = useState(loadCode);
-  const [tab, setTab] = useState("log");
+  const fm = useFarmerFiles();
+  const { files, ui } = fm;
+  const windows = ui.windows;
+  const activeFile = files.find((f) => f.id === ui.active) || files[0];
+
+  const [runningFileId, setRunningFileId] = useState(null);
+  const [infoTab, setInfoTab] = useState("docs");
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [toast, setToast] = useState(null);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(CODE_KEY, code);
-    } catch (e) {
-      void e;
-    }
-  }, [code]);
 
   useEffect(() => {
     if (!toast) return;
@@ -119,263 +376,357 @@ export default function FarmerPage() {
     return () => clearTimeout(id);
   }, [toast]);
 
-  const { run, stop, isRunning, reportError, saveNow, pushLog } = engine;
+  const { run, stop, reportError, saveNow, pushLog, exitDemo, setPaused } = engine;
 
-  const startRun = useCallback(() => {
-    // Syntax pre-check on the player's original code, for a clear line number.
-    try {
-      new AsyncFunction(code);
-    } catch (err) {
-      if (err instanceof SyntaxError) {
-        const fatal = lintCode(code, FARMER_GLOBALS).find((m) => m.fatal);
-        reportError(fatal ? `Line ${fatal.line}: SyntaxError: ${err.message}` : `SyntaxError: ${err.message}`);
-        setTab("log");
+  // ---- per-file lint globals: farmer API + other files' top-level functions ----
+  const declared = useMemo(
+    () =>
+      Object.fromEntries(
+        files.map((f) => {
+          const all = listDeclarations(f.code);
+          return [f.id, { fns: all.filter((d) => d.kind === "function").map((d) => d.name), names: new Set(all.map((d) => d.name)) }];
+        }),
+      ),
+    [files],
+  );
+  const lintGlobalsFor = (id) => {
+    const own = declared[id]?.names || new Set();
+    const extra = [...new Set(files.filter((f) => f.id !== id).flatMap((f) => declared[f.id]?.fns || []))].filter((n) => !own.has(n)).sort();
+    const key = extra.join(",");
+    let g = GLOBALS_CACHE.get(key);
+    if (!g) {
+      g = { ...FARMER_GLOBALS, ...Object.fromEntries(extra.map((n) => [n, "readonly"])) };
+      GLOBALS_CACHE.set(key, g);
+    }
+    return g;
+  };
+
+  // ---- run / stop / pause ----
+  const runFile = useCallback(
+    (id) => {
+      let prog;
+      try {
+        prog = buildProgram(files, id);
+      } catch (err) {
+        reportError(String(err.message || err));
         return;
       }
-    }
-    run(code);
-  }, [code, run, reportError]);
+      // Syntax pre-check per file segment, for a clear file + line number.
+      for (const seg of prog.segments) {
+        try {
+          new AsyncFunction(seg.code);
+        } catch (err) {
+          if (err instanceof SyntaxError) {
+            const fatal = lintCode(seg.code, FARMER_GLOBALS).find((m) => m.fatal);
+            const isMain = seg.fileId === id;
+            const where = fatal ? (isMain ? `Line ${fatal.line}: ` : `${seg.name}, line ${fatal.line}: `) : isMain ? "" : `${seg.name}: `;
+            exitDemo();
+            reportError(`${where}SyntaxError: ${err.message}`);
+            setInfoTab("log");
+            fm.setOpen("info", true);
+            return;
+          }
+        }
+      }
+      setRunningFileId(id);
+      run(prog.code, { label: prog.mainFile.name, mapLine: (line) => mapLine(prog.segments, line) });
+    },
+    [files, run, reportError, exitDemo, fm],
+  );
 
-  const toggleRun = useCallback(() => {
-    if (isRunning()) stop();
-    else startRun();
-  }, [isRunning, stop, startRun]);
+  const toggleFile = useCallback(
+    (id) => {
+      if (running && runningFileId === id) stop();
+      else runFile(id);
+    },
+    [running, runningFileId, stop, runFile],
+  );
 
   const handleSave = useCallback(() => {
-    try {
-      localStorage.setItem(CODE_KEY, code);
-    } catch (e) {
-      void e;
-    }
+    exitDemo();
+    fm.saveNow();
     setToast(saveNow() ? "✓ Saved" : "Save failed");
-  }, [code, saveNow]);
+  }, [fm, saveNow, exitDemo]);
 
   usePageShortcuts({
-    onRun: toggleRun,
+    onRun: () => toggleFile(activeFile.id),
     onSave: handleSave,
     onHelp: () => setShortcutsOpen(true),
     onEscape: () => setMenuOpen(false),
   });
 
-  // Status changes to "error" → show the log.
+  // Errors → show the Output tab.
   const [prevStatus, setPrevStatus] = useState(status);
   if (prevStatus !== status) {
     setPrevStatus(status);
-    if (status === "error") setTab("log");
+    if (status === "error") {
+      setInfoTab("log");
+      if (!windows.info?.open) fm.setOpen("info", true);
+    }
   }
 
+  const editCode = useCallback(
+    (id, code) => {
+      exitDemo();
+      fm.updateCode(id, code);
+    },
+    [fm, exitDemo],
+  );
+
   const handleClearFarm = () => {
-    if (confirm("Clear the farm? All plants are removed and the ground resets to grassland.")) {
-      engine.clearFarm();
-    }
+    if (confirm("Clear the farm? All plants are removed and the ground resets to grassland.")) engine.clearFarm();
   };
 
   const handleResetSave = () => {
-    setMenuOpen(false);
-    if (confirm("Reset ALL JS Farmer progress (items, unlocks, farm) and your farm code? This cannot be undone.")) {
+    if (confirm("Reset ALL JS Farmer progress (items, unlocks, farm) and ALL code files? This cannot be undone.")) {
       engine.resetSave();
-      try {
-        localStorage.removeItem(CODE_KEY);
-      } catch (e) {
-        void e;
-      }
-      setCode(DEFAULT_CODE);
+      fm.resetFiles();
+      setRunningFileId(null);
     }
   };
 
   const handleLoadExample = (ex) => {
-    setCode(ex.code);
-    pushLog("info", `📄 Loaded example "${ex.name}" (Ctrl+Z in the editor to undo)`);
+    const target = activeFile;
+    if (target.code.trim() && target.code !== ex.code && !confirm(`Replace the code in “${target.name}” with the example “${ex.name}”?`)) return;
+    editCode(target.id, ex.code);
+    fm.setOpen(target.id, true);
+    pushLog("info", `📄 Loaded example "${ex.name}" into ${target.name} (Ctrl+Z in the editor to undo)`);
   };
+
+  const handleDelete = (id) => {
+    const f = files.find((x) => x.id === id);
+    if (!f || files.length <= 1) return;
+    if (!confirm(`Delete the file “${f.name}”? Its code is lost.`)) return;
+    fm.deleteFile(id);
+  };
+
+  const toggleWindow = (key) => fm.setOpen(key, !windows[key]?.open);
 
   const power = game.items.Power > 0 ? 2 : 1;
   const moveMs = Math.min(150, 200 / (W.speedMultiplier(game) * uiSpeed * power));
-  const affordable = countAffordable(game);
+  const affordable = Object.keys(game.unlocks).filter((id) => W.unlockStatus(game, id) === "affordable").length;
 
-  return (
-    <div className="flex flex-col h-screen bg-gray-950 text-gray-200 font-sans relative overflow-hidden">
-      <ShortcutsModal open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} sections={SHORTCUT_SECTIONS} />
+  const windowProps = (key, extra = {}) => ({
+    floating: desktop,
+    onFocus: () => fm.focus(key),
+    onRect: (r) => fm.patchWindow(key, r),
+    onMinimize: () => fm.patchWindow(key, { minimized: !windows[key]?.minimized }),
+    onClose: () => fm.setOpen(key, false),
+    ...extra,
+  });
 
-      {/* --- Header --- */}
-      <header className="flex items-center justify-between px-4 sm:px-6 py-3 bg-[#1e1e1e] border-b border-gray-800 shadow-xl z-20 h-16 gap-2">
-        <div className="flex items-center gap-3 min-w-0">
-          <div className="w-8 h-8 bg-green-700 rounded-lg flex items-center justify-center text-lg shadow-green-900/50 shadow-lg shrink-0">
-            🚜
-          </div>
-          <h1 className="text-lg font-bold text-gray-100 tracking-tight hidden sm:block">JS Farmer</h1>
-          <a
-            href={ROUTES.playground}
-            className="ml-1 px-2.5 py-1 text-xs font-medium rounded-full border border-gray-700 text-gray-400 hover:text-white hover:border-gray-500 transition-colors whitespace-nowrap"
-            title="Back to the JS Playground"
-          >
-            Playground
-          </a>
-        </div>
+  const openFiles = files.filter((f) => windows[f.id]?.open);
+  // On mobile, show windows in a stable order (files first, then Info, Unlocks).
+  const codeWindows = openFiles.map((f) => (
+    <CodeWindow
+      key={f.id}
+      file={f}
+      win={windows[f.id]}
+      floating={desktop}
+      windowProps={{ ...windowProps(String(f.id)), closeTitle: "Close (reopen from the + menu)" }}
+      isRunning={running && runningFileId === f.id}
+      paused={paused}
+      lintGlobals={lintGlobalsFor(f.id)}
+      ownFunctions={new Set(declared[f.id]?.fns || [])}
+      onRun={() => runFile(f.id)}
+      onStop={stop}
+      onPause={() => setPaused(!paused)}
+      onSave={handleSave}
+      onChange={(code) => editCode(f.id, code)}
+    />
+  ));
 
-        <div className="flex items-center gap-2 sm:gap-3">
-          {toast && <span className="text-xs text-green-400 hidden sm:inline">{toast}</span>}
-          <select
-            value={uiSpeed}
-            onChange={(e) => engine.setUiSpeed(Number(e.target.value))}
-            className="bg-gray-800 border border-gray-700 rounded-md px-2 py-1.5 text-xs text-gray-300"
-            title="Execution speed"
-          >
-            {[1, 2, 4, 8].map((s) => (
-              <option key={s} value={s}>
-                {s}×
-              </option>
-            ))}
-          </select>
+  const infoWindow = windows.info?.open && (
+    <FloatingWindow key="info" title="Info" rect={windows.info} {...windowProps("info")} bodyClass="bg-[#161616] flex flex-col" mobileBodyClass="h-[28rem]">
+      <div className="flex items-center gap-1 px-2 pt-2 border-b border-gray-800 select-none" role="tablist">
+        {[
+          ["docs", "Docs"],
+          ["log", `Output${logs.length ? ` (${logs.length})` : ""}`],
+          ["files", `Files (${files.length})`],
+        ].map(([id, label]) => (
           <button
-            onClick={handleClearFarm}
-            className="hidden sm:block px-3 py-1.5 text-xs font-medium rounded-md border border-gray-700 text-gray-400 hover:text-red-300 hover:border-red-900 transition-colors"
-            title="Clear the farm"
-          >
-            Clear Farm
-          </button>
-          <button
-            onClick={() => setShortcutsOpen(true)}
-            className="hidden sm:block px-2 py-1.5 text-sm text-gray-400 hover:text-white rounded hover:bg-gray-800 transition-colors"
-            title="Keyboard shortcuts (?)"
-          >
-            ⌨
-          </button>
-          <div className="relative">
-            <button
-              onClick={() => setMenuOpen((o) => !o)}
-              className="px-2 py-1.5 text-gray-400 hover:text-white rounded hover:bg-gray-800 transition-colors"
-              title="More"
-              aria-haspopup="menu"
-              aria-expanded={menuOpen}
-            >
-              ⋯
-            </button>
-            {menuOpen && (
-              <>
-                <div className="fixed inset-0 z-30" onClick={() => setMenuOpen(false)} />
-                <div
-                  role="menu"
-                  className="absolute right-0 mt-1 z-40 w-44 py-1 bg-[#161b22] border border-gray-700 rounded-md shadow-2xl text-sm"
-                >
-                  <button
-                    role="menuitem"
-                    onClick={() => {
-                      setMenuOpen(false);
-                      handleClearFarm();
-                    }}
-                    className="sm:hidden w-full text-left px-3 py-1.5 text-gray-300 hover:bg-gray-800"
-                  >
-                    Clear Farm
-                  </button>
-                  <button
-                    role="menuitem"
-                    onClick={handleResetSave}
-                    className="w-full text-left px-3 py-1.5 text-red-300 hover:bg-gray-800"
-                  >
-                    Reset Save…
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
-          <button
-            onClick={toggleRun}
-            title="Run / Stop (Ctrl/⌘+Enter)"
-            className={`flex items-center gap-2 px-4 sm:px-5 py-2 text-sm font-bold text-white rounded-md transition-all active:scale-95 ${
-              running ? "bg-red-600 hover:bg-red-500" : "bg-blue-600 hover:bg-blue-500 hover:shadow-lg hover:shadow-blue-900/30"
+            key={id}
+            role="tab"
+            aria-selected={infoTab === id}
+            onClick={() => setInfoTab(id)}
+            className={`px-3 py-1.5 text-xs font-semibold rounded-t-md transition-colors ${
+              infoTab === id ? "bg-[#262626] text-gray-100" : "text-gray-500 hover:text-gray-300"
             }`}
           >
-            {running ? (
-              <>
-                <span className="w-3 h-3 bg-white rounded-sm" /> Stop
-              </>
-            ) : (
-              <>
-                <PlayIcon /> Run
-              </>
-            )}
+            {label}
           </button>
-        </div>
-      </header>
+        ))}
+        {infoTab === "log" && logs.length > 0 && (
+          <button onClick={engine.clearLog} className="ml-auto text-[11px] text-gray-500 hover:text-red-400 px-2">
+            Clear
+          </button>
+        )}
+      </div>
+      <div className="flex-1 overflow-y-auto custom-scrollbar min-h-0 text-gray-200">
+        {infoTab === "docs" && <DocsPanel game={game} onLoadExample={handleLoadExample} targetName={activeFile.name} />}
+        {infoTab === "log" && <LogPanel logs={logs} />}
+        {infoTab === "files" && (
+          <FilesPanel
+            files={files}
+            windows={windows}
+            active={activeFile.id}
+            onToggle={(id, open) => fm.setOpen(id, open)}
+            onRename={fm.renameFile}
+            onDelete={handleDelete}
+            onNew={fm.newFile}
+          />
+        )}
+      </div>
+      <div className="shrink-0 flex items-center gap-3 px-3 py-2 border-t border-gray-800 text-[11px]">
+        <a href={ROUTES.playground} className="text-gray-400 hover:text-white" title="Back to the JS Playground">
+          ← Playground
+        </a>
+        <button onClick={() => setShortcutsOpen(true)} className="text-gray-400 hover:text-white" title="Keyboard shortcuts (?)">
+          ⌨ Shortcuts
+        </button>
+        <button onClick={handleResetSave} className="ml-auto px-2.5 py-1 rounded bg-red-700 hover:bg-red-600 text-white font-semibold">
+          Reset Save…
+        </button>
+      </div>
+    </FloatingWindow>
+  );
 
-      {/* --- Workspace --- */}
-      <div className="flex-1 flex flex-col md:flex-row overflow-hidden min-h-0">
-        {/* Farm */}
-        <div className="md:flex-1 h-[45%] md:h-auto flex flex-col gap-2 p-3 border-b md:border-b-0 md:border-r border-gray-800 bg-[#0d1117] min-h-0 min-w-0">
+  const unlocksWindow = windows.unlocks?.open && (
+    <FloatingWindow
+      key="unlocks"
+      title={`Unlocks${affordable ? ` · ${affordable} available` : ""}`}
+      rect={windows.unlocks}
+      {...windowProps("unlocks")}
+      bodyClass="bg-white/95 flex flex-col"
+      mobileBodyClass="h-[28rem]"
+    >
+      <div className="flex-1 overflow-y-auto min-h-0 bg-stone-50/90">
+        <UnlocksPanel game={game} onBuy={engine.buy} />
+      </div>
+      <div className="shrink-0 flex items-center gap-2 px-3 py-2 border-t border-stone-200 bg-white text-xs text-stone-700">
+        <label htmlFor="farmer-speed" className="font-semibold">
+          Speed
+        </label>
+        <select
+          id="farmer-speed"
+          value={uiSpeed}
+          onChange={(e) => engine.setUiSpeed(Number(e.target.value))}
+          className="bg-white border border-stone-300 rounded px-2 py-1"
+          title="Execution speed (on top of the Speed unlock)"
+        >
+          {[1, 2, 4, 8].map((s) => (
+            <option key={s} value={s}>
+              {s}×
+            </option>
+          ))}
+        </select>
+        <button
+          onClick={handleClearFarm}
+          className="ml-auto px-3 py-1 rounded border border-stone-300 hover:border-red-400 hover:text-red-600 font-semibold"
+          title="Clear the farm"
+        >
+          Clear Farm
+        </button>
+      </div>
+    </FloatingWindow>
+  );
+
+  return (
+    <div
+      className={`farmer-bg relative w-full min-h-screen md:h-screen md:overflow-hidden text-gray-200 font-sans flex flex-col md:block ${
+        paused ? "farmer-paused" : ""
+      }`}
+    >
+      <ShortcutsModal open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} sections={SHORTCUT_SECTIONS} />
+
+      {/* Top bar: inventory (left) + three buttons (right). Floats on the background. */}
+      <div className="relative z-[60] flex items-start justify-between gap-3 px-3 pt-3 md:px-6 md:pt-5 md:absolute md:inset-x-0 md:top-0 pointer-events-none">
+        <div className="pointer-events-auto min-w-0">
           <Inventory items={game.items} />
-          <div className="flex-1 min-h-0">
-            <FarmGrid game={game} moveMs={moveMs} />
-          </div>
-          <StatusLine game={game} stats={view.stats} status={status} />
         </div>
-
-        {/* Editor + tabs */}
-        <div className="flex-1 flex flex-col min-h-0 min-w-0">
-          <div className="flex-1 relative min-h-[8rem]">
-            <Suspense fallback={<div className="p-4 text-gray-600 text-sm">Loading editor…</div>}>
-              <MonacoEditor
-                value={code}
-                onChange={setCode}
-                onRun={toggleRun}
-                onSave={handleSave}
-                extraLib={EXTRA_LIB}
-                lintGlobals={FARMER_GLOBALS}
-                fallback={
-                  <textarea
-                    value={code}
-                    onChange={(e) => setCode(e.target.value)}
-                    className="absolute inset-0 w-full h-full p-6 bg-[#1e1e1e] text-gray-300 font-mono text-sm leading-6 resize-none focus:outline-none custom-scrollbar"
-                    spellCheck="false"
-                    autoCapitalize="off"
-                    autoComplete="off"
-                    style={{ fontFamily: "'Fira Code', 'Consolas', monospace" }}
-                  />
-                }
-              />
-            </Suspense>
-          </div>
-
-          <div className="h-[40%] md:h-[42%] flex flex-col border-t border-gray-800 bg-[#0d1117] min-h-0">
-            <div className="flex items-center justify-between px-2 bg-[#1e1e1e] border-b border-gray-800 select-none">
-              <div className="flex" role="tablist">
-                {[
-                  ["log", `Log${logs.length ? ` (${logs.length})` : ""}`],
-                  ["unlocks", `Unlocks${affordable ? ` · ${affordable}` : ""}`],
-                  ["docs", "Docs"],
-                ].map(([id, label]) => (
-                  <button
-                    key={id}
-                    role="tab"
-                    aria-selected={tab === id}
-                    onClick={() => setTab(id)}
-                    className={`px-3 py-2 text-xs font-semibold uppercase tracking-wider border-b-2 transition-colors ${
-                      tab === id
-                        ? "text-gray-100 border-blue-500"
-                        : "text-gray-500 border-transparent hover:text-gray-300"
-                    }`}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-              {tab === "log" && logs.length > 0 && (
-                <button onClick={engine.clearLog} className="text-[11px] text-gray-500 hover:text-red-400 px-2">
-                  Clear
-                </button>
-              )}
-            </div>
-            <div className="flex-1 overflow-y-auto custom-scrollbar min-h-0">
-              {tab === "log" && <LogPanel logs={logs} />}
-              {tab === "unlocks" && <UnlocksPanel game={game} onBuy={engine.buy} />}
-              {tab === "docs" && <DocsPanel game={game} onLoadExample={handleLoadExample} />}
-            </div>
-          </div>
+        <div className="pointer-events-auto relative flex gap-2 md:gap-3 shrink-0">
+          <BigButton title="Files: new / reopen / delete" onClick={() => setMenuOpen((o) => !o)} active={menuOpen}>
+            <svg viewBox="0 0 24 24" width="24" height="24" stroke="currentColor" strokeWidth="3.2" strokeLinecap="round" aria-hidden="true">
+              <path d="M12 4 V20 M4 12 H20" />
+            </svg>
+          </BigButton>
+          <BigButton title="Info: docs, output, files" onClick={() => toggleWindow("info")} active={windows.info?.open}>
+            <span className="text-[24px] font-black font-serif leading-none">i</span>
+          </BigButton>
+          <BigButton
+            title={`Unlocks${affordable ? ` (${affordable} affordable)` : ""}`}
+            onClick={() => toggleWindow("unlocks")}
+            active={windows.unlocks?.open}
+          >
+            {GridIcon}
+            {affordable > 0 && (
+              <span className="absolute -top-1.5 -right-1.5 min-w-4 h-4 px-1 rounded-full bg-orange-500 text-[10px] font-bold leading-4 text-center">
+                {affordable}
+              </span>
+            )}
+          </BigButton>
+          {menuOpen && (
+            <FilesMenu
+              files={files}
+              windows={windows}
+              onClose={() => setMenuOpen(false)}
+              onNew={() => {
+                setMenuOpen(false);
+                fm.newFile();
+              }}
+              onToggle={(id) => {
+                setMenuOpen(false);
+                fm.setOpen(id, true);
+              }}
+              onDelete={(id) => {
+                setMenuOpen(false);
+                handleDelete(id);
+              }}
+            />
+          )}
         </div>
       </div>
+
+      {/* Farm: center-left hero, floating on the background. */}
+      <div className="relative w-full h-[92vw] max-h-[72vh] md:max-h-none md:h-auto md:absolute md:left-0 md:top-[84px] md:bottom-0 md:w-[55%]">
+        <div className="absolute inset-0 pb-10 md:pb-14">
+          <FarmBoard game={game} moveMs={moveMs} paused={paused} />
+        </div>
+        <div className="absolute left-3 bottom-2 md:left-6 md:bottom-4 z-[50] max-w-[calc(100%-1.5rem)]">
+          <StatusPill game={game} stats={view.stats} status={status} paused={paused} demo={demo} toast={toast} />
+        </div>
+      </div>
+
+      {/* Windows: floating on desktop, stacked under the farm on mobile. */}
+      {desktop ? (
+        <>
+          {codeWindows}
+          {infoWindow}
+          {unlocksWindow}
+        </>
+      ) : (
+        <div className="flex flex-col gap-3 p-3">
+          {codeWindows}
+          {infoWindow}
+          {unlocksWindow}
+          <div className="flex justify-center gap-4 text-xs text-white/80 py-2">
+            <a href={ROUTES.playground} className="hover:text-white">
+              ← Playground
+            </a>
+          </div>
+        </div>
+      )}
+
+      {desktop && (
+        <div className="absolute right-4 bottom-2 z-[15] flex gap-3 text-[11px] text-white/60">
+          <a href={ROUTES.playground} className="hover:text-white" title="Back to the JS Playground">
+            ← Playground
+          </a>
+          <button onClick={() => setShortcutsOpen(true)} className="hover:text-white" title="Keyboard shortcuts (?)">
+            ⌨ ?
+          </button>
+        </div>
+      )}
     </div>
   );
-}
-
-function countAffordable(game) {
-  return Object.keys(game.unlocks).filter((id) => W.unlockStatus(game, id) === "affordable").length;
 }

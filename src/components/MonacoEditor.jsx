@@ -271,6 +271,7 @@ function acquireExtraLib(monaco, lib) {
  *  - onSave: Ctrl/Cmd+S inside the editor (browser "Save page" is suppressed)
  *  - extraLib: { content, fileName } extra .d.ts for IntelliSense
  *  - lintGlobals: { name: "readonly" } extra ESLint globals
+ *  - lintFilter: (messages) => messages — optional post-filter of lint results
  * Callbacks are read through refs, so passing inline functions does NOT
  * recreate the editor (AUDIT.md #2).
  */
@@ -282,6 +283,7 @@ export default function MonacoEditor({
   onSave,
   extraLib,
   lintGlobals,
+  lintFilter,
 }) {
   const [loaded, setLoaded] = useState(false);
   const containerRef = useRef(null);
@@ -294,6 +296,7 @@ export default function MonacoEditor({
   const onRunRef = useRef(onRun);
   const onSaveRef = useRef(onSave);
   const lintGlobalsRef = useRef(lintGlobals);
+  const lintFilterRef = useRef(lintFilter);
   // Captured once: which optional features the editor is created with.
   const initRef = useRef({ hasRun: !!onRun, hasSave: !!onSave, extraLib });
 
@@ -302,6 +305,7 @@ export default function MonacoEditor({
     onRunRef.current = onRun;
     onSaveRef.current = onSave;
     lintGlobalsRef.current = lintGlobals;
+    lintFilterRef.current = lintFilter;
   });
 
   // External value changes (snapshot load, reset, import, example load).
@@ -411,9 +415,9 @@ export default function MonacoEditor({
       const runLint = () => {
         const model = editor.getModel();
         if (!isMounted || !model || model.isDisposed()) return;
-        const markers = convertToMonacoMarkers(
-          lintCode(model.getValue(), lintGlobalsRef.current),
-        );
+        let messages = lintCode(model.getValue(), lintGlobalsRef.current);
+        if (lintFilterRef.current) messages = lintFilterRef.current(messages);
+        const markers = convertToMonacoMarkers(messages);
         monaco.editor.setModelMarkers(model, "eslint", markers);
       };
 

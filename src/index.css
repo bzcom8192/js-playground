@@ -12,3 +12,121 @@
   animation-timing-function: ease-in-out;
   animation-fill-mode: both;
 }
+
+/* ---------------- JS Farmer board (original CSS art) ---------------- */
+.farmer-bg {
+  background: linear-gradient(180deg, #7ea6bb 0%, #79a2b7 55%, #6f9ab0 100%);
+}
+.farm-slab {
+  background: #4a2c10; /* the dark grooves between tiles */
+  box-shadow:
+    0 6px 0 #8f5e26,
+    0 12px 0 #6e431a,
+    0 17px 0 #5d5850,
+    0 20px 0 #45413b,
+    0 46px 60px -10px rgba(22, 44, 64, 0.55);
+}
+.farm-slab::after {
+  content: "";
+  position: absolute;
+  left: 2%;
+  right: 2%;
+  top: calc(100% + 13px);
+  height: 6px;
+  pointer-events: none;
+  background: radial-gradient(circle at 8px 3px, #8a847a 0 2.5px, transparent 3px) 0 0 / 31px 6px;
+  opacity: 0.85;
+}
+.farm-tile {
+  border-radius: 2px;
+}
+.farm-soil {
+  background:
+    repeating-linear-gradient(180deg, #a26b29 0 28%, #7a4a17 28% 33.34%),
+    #96601f;
+  box-shadow: inset 0 0 0 1px rgba(60, 30, 5, 0.3), inset 0 -3px 5px rgba(50, 25, 5, 0.25);
+}
+.farm-grass {
+  background:
+    radial-gradient(circle at 25% 30%, rgba(255, 255, 190, 0.22) 0 1.2px, transparent 2px) 0 0 / 9px 9px,
+    radial-gradient(circle at 70% 70%, rgba(35, 80, 10, 0.28) 0 1.4px, transparent 2.2px) 0 0 / 11px 11px,
+    #77a944;
+  box-shadow: inset 0 0 0 1px rgba(30, 60, 10, 0.25), inset 0 -3px 5px rgba(30, 60, 10, 0.2);
+}
+.farm-water {
+  border-radius: 2px;
+  /* hue + saturation from the water, brightness from the tile → wet, blue soil */
+  background: linear-gradient(135deg, #3d9be9, #1f6fd0);
+  mix-blend-mode: color;
+}
+.farmer-berry {
+  position: absolute;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #e2b2ff, #8a35c4 55%, #4b1470);
+  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.3);
+}
+.farmer-flower {
+  position: absolute;
+  border-radius: 50%;
+  background: radial-gradient(circle at 40% 40%, #ffe0f0, #ff5fa8 60%, #c2186b);
+}
+@keyframes farmer-sway {
+  0%, 100% { transform: rotate(-2deg); }
+  50% { transform: rotate(2deg); }
+}
+.farmer-sway {
+  transform-origin: 50% 100%;
+  animation: farmer-sway 3.4s ease-in-out infinite;
+}
+@keyframes farmer-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-9%); }
+}
+.farmer-bob {
+  animation: farmer-bob 1.6s ease-in-out infinite;
+}
+@keyframes farmer-shadow {
+  0%, 100% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+  50% { transform: translate(-50%, -50%) scale(0.86); opacity: 0.75; }
+}
+.farmer-drone-shadow {
+  position: absolute;
+  left: 50%;
+  top: 60%;
+  border-radius: 50%;
+  background: radial-gradient(ellipse at center, rgba(25, 15, 5, 0.5), rgba(25, 15, 5, 0) 70%);
+  animation: farmer-shadow 1.6s ease-in-out infinite;
+}
+@keyframes farmer-prop {
+  0%, 100% { transform: scaleX(1); }
+  50% { transform: scaleX(0.12); }
+}
+.farmer-prop {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: farmer-prop 0.16s linear infinite;
+}
+.is-paused,
+.is-paused .farmer-prop,
+.farmer-paused .farmer-prop,
+.farmer-paused .farmer-sway {
+  animation-play-state: paused;
+}
+@media (prefers-reduced-motion: reduce) {
+  .farmer-sway, .farmer-bob, .farmer-drone-shadow, .farmer-prop { animation: none; }
+}
+.farmer-count {
+  text-shadow: 0 1px 2px rgba(20, 35, 50, 0.65), 0 0 6px rgba(20, 35, 50, 0.35);
+}
+.farmer-title {
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+}
+/* While a window is dragged/resized, editors must not eat the pointer. */
+.farmer-dragging,
+.farmer-dragging * {
+  user-select: none !important;
+}
+.farmer-dragging .monaco-editor,
+.farmer-dragging textarea {
+  pointer-events: none !important;
+}

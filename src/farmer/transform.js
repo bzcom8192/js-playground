@@ -585,3 +585,173 @@ export function transform(src) {
   out += src.slice(cur);
   return out;
 }
+
+// ---------- multi-file programs: top-level declarations ----------
+//
+// Running file F runs F's code; every other file contributes ONLY its
+// top-level function declarations (like TFWR's `from helper import *`):
+//   function name(…) { … }            (also async / generator)
+//   const|let|var name = (…) => …     (also `x => …`, `async (…) => …`)
+//   const|let|var name = function …   (also async)
+// Everything else at the top level of a helper file (loops, calls, plain
+// assignments, other variables, nested declarations) is ignored.
+
+const CONTINUES_EXPR = new Set([")", "]", "}"]);
+
+/**
+ * Scans the top level of `src` and lists its declarations.
+ * → [{ name, kind: "function" | "other", start, end }]
+ * kind "function" = an importable function declaration (see above);
+ * start/end are source offsets of the whole statement (for "function").
+ */
+export function listDeclarations(src) {
+  const all = tokenize(src);
+  const S = all.filter((t) => t.type !== "ws" && t.type !== "comment");
+  const N = S.length;
+  const val = (k) => (k >= 0 && k < N ? S[k].value : undefined);
+  const isP = (k, v) => k >= 0 && k < N && S[k].type === "punct" && S[k].value === v;
+  const isI = (k, v) => k >= 0 && k < N && S[k].type === "ident" && (v === undefined || S[k].value === v);
+
+  // depth + bracket matching
+  const depth = new Array(N).fill(0);
+  const match = new Array(N).fill(-1);
+  const stack = [];
+  for (let k = 0; k < N; k++) {
+    depth[k] = stack.length;
+    if (S[k].type !== "punct") continue;
+    const v = S[k].value;
+    if (OPEN[v]) stack.push(k);
+    else if (CLOSE[v]) {
+      for (let s = stack.length - 1; s >= 0; s--) {
+        if (val(stack[s]) === CLOSE[v]) {
+          match[stack[s]] = k;
+          match[k] = stack[s];
+          stack.length = s;
+          break;
+        }
+      }
+      depth[k] = stack.length;
+    }
+  }
+
+  const newlineBefore = (k) => k > 0 && /\n/.test(src.slice(S[k - 1].end, S[k].start));
+  const endsValue = (k) =>
+    k >= 0 && (S[k].type !== "punct" || CONTINUES_EXPR.has(S[k].value));
+  const stmtStart = (k) =>
+    k === 0 ||
+    isP(k - 1, ";") ||
+    (isP(k - 1, "}") && depth[k - 1] === 0) ||
+    (newlineBefore(k) && endsValue(k - 1));
+
+  // End (exclusive sig index) of an expression starting at k, at depth 0.
+  const exprEnd = (k) => {
+    let e = k;
+    while (e < N) {
+      if (isP(e, ";") && depth[e] === 0) return e;
+      if (isP(e, ",") && depth[e] === 0) return e;
+      if (e > k && depth[e] === 0 && newlineBefore(e) && endsValue(e - 1) && S[e].type !== "punct") {
+        return e;
+      }
+      if (S[e].type === "punct" && OPEN[S[e].value] && match[e] > e) e = match[e] + 1;
+      else e++;
+    }
+    return N;
+  };
+  const withSemi = (e) => (isP(e + 1, ";") ? e + 1 : e); // e = last token index
+
+  // Function value at k (`function …`, `async function …`, arrow) → last token index, or -1.
+  const functionValueEnd = (k) => {
+    let j = k;
+    if (isI(j, "async") && !newlineBefore(j + 1)) j++;
+    if (isI(j, "function")) {
+      j++;
+      if (isP(j, "*")) j++;
+      if (isI(j)) j++;
+      if (!isP(j, "(") || match[j] < 0) return -1;
+      const b = match[j] + 1;
+      return isP(b, "{") && match[b] > b ? match[b] : -1;
+    }
+    let arrow;
+    if (isP(j, "(") && match[j] > j && isP(match[j] + 1, "=>")) arrow = match[j] + 1;
+    else if (isI(j) && isP(j + 1, "=>")) arrow = j + 1;
+    else return -1;
+    if (isP(arrow + 1, "{") && match[arrow + 1] > arrow) {
+      // `=> { … }` possibly followed by more expression (rare) — stop at the brace.
+      return match[arrow + 1];
+    }
+    return exprEnd(arrow + 1) - 1;
+  };
+
+  const out = [];
+  for (let k = 0; k < N; k++) {
+    if (depth[k] !== 0 || S[k].type !== "ident" || !stmtStart(k)) continue;
+    const v = S[k].value;
+    if (v === "function" || (v === "async" && isI(k + 1, "function"))) {
+      const f = v === "async" ? k + 1 : k;
+      const nameK = isP(f + 1, "*") ? f + 2 : f + 1;
+      const end = functionValueEnd(k);
+      if (!isI(nameK) || end < 0) continue;
+      const last = withSemi(end);
+      out.push({ name: val(nameK), kind: "function", start: S[k].start, end: S[last].end });
+      k = last;
+    } else if (v === "class" && isI(k + 1)) {
+      out.push({ name: val(k + 1), kind: "other", start: S[k].start, end: S[k + 1].end });
+    } else if (v === "const" || v === "let" || v === "var") {
+      // Single declarator holding a function → importable.
+      if (isI(k + 1) && isP(k + 2, "=")) {
+        const end = functionValueEnd(k + 3);
+        if (end >= 0 && !isP(end + 1, ",")) {
+          const last = withSemi(end);
+          out.push({ name: val(k + 1), kind: "function", start: S[k].start, end: S[last].end });
+          k = last;
+          continue;
+        }
+      }
+      // Anything else: collect declared names (best effort, incl. simple destructuring).
+      let j = k + 1;
+      while (j < N) {
+        if (isI(j)) out.push({ name: val(j), kind: "other", start: S[j].start, end: S[j].end });
+        else if ((isP(j, "{") || isP(j, "[")) && match[j] > j) {
+          for (let q = j + 1; q < match[j]; q++) {
+            if (isI(q) && depth[q] === depth[j] + 1 && !isP(q + 1, ":") && !isP(q - 1, "=")) {
+              out.push({ name: val(q), kind: "other", start: S[q].start, end: S[q].end });
+            }
+          }
+          j = match[j];
+        } else break;
+        j++;
+        if (isP(j, "=")) j = exprEnd(j + 1);
+        if (isP(j, ",")) {
+          j++;
+          continue;
+        }
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+/** Names declared at the top level of `src` (functions, variables, classes). */
+export function topLevelNames(src) {
+  return new Set(listDeclarations(src).map((d) => d.name));
+}
+
+/**
+ * Keeps only the importable top-level function declarations of `code`
+ * (see listDeclarations), skipping any whose name is in `exclude`.
+ * Everything else is removed EXCEPT newlines, so line numbers in the result
+ * match the original file (error messages can point at the helper file).
+ */
+export function extractDeclarations(code, exclude = []) {
+  const skip = exclude instanceof Set ? exclude : new Set(exclude);
+  let out = "";
+  let cur = 0;
+  const keepNewlines = (s) => s.replace(/[^\n]/g, "");
+  for (const d of listDeclarations(code)) {
+    if (d.kind !== "function" || skip.has(d.name)) continue;
+    out += keepNewlines(code.slice(cur, d.start)) + code.slice(d.start, d.end);
+    cur = d.end;
+  }
+  return out + keepNewlines(code.slice(cur));
+}

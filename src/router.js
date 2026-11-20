@@ -1,12 +1,13 @@
 // Tiny hash router (no react-router, keeps static deploys working).
 //   "" / "#/"   → playground
-//   "#/farmer"  → JS Farmer
+//   "#/farmer"  → JS Farmer   ("#/farmer?demo=1" → demo farm, see farmer/demo.js)
 import { useEffect, useState } from "react";
 
 export const ROUTES = { playground: "#/", farmer: "#/farmer" };
 
 export function routeFromHash(hash) {
-  const h = (hash || "").replace(/^#/, "").replace(/\/+$/, "");
+  // "#/farmer?demo=1" → query is ignored here (the page reads it).
+  const h = (hash || "").replace(/^#/, "").replace(/\?.*$/, "").replace(/\/+$/, "");
   return h === "/farmer" ? "farmer" : "playground";
 }
 

@@ -74,7 +74,7 @@ const RULES = [
   ["Expand 🗺️", "1→2→3→4→5→6→7→8→10→12. Clears the farm."],
 ];
 
-export default function DocsPanel({ game, onLoadExample }) {
+export default function DocsPanel({ game, onLoadExample, targetName = "the editor" }) {
   return (
     <div className="p-3 space-y-4 text-xs">
       <div className="flex items-center gap-2">
@@ -90,7 +90,7 @@ export default function DocsPanel({ game, onLoadExample }) {
           }}
           className="flex-1 min-w-0 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-gray-200 text-xs"
         >
-          <option value="">Load an example into the editor…</option>
+          <option value="">Load an example into “{targetName}”…</option>
           {EXAMPLES.map((ex) => {
             const missing = ex.needs.filter((u) => !W.isUnlocked(game, u));
             return (
@@ -107,6 +107,32 @@ export default function DocsPanel({ game, onLoadExample }) {
         functions can call drone actions. Callbacks like <code className="text-gray-300">forEach</code>{" "}
         don&apos;t wait for actions: use <code className="text-gray-300">for…of</code> loops instead.
       </p>
+
+      <section>
+        <h3 className="text-[11px] uppercase tracking-wider font-semibold text-gray-500 mb-1.5">Files &amp; windows</h3>
+        <ul className="space-y-1 text-gray-400 leading-relaxed list-disc pl-4">
+          <li>
+            Each code window is a file. <span className="text-gray-200">▶</span> runs <em>that</em> file (or{" "}
+            <code className="text-gray-300">Ctrl+Enter</code> inside it). Starting a run stops the previous one.
+          </li>
+          <li>
+            Every <em>other</em> file contributes only its <span className="text-gray-200">top-level functions</span>{" "}
+            (<code className="text-gray-300">function f() {"{…}"}</code>,{" "}
+            <code className="text-gray-300">const f = (…) =&gt; …</code>,{" "}
+            <code className="text-gray-300">const f = function …</code>) — like <code className="text-gray-300">from f0 import *</code>.
+            Their other top-level code (loops, calls, variables) is ignored.
+          </li>
+          <li>
+            Name clash: the running file&apos;s own top-level name wins; between helper files, the first file in the
+            Files list wins.
+          </li>
+          <li>
+            <span className="text-gray-200">❚❚</span> pauses the program <em>and</em> the farm (no growth); ▶ resumes.{" "}
+            <span className="text-gray-200">■</span> stops.
+          </li>
+          <li>Drag a window by its title bar, resize from the bottom-right corner, — minimizes, ✕ closes (reopen via +).</li>
+        </ul>
+      </section>
 
       {API.map((g) => (
         <section key={g.title}>
