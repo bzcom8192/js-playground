@@ -251,6 +251,15 @@ export default function useFarmerFiles() {
     return true;
   }, []);
 
+  /** Replace all code files with an imported set (already sanitized by
+   *  saveData.parseImport). Window layout falls back to defaults for the
+   *  imported files — layout is not part of an export. */
+  const importFiles = useCallback((data) => {
+    nextIdRef.current = data.nextId;
+    setFiles(data.files);
+    setUi(loadUi(data.files));
+  }, []);
+
   /** Reset Save: back to the two seeded files and the default layout. */
   const resetFiles = useCallback(() => {
     const seed = seedFiles();
@@ -273,6 +282,7 @@ export default function useFarmerFiles() {
     newFile,
     renameFile,
     deleteFile,
+    importFiles,
     resetFiles,
     saveNow,
   };

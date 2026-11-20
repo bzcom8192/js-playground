@@ -198,6 +198,27 @@ export default function useFarmEngine() {
   }, []);
   const isRunning = useCallback(() => !!runtimeRef.current?.isRunning(), []);
 
+  /** Replace the current farm with an imported save (see saveData.js). */
+  const importSave = useCallback(
+    (data) => {
+      runtimeRef.current?.stop(true);
+      if (demoRef.current) {
+        demoRef.current = false;
+        setDemo(false);
+        if (typeof window !== "undefined" && isDemoHash(window.location.hash)) {
+          window.history.replaceState(null, "", "#/farmer");
+        }
+      }
+      setStatus("idle");
+      pausedRef.current = false;
+      setPausedState(false);
+      gameRef.current = W.deserialize(data);
+      dirtyRef.current = true;
+      save();
+    },
+    [save],
+  );
+
   const clearFarm = useCallback(() => {
     exitDemo();
     W.clearFarm(gameRef.current);
@@ -263,6 +284,7 @@ export default function useFarmEngine() {
     run,
     stop,
     isRunning,
+    importSave,
     clearFarm,
     buy,
     resetSave,

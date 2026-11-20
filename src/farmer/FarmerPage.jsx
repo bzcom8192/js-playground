@@ -11,8 +11,9 @@ import { listDeclarations } from "./transform.js";
 import { buildProgram, mapLine } from "./program.js";
 import { formatCount } from "./format.js";
 import * as W from "./world.js";
-import useFarmEngine from "./useFarmEngine.js";
-import useFarmerFiles from "./useFarmerFiles.js";
+import useFarmEngine, { SAVE_KEY } from "./useFarmEngine.js";
+import useFarmerFiles, { FILES_KEY } from "./useFarmerFiles.js";
+import { buildExport, parseImport } from "./saveData.js";
 import FarmBoardView from "./FarmBoardView.jsx";
 import FloatingWindow, { SquareButton } from "./FloatingWindow.jsx";
 import { Glyph, OLIVE, ORANGE } from "./farmerUi.jsx";
@@ -477,6 +478,48 @@ export default function FarmerPage() {
     if (confirm("Clear the farm? All plants are removed and the ground resets to grassland.")) engine.clearFarm();
   };
 
+  const importInputRef = useRef(null);
+
+  const readStoredJson = (key) => {
+    try {
+      const raw = localStorage.getItem(key);
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const handleExportData = () => {
+    saveNow(); // flush the in-memory farm + files to storage first
+    fm.saveNow();
+    const data = buildExport({ save: readStoredJson(SAVE_KEY), files: readStoredJson(FILES_KEY) });
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `js-farmer-save-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    pushLog("info", "💾 Exported game data (farm save + code files) as a JSON file.");
+  };
+
+  const handleImportFile = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow re-picking the same file
+    if (!file) return;
+    const parsed = parseImport(await file.text());
+    if (!parsed.ok) {
+      pushLog("error", `Import failed: ${parsed.error}`);
+      return;
+    }
+    const when = parsed.exportedAt ? ` exported ${parsed.exportedAt.slice(0, 10)}` : "";
+    if (!confirm(`Import game data${when}? This REPLACES your current farm and code files.`)) return;
+    if (parsed.save) engine.importSave(parsed.save);
+    if (parsed.files) fm.importFiles(parsed.files);
+    setRunningFileId(null);
+    pushLog("info", "📥 Imported game data — farm and code files replaced.");
+  };
+
   const handleResetSave = () => {
     if (confirm("Reset ALL JS Farmer progress (items, unlocks, farm) and ALL code files? This cannot be undone.")) {
       engine.resetSave();
@@ -584,6 +627,13 @@ export default function FarmerPage() {
         <button onClick={() => setShortcutsOpen(true)} className="text-gray-400 hover:text-white" title="Keyboard shortcuts (?)">
           ⌨ Shortcuts
         </button>
+        <button onClick={handleExportData} className="text-gray-400 hover:text-white" title="Download your farm save + code files as one JSON file">
+          💾 Save Data
+        </button>
+        <button onClick={() => importInputRef.current?.click()} className="text-gray-400 hover:text-white" title="Replace your farm + code files from an exported JSON file">
+          📥 Import Data
+        </button>
+        <input ref={importInputRef} type="file" accept="application/json,.json" className="hidden" onChange={handleImportFile} />
         <button onClick={handleResetSave} className="ml-auto px-2.5 py-1 rounded bg-red-700 hover:bg-red-600 text-white font-semibold">
           Reset Save…
         </button>
