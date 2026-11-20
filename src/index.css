@@ -1,1 +1,14 @@
 @import "tailwindcss";
+
+/* JS Farmer: drone flip (do_a_flip) */
+@keyframes farmer-flip {
+  0% { transform: translateY(0) rotate(0deg) scale(1); }
+  40% { transform: translateY(-35%) rotate(180deg) scale(1.25); }
+  100% { transform: translateY(0) rotate(360deg) scale(1); }
+}
+.farmer-flip {
+  display: inline-block;
+  animation-name: farmer-flip;
+  animation-timing-function: ease-in-out;
+  animation-fill-mode: both;
+}

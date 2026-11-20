@@ -3,9 +3,28 @@ import { eslintConfig } from "./eslintConfig";
 
 const linter = new Linter();
 
-export function lintCode(code) {
+// Configs with extra globals (e.g. the Farmer API) are cached per globals object.
+const configCache = new WeakMap();
+
+function configFor(extraGlobals) {
+  if (!extraGlobals) return eslintConfig;
+  let config = configCache.get(extraGlobals);
+  if (!config) {
+    config = {
+      ...eslintConfig,
+      languageOptions: {
+        ...eslintConfig.languageOptions,
+        globals: { ...eslintConfig.languageOptions.globals, ...extraGlobals },
+      },
+    };
+    configCache.set(extraGlobals, config);
+  }
+  return config;
+}
+
+export function lintCode(code, extraGlobals) {
   try {
-    const messages = linter.verify(code, eslintConfig);
+    const messages = linter.verify(code, configFor(extraGlobals));
     return messages;
   } catch (error) {
     console.error("Linting error:", error);

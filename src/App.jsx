@@ -1,8 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 
-// Import workers for local Monaco (Vite/Webpack 5 compatible)
-import editorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
-import tsWorker from "monaco-editor/esm/vs/language/typescript/ts.worker?worker";
+// Monaco web workers (Vite/Webpack 5 compatible) — shared with the Farmer page
+import "./monacoEnv";
 import { lazy } from "react";
 import { Suspense } from "react";
 import UploadIcon from "./components/icons/UploadIcon";
@@ -15,6 +14,10 @@ import SmallDownloadIcon from "./components/icons/SmallDownloadIcon";
 import TrashIcon from "./components/icons/TrashIcon";
 import XIcon from "./components/icons/XIcon";
 import PlayIcon from "./components/icons/PlayIcon";
+import ShortcutsModal from "./components/ShortcutsModal";
+import usePageShortcuts from "./hooks/usePageShortcuts";
+import { EDITOR_SHORTCUTS, PLAYGROUND_SHORTCUTS } from "./shortcuts";
+import { ROUTES } from "./router";
 
 const MonacoEditor = lazy(() => import("./components/MonacoEditor"));
 const SmartString = lazy(() => import("./components/SmartString"));
@@ -22,14 +25,10 @@ const ObjectInspector = lazy(() => import("./components/ObjectInspector"));
 const NumberToggle = lazy(() => import("./components/NumberToggle"));
 const BooleanToggle = lazy(() => import("./components/BooleanToggle"));
 
-self.MonacoEnvironment = {
-  getWorker(_, label) {
-    if (label === "typescript" || label === "javascript") {
-      return new tsWorker();
-    }
-    return new editorWorker();
-  },
-};
+const SHORTCUT_SECTIONS = [
+  { title: "Playground", items: PLAYGROUND_SHORTCUTS },
+  { title: "Editor", items: EDITOR_SHORTCUTS },
+];
 
 const DEFAULT_CODE = `// Smart Console Features:
 // 1. Numbers: Click to toggle Hex/Dec
@@ -79,6 +78,7 @@ export default function App() {
     }
   });
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [isShortcutsOpen, setIsShortcutsOpen] = useState(false);
 
   const consoleEndRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -173,17 +173,25 @@ export default function App() {
 
   // --- Handlers ---
 
+  // Fallback textarea (shown while Monaco loads, or if it fails to load).
+  // Ctrl/Cmd+Enter and Ctrl/Cmd+S reach the page-level handler below.
   const handleKeyDown = (e) => {
     if (e.key === "Tab") {
       e.preventDefault();
-      const start = e.target.selectionStart;
-      const end = e.target.selectionEnd;
-      setCode(code.substring(0, start) + "  " + code.substring(end));
+      const el = e.target;
+      const current = el.value; // read the live value, not a render-time closure
+      const start = el.selectionStart;
+      const end = el.selectionEnd;
+      setCode(current.substring(0, start) + "  " + current.substring(end));
       setTimeout(() => {
         if (e.target)
           e.target.selectionStart = e.target.selectionEnd = start + 2;
       }, 0);
     }
+  };
+
+  const closeOverlays = () => {
+    setIsHistoryOpen(false);
   };
 
   const handleReset = () => {
@@ -206,6 +214,13 @@ export default function App() {
     setHistory((prev) => [newEntry, ...prev].slice(0, 50));
     setIsHistoryOpen(true); // Open panel to show confirmation basically
   };
+
+  usePageShortcuts({
+    onRun: executeCode,
+    onSave: handleSaveSnapshot,
+    onHelp: () => setIsShortcutsOpen(true),
+    onEscape: closeOverlays,
+  });
 
   const handleLoadSnapshot = (snapshot) => {
     if (
@@ -325,6 +340,12 @@ export default function App() {
         accept=".json"
       />
 
+      <ShortcutsModal
+        open={isShortcutsOpen}
+        onClose={() => setIsShortcutsOpen(false)}
+        sections={SHORTCUT_SECTIONS}
+      />
+
       {/* --- History Sidebar (Slide Over) --- */}
       {isHistoryOpen && (
         <div className="absolute inset-0 z-50 flex">
@@ -402,6 +423,13 @@ export default function App() {
           <h1 className="text-lg font-bold text-gray-100 tracking-tight hidden sm:block">
             Playground
           </h1>
+          <a
+            href={ROUTES.farmer}
+            className="ml-1 px-2.5 py-1 text-xs font-medium rounded-full border border-gray-700 text-gray-400 hover:text-white hover:border-gray-500 transition-colors"
+            title="Open JS Farmer"
+          >
+            🚜 Farmer
+          </a>
         </div>
 
         <div className="flex items-center gap-3">
@@ -459,7 +487,16 @@ export default function App() {
           </button>
 
           <button
+            onClick={() => setIsShortcutsOpen(true)}
+            className="hidden sm:block px-2 py-1.5 text-sm text-gray-400 hover:text-white rounded hover:bg-gray-800 transition-colors"
+            title="Keyboard shortcuts (?)"
+          >
+            ⌨
+          </button>
+
+          <button
             onClick={executeCode}
+            title="Run (Ctrl/⌘+Enter)"
             className="flex items-center gap-2 px-5 py-2 text-sm font-bold text-white bg-blue-600 rounded-md hover:bg-blue-500 hover:shadow-lg hover:shadow-blue-900/30 transition-all active:scale-95"
           >
             <PlayIcon /> Run
@@ -489,6 +526,8 @@ export default function App() {
               <MonacoEditor
                 value={code}
                 onChange={setCode}
+                onRun={executeCode}
+                onSave={handleSaveSnapshot}
                 fallback={
                   <textarea
                     value={code}
@@ -558,7 +597,14 @@ export default function App() {
                 <div className="inline-block align-top break-all">
                   {log.parts.map((part, i) => (
                     <span key={i} className="mr-2 last:mr-0 inline-block">
-                      <Suspense fallback={<span>{part.value}</span>}>
+                      {/* Fallback must not render raw objects (React #31 crash while the lazy chunk loads) */}
+                      <Suspense
+                        fallback={
+                          <span>
+                            {part.type === "object" ? "…" : String(part.value)}
+                          </span>
+                        }
+                      >
                         {part.type === "number" ? (
                           <NumberToggle value={part.value} />
                         ) : part.type === "boolean" ? (

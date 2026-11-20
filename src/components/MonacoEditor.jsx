@@ -1,21 +1,341 @@
 import { useState, useRef, useEffect } from "react";
 import { lintCode, convertToMonacoMarkers } from "../utils/linter";
 
-export default function MonacoEditor({ value, onChange, fallback }) {
+// ---------------------------------------------------------------------------
+// Global Monaco setup. Theme, tokenizer, compiler options and the console
+// typings are process-wide singletons in Monaco, so register them ONCE per page
+// load instead of on every mount (AUDIT.md #5).
+// ---------------------------------------------------------------------------
+let globalSetupDone = false;
+
+function setupMonacoOnce(monaco) {
+  if (globalSetupDone) return;
+  globalSetupDone = true;
+
+  // Configure JavaScript language features
+  monaco.languages.typescript.javascriptDefaults.setDiagnosticsOptions({
+    noSemanticValidation: false,
+    noSyntaxValidation: false,
+  });
+
+  monaco.languages.typescript.javascriptDefaults.setCompilerOptions({
+    target: monaco.languages.typescript.ScriptTarget.ES2020,
+    allowNonTsExtensions: true,
+    moduleResolution: monaco.languages.typescript.ModuleResolutionKind.NodeJs,
+    module: monaco.languages.typescript.ModuleKind.CommonJS,
+    noEmit: true,
+    esModuleInterop: true,
+    jsx: monaco.languages.typescript.JsxEmit.React,
+    reactNamespace: "React",
+    allowJs: true,
+    typeRoots: ["node_modules/@types"],
+  });
+
+  // Enable eager model sync for better syntax highlighting
+  monaco.languages.typescript.javascriptDefaults.setEagerModelSync(true);
+
+  // Add common JavaScript globals for better IntelliSense
+  monaco.languages.typescript.javascriptDefaults.addExtraLib(
+    `
+    declare const console: Console;
+    interface Console {
+      log(...data: any[]): void;
+      error(...data: any[]): void;
+      warn(...data: any[]): void;
+      info(...data: any[]): void;
+      clear(): void;
+    }
+    `,
+    "ts:console.d.ts",
+  );
+
+  // Define custom theme with proper syntax highlighting
+  // Monaco's JavaScript tokens: identifier, keyword, string, number, etc.
+  monaco.editor.defineTheme("custom-dark", {
+    base: "vs-dark",
+    inherit: false,
+    rules: [
+      // Keywords like: const, let, var, function, return, if, else, for, while, true, false, null, undefined
+      { token: "keyword", foreground: "569CD6", fontStyle: "bold" },
+      { token: "keyword.js", foreground: "569CD6" },
+
+      // Methods (like .log, .push, .map) - Yellow
+      { token: "method", foreground: "DCDCAA" },
+
+      // Identifiers (variable names, object names like 'console') - Light Blue
+      { token: "identifier", foreground: "9CDCFE" },
+      { token: "identifier.js", foreground: "9CDCFE" },
+      { token: "variable", foreground: "9CDCFE" },
+      { token: "variable.js", foreground: "9CDCFE" },
+
+      // Types and classes
+      { token: "type", foreground: "4EC9B0" },
+      { token: "type.identifier", foreground: "4EC9B0" },
+      { token: "class", foreground: "4EC9B0" },
+
+      // Strings
+      { token: "string", foreground: "CE9178" },
+      { token: "string.js", foreground: "CE9178" },
+      { token: "string.escape", foreground: "D7BA7D" },
+
+      // Numbers
+      { token: "number", foreground: "B5CEA8" },
+      { token: "number.js", foreground: "B5CEA8" },
+      { token: "number.float", foreground: "B5CEA8" },
+      { token: "number.hex", foreground: "B5CEA8" },
+      { token: "number.octal", foreground: "B5CEA8" },
+      { token: "number.binary", foreground: "B5CEA8" },
+
+      // Comments
+      { token: "comment", foreground: "6A9955", fontStyle: "italic" },
+      { token: "comment.js", foreground: "6A9955" },
+      { token: "comment.line", foreground: "6A9955" },
+      { token: "comment.block", foreground: "6A9955" },
+
+      // Operators
+      { token: "operator", foreground: "D4D4D4" },
+      { token: "operator.js", foreground: "D4D4D4" },
+
+      // Delimiters
+      { token: "delimiter", foreground: "D4D4D4" },
+      { token: "delimiter.paren", foreground: "FFD700" },
+      { token: "delimiter.parenthesis", foreground: "FFD700" },
+      { token: "delimiter.square", foreground: "FFD700" },
+      { token: "delimiter.bracket", foreground: "FFD700" },
+      { token: "delimiter.curly", foreground: "FFD700" },
+      { token: "delimiter.brace", foreground: "FFD700" },
+
+      // Regexp
+      { token: "regexp", foreground: "D16969" },
+      { token: "regexp.js", foreground: "D16969" },
+
+      // Tag (for JSX/HTML)
+      { token: "tag", foreground: "569CD6" },
+      { token: "metatag", foreground: "569CD6" },
+
+      // Attributes
+      { token: "attribute.name", foreground: "9CDCFE" },
+      { token: "attribute.value", foreground: "CE9178" },
+
+      // Other
+      { token: "", foreground: "D4D4D4" },
+    ],
+    colors: {
+      "editor.background": "#1e1e1e",
+      "editor.foreground": "#D4D4D4",
+      "editor.lineHighlightBackground": "#2A2A2A",
+      "editorCursor.foreground": "#AEAFAD",
+      "editor.selectionBackground": "#264F78",
+      "editorLineNumber.foreground": "#858585",
+      "editorLineNumber.activeForeground": "#C6C6C6",
+    },
+  });
+
+  // Custom tokenizer to differentiate methods from identifiers
+  monaco.languages.setMonarchTokensProvider("javascript", {
+    tokenizer: {
+      root: [
+        // Comments
+        [/\/\/.*$/, "comment"],
+        [/\/\*/, "comment", "@block_comment"],
+
+        [/\.[a-zA-Z_$][\w$]*/, "method"],
+        [
+          /[a-zA-Z_$][\w$]*/,
+          {
+            cases: {
+              "@keywords": "keyword",
+              "@default": "identifier",
+            },
+          },
+        ],
+        [/"([^"\\]|\\.)*$/, "string.invalid"],
+        [/"/, "string", "@string_double"],
+        [/'([^'\\]|\\.)*$/, "string.invalid"],
+        [/'/, "string", "@string_single"],
+        [/`/, "string", "@string_backtick"],
+        [/0[xX][0-9a-fA-F]+/, "number.hex"],
+        [/0[bB][01]+/, "number.binary"],
+        [/0[oO][0-7]+/, "number.octal"],
+        [/\d+(\.\d+)?([eE][+-]?\d+)?/, "number"],
+        [/[;,.]/, "delimiter"],
+        [/[()]/, "delimiter.parenthesis"],
+        [/[[\]]/, "delimiter.bracket"],
+        [/[{}]/, "delimiter.brace"],
+      ],
+      block_comment: [
+        [/[^/*]+/, "comment"],
+        [/\*\//, "comment", "@pop"],
+        [/[/*]/, "comment"],
+      ],
+      string_double: [
+        [/[^\\"]+/, "string"],
+        [/\\./, "string.escape"],
+        [/"/, "string", "@pop"],
+      ],
+      string_single: [
+        [/[^\\']+/, "string"],
+        [/\\./, "string.escape"],
+        [/'/, "string", "@pop"],
+      ],
+      string_backtick: [
+        [/[^\\`]+/, "string"],
+        [/\\./, "string.escape"],
+        [/`/, "string", "@pop"],
+      ],
+    },
+    keywords: [
+      "break",
+      "case",
+      "catch",
+      "class",
+      "const",
+      "continue",
+      "debugger",
+      "default",
+      "delete",
+      "do",
+      "else",
+      "export",
+      "extends",
+      "false",
+      "finally",
+      "for",
+      "function",
+      "if",
+      "import",
+      "in",
+      "instanceof",
+      "let",
+      "new",
+      "null",
+      "return",
+      "super",
+      "switch",
+      "this",
+      "throw",
+      "true",
+      "try",
+      "typeof",
+      "undefined",
+      "var",
+      "void",
+      "while",
+      "with",
+      "yield",
+      "async",
+      "await",
+      "of",
+    ],
+  });
+}
+
+// Page-specific typings (e.g. the Farmer API) are ref-counted per fileName so
+// they exist only while an editor that asked for them is mounted. Pages
+// unmount on route change, so the playground never sees farmer globals.
+const extraLibRegistry = new Map(); // fileName -> { content, refs, disposable }
+
+function acquireExtraLib(monaco, lib) {
+  if (!lib || !lib.fileName || !lib.content) return () => {};
+  const defaults = monaco.languages.typescript.javascriptDefaults;
+  let entry = extraLibRegistry.get(lib.fileName);
+  if (entry && entry.content !== lib.content) {
+    entry.disposable.dispose();
+    entry.disposable = defaults.addExtraLib(lib.content, lib.fileName);
+    entry.content = lib.content;
+  } else if (!entry) {
+    entry = {
+      content: lib.content,
+      refs: 0,
+      disposable: defaults.addExtraLib(lib.content, lib.fileName),
+    };
+    extraLibRegistry.set(lib.fileName, entry);
+  }
+  entry.refs++;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    entry.refs--;
+    if (entry.refs <= 0) {
+      entry.disposable.dispose();
+      extraLibRegistry.delete(lib.fileName);
+    }
+  };
+}
+
+/**
+ * Shared Monaco editor.
+ * Props: { value, onChange, fallback, onRun?, onSave?, extraLib?, lintGlobals? }
+ *  - onRun:  Ctrl/Cmd+Enter inside the editor
+ *  - onSave: Ctrl/Cmd+S inside the editor (browser "Save page" is suppressed)
+ *  - extraLib: { content, fileName } extra .d.ts for IntelliSense
+ *  - lintGlobals: { name: "readonly" } extra ESLint globals
+ * Callbacks are read through refs, so passing inline functions does NOT
+ * recreate the editor (AUDIT.md #2).
+ */
+export default function MonacoEditor({
+  value,
+  onChange,
+  fallback,
+  onRun,
+  onSave,
+  extraLib,
+  lintGlobals,
+}) {
   const [loaded, setLoaded] = useState(false);
   const containerRef = useRef(null);
   const editorRef = useRef(null);
   const valueRef = useRef(value);
+  const lastEmittedRef = useRef(value);
+  const applyingExternalRef = useRef(false);
+
+  const onChangeRef = useRef(onChange);
+  const onRunRef = useRef(onRun);
+  const onSaveRef = useRef(onSave);
+  const lintGlobalsRef = useRef(lintGlobals);
+  // Captured once: which optional features the editor is created with.
+  const initRef = useRef({ hasRun: !!onRun, hasSave: !!onSave, extraLib });
 
   useEffect(() => {
+    onChangeRef.current = onChange;
+    onRunRef.current = onRun;
+    onSaveRef.current = onSave;
+    lintGlobalsRef.current = lintGlobals;
+  });
+
+  // External value changes (snapshot load, reset, import, example load).
+  useEffect(() => {
     valueRef.current = value;
-    if (editorRef.current && editorRef.current.getValue() !== value) {
-      editorRef.current.setValue(value);
+    const editor = editorRef.current;
+    if (!editor) return;
+    // Echo of what the editor itself just emitted → nothing to do (AUDIT.md #3).
+    if (value === lastEmittedRef.current) return;
+    lastEmittedRef.current = value;
+    const model = editor.getModel();
+    if (!model || model.getValue() === value) return;
+    // Replace through an edit operation instead of setValue(), so the change
+    // is undoable (Ctrl+Z restores the previous code) and doesn't echo back.
+    applyingExternalRef.current = true;
+    try {
+      editor.pushUndoStop();
+      model.pushEditOperations(
+        [],
+        [{ range: model.getFullModelRange(), text: value }],
+        () => null,
+      );
+      editor.pushUndoStop();
+      editor.setPosition({ lineNumber: 1, column: 1 });
+    } finally {
+      applyingExternalRef.current = false;
     }
   }, [value]);
 
   useEffect(() => {
     let isMounted = true;
+    let lintTimeout = null;
+    const disposables = [];
+    let releaseLib = () => {};
 
     const initMonaco = async () => {
       if (editorRef.current || !containerRef.current) return;
@@ -24,225 +344,11 @@ export default function MonacoEditor({ value, onChange, fallback }) {
 
       if (!isMounted) return;
 
-      // Configure JavaScript language features
-      monaco.languages.typescript.javascriptDefaults.setDiagnosticsOptions({
-        noSemanticValidation: false,
-        noSyntaxValidation: false,
-      });
+      setupMonacoOnce(monaco);
+      releaseLib = acquireExtraLib(monaco, initRef.current.extraLib);
 
-      monaco.languages.typescript.javascriptDefaults.setCompilerOptions({
-        target: monaco.languages.typescript.ScriptTarget.ES2020,
-        allowNonTsExtensions: true,
-        moduleResolution:
-          monaco.languages.typescript.ModuleResolutionKind.NodeJs,
-        module: monaco.languages.typescript.ModuleKind.CommonJS,
-        noEmit: true,
-        esModuleInterop: true,
-        jsx: monaco.languages.typescript.JsxEmit.React,
-        reactNamespace: "React",
-        allowJs: true,
-        typeRoots: ["node_modules/@types"],
-      });
 
-      // Enable eager model sync for better syntax highlighting
-      monaco.languages.typescript.javascriptDefaults.setEagerModelSync(true);
-
-      // Add common JavaScript globals for better IntelliSense
-      monaco.languages.typescript.javascriptDefaults.addExtraLib(
-        `
-        declare const console: Console;
-        interface Console {
-          log(...data: any[]): void;
-          error(...data: any[]): void;
-          warn(...data: any[]): void;
-          info(...data: any[]): void;
-          clear(): void;
-        }
-        `,
-        "ts:console.d.ts",
-      );
-
-      // Define custom theme with proper syntax highlighting
-      // Monaco's JavaScript tokens: identifier, keyword, string, number, etc.
-      monaco.editor.defineTheme("custom-dark", {
-        base: "vs-dark",
-        inherit: false,
-        rules: [
-          // Keywords like: const, let, var, function, return, if, else, for, while, true, false, null, undefined
-          { token: "keyword", foreground: "569CD6", fontStyle: "bold" },
-          { token: "keyword.js", foreground: "569CD6" },
-
-          // Methods (like .log, .push, .map) - Yellow
-          { token: "method", foreground: "DCDCAA" },
-
-          // Identifiers (variable names, object names like 'console') - Light Blue
-          { token: "identifier", foreground: "9CDCFE" },
-          { token: "identifier.js", foreground: "9CDCFE" },
-          { token: "variable", foreground: "9CDCFE" },
-          { token: "variable.js", foreground: "9CDCFE" },
-
-          // Types and classes
-          { token: "type", foreground: "4EC9B0" },
-          { token: "type.identifier", foreground: "4EC9B0" },
-          { token: "class", foreground: "4EC9B0" },
-
-          // Strings
-          { token: "string", foreground: "CE9178" },
-          { token: "string.js", foreground: "CE9178" },
-          { token: "string.escape", foreground: "D7BA7D" },
-
-          // Numbers
-          { token: "number", foreground: "B5CEA8" },
-          { token: "number.js", foreground: "B5CEA8" },
-          { token: "number.float", foreground: "B5CEA8" },
-          { token: "number.hex", foreground: "B5CEA8" },
-          { token: "number.octal", foreground: "B5CEA8" },
-          { token: "number.binary", foreground: "B5CEA8" },
-
-          // Comments
-          { token: "comment", foreground: "6A9955", fontStyle: "italic" },
-          { token: "comment.js", foreground: "6A9955" },
-          { token: "comment.line", foreground: "6A9955" },
-          { token: "comment.block", foreground: "6A9955" },
-
-          // Operators
-          { token: "operator", foreground: "D4D4D4" },
-          { token: "operator.js", foreground: "D4D4D4" },
-
-          // Delimiters
-          { token: "delimiter", foreground: "D4D4D4" },
-          { token: "delimiter.paren", foreground: "FFD700" },
-          { token: "delimiter.parenthesis", foreground: "FFD700" },
-          { token: "delimiter.square", foreground: "FFD700" },
-          { token: "delimiter.bracket", foreground: "FFD700" },
-          { token: "delimiter.curly", foreground: "FFD700" },
-          { token: "delimiter.brace", foreground: "FFD700" },
-
-          // Regexp
-          { token: "regexp", foreground: "D16969" },
-          { token: "regexp.js", foreground: "D16969" },
-
-          // Tag (for JSX/HTML)
-          { token: "tag", foreground: "569CD6" },
-          { token: "metatag", foreground: "569CD6" },
-
-          // Attributes
-          { token: "attribute.name", foreground: "9CDCFE" },
-          { token: "attribute.value", foreground: "CE9178" },
-
-          // Other
-          { token: "", foreground: "D4D4D4" },
-        ],
-        colors: {
-          "editor.background": "#1e1e1e",
-          "editor.foreground": "#D4D4D4",
-          "editor.lineHighlightBackground": "#2A2A2A",
-          "editorCursor.foreground": "#AEAFAD",
-          "editor.selectionBackground": "#264F78",
-          "editorLineNumber.foreground": "#858585",
-          "editorLineNumber.activeForeground": "#C6C6C6",
-        },
-      });
-
-      // Custom tokenizer to differentiate methods from identifiers
-      monaco.languages.setMonarchTokensProvider("javascript", {
-        tokenizer: {
-          root: [
-            // Comments
-            [/\/\/.*$/, "comment"],
-            [/\/\*/, "comment", "@block_comment"],
-
-            [/\.[a-zA-Z_$][\w$]*/, "method"],
-            [
-              /[a-zA-Z_$][\w$]*/,
-              {
-                cases: {
-                  "@keywords": "keyword",
-                  "@default": "identifier",
-                },
-              },
-            ],
-            [/"([^"\\]|\\.)*$/, "string.invalid"],
-            [/"/, "string", "@string_double"],
-            [/'([^'\\]|\\.)*$/, "string.invalid"],
-            [/'/, "string", "@string_single"],
-            [/`/, "string", "@string_backtick"],
-            [/0[xX][0-9a-fA-F]+/, "number.hex"],
-            [/0[bB][01]+/, "number.binary"],
-            [/0[oO][0-7]+/, "number.octal"],
-            [/\d+(\.\d+)?([eE][+-]?\d+)?/, "number"],
-            [/[;,.]/, "delimiter"],
-            [/[()]/, "delimiter.parenthesis"],
-            [/[[\]]/, "delimiter.bracket"],
-            [/[{}]/, "delimiter.brace"],
-          ],
-          block_comment: [
-            [/[^/*]+/, "comment"],
-            [/\*\//, "comment", "@pop"],
-            [/[/*]/, "comment"],
-          ],
-          string_double: [
-            [/[^\\"]+/, "string"],
-            [/\\./, "string.escape"],
-            [/"/, "string", "@pop"],
-          ],
-          string_single: [
-            [/[^\\']+/, "string"],
-            [/\\./, "string.escape"],
-            [/'/, "string", "@pop"],
-          ],
-          string_backtick: [
-            [/[^\\`]+/, "string"],
-            [/\\./, "string.escape"],
-            [/`/, "string", "@pop"],
-          ],
-        },
-        keywords: [
-          "break",
-          "case",
-          "catch",
-          "class",
-          "const",
-          "continue",
-          "debugger",
-          "default",
-          "delete",
-          "do",
-          "else",
-          "export",
-          "extends",
-          "false",
-          "finally",
-          "for",
-          "function",
-          "if",
-          "import",
-          "in",
-          "instanceof",
-          "let",
-          "new",
-          "null",
-          "return",
-          "super",
-          "switch",
-          "this",
-          "throw",
-          "true",
-          "try",
-          "typeof",
-          "undefined",
-          "var",
-          "void",
-          "while",
-          "with",
-          "yield",
-          "async",
-          "await",
-          "of",
-        ],
-      });
-
-      editorRef.current = monaco.editor.create(containerRef.current, {
+      const editor = monaco.editor.create(containerRef.current, {
         value: valueRef.current,
         language: "javascript",
         theme: "custom-dark",
@@ -265,42 +371,70 @@ export default function MonacoEditor({ value, onChange, fallback }) {
         suggestOnTriggerCharacters: true,
         wordBasedSuggestions: "currentDocument",
       });
+      editorRef.current = editor;
+      lastEmittedRef.current = valueRef.current;
 
-      editorRef.current.addCommand(
-        monaco.KeyCode.Tab,
-        () => {
-          editorRef.current.trigger("keyboard", "acceptSelectedSuggestion", {});
-        },
-        "suggestWidgetVisible",
+      // Tab accepts the suggestion while the widget is open; otherwise Monaco's
+      // default Tab (indent) applies. addAction is scoped to this editor and
+      // disposable — the old addCommand() leaked a global keybinding (AUDIT.md #6).
+      disposables.push(
+        editor.addAction({
+          id: "jsplay.acceptSuggestionTab",
+          label: "Accept Suggestion",
+          keybindings: [monaco.KeyCode.Tab],
+          keybindingContext: "suggestWidgetVisible",
+          run: (ed) => ed.trigger("keyboard", "acceptSelectedSuggestion", {}),
+        }),
       );
 
-      // Lint on content change
-      let lintTimeout;
-      editorRef.current.onDidChangeModelContent(() => {
-        const currentVal = editorRef.current.getValue();
-        if (currentVal !== valueRef.current) {
-          onChange(currentVal);
-        }
+      if (initRef.current.hasRun) {
+        disposables.push(
+          editor.addAction({
+            id: "jsplay.run",
+            label: "Run Code",
+            keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter],
+            run: () => onRunRef.current?.(),
+          }),
+        );
+      }
+      if (initRef.current.hasSave) {
+        disposables.push(
+          editor.addAction({
+            id: "jsplay.save",
+            label: "Save",
+            keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS],
+            run: () => onSaveRef.current?.(),
+          }),
+        );
+      }
 
-        // Debounce linting
-        clearTimeout(lintTimeout);
-        lintTimeout = setTimeout(() => {
-          const lintMessages = lintCode(currentVal);
-          const markers = convertToMonacoMarkers(lintMessages);
-          const model = editorRef.current.getModel();
-          if (model) {
-            monaco.editor.setModelMarkers(model, "eslint", markers);
+      const runLint = () => {
+        const model = editor.getModel();
+        if (!isMounted || !model || model.isDisposed()) return;
+        const markers = convertToMonacoMarkers(
+          lintCode(model.getValue(), lintGlobalsRef.current),
+        );
+        monaco.editor.setModelMarkers(model, "eslint", markers);
+      };
+
+      // Lint on content change
+      disposables.push(
+        editor.onDidChangeModelContent(() => {
+          if (!applyingExternalRef.current) {
+            const currentVal = editor.getValue();
+            lastEmittedRef.current = currentVal;
+            valueRef.current = currentVal;
+            onChangeRef.current?.(currentVal);
           }
-        }, 500);
-      });
+
+          // Debounce linting
+          clearTimeout(lintTimeout);
+          lintTimeout = setTimeout(runLint, 500);
+        }),
+      );
 
       // Initial lint
-      const initialLintMessages = lintCode(valueRef.current);
-      const initialMarkers = convertToMonacoMarkers(initialLintMessages);
-      const model = editorRef.current.getModel();
-      if (model) {
-        monaco.editor.setModelMarkers(model, "eslint", initialMarkers);
-      }
+      runLint();
 
       setLoaded(true);
     };
@@ -309,12 +443,15 @@ export default function MonacoEditor({ value, onChange, fallback }) {
 
     return () => {
       isMounted = false;
+      clearTimeout(lintTimeout); // AUDIT.md #4
+      disposables.forEach((d) => d.dispose());
+      releaseLib();
       if (editorRef.current) {
         editorRef.current.dispose();
         editorRef.current = null;
       }
     };
-  }, [onChange]);
+  }, []);
 
   return (
     <>

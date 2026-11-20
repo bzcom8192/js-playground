@@ -43,6 +43,14 @@ A modern, interactive JavaScript playground built with React, Vite, and Monaco E
 - Captures `console.log`, `console.warn`, `console.error`, `console.info`
 - Clear console with `console.clear()`
 
+### 🚜 **JS Farmer** (second page: `#/farmer`)
+A programming farm game in the spirit of *The Farmer Was Replaced*: write plain
+JavaScript (no `await`) to drive a drone that tills, plants and harvests a growing
+farm, then spend the harvest on unlocks. Open it from the **🚜 Farmer** link in the
+header, or go to `/#/farmer`. The in-game **Docs** tab has the full API and examples.
+See [RESULT.md](RESULT.md) for the design, and [AUDIT.md](AUDIT.md) for the
+editor/keyboard-shortcut audit.
+
 ## Getting Started
 
 ### Installation
@@ -63,6 +71,11 @@ npm run build
 ### Preview Production Build
 ```bash
 npm run preview
+```
+
+### Tests (JS Farmer engine)
+```bash
+npm run test:farmer   # node --test, no extra dependencies
 ```
 
 ## Linter Configuration
@@ -100,7 +113,10 @@ js-playground/
 │   ├── utils/
 │   │   ├── eslintConfig.js        # ESLint rules configuration
 │   │   └── linter.js              # Browser-based linting logic
-│   ├── App.jsx                    # Main application
+│   ├── farmer/                    # JS Farmer page (game engine, transform, UI, tests)
+│   ├── hooks/usePageShortcuts.js  # Page-level keyboard shortcuts
+│   ├── App.jsx                    # Playground page
+│   ├── Root.jsx / router.js       # Tiny hash router (#/ and #/farmer)
 │   ├── main.jsx                   # Entry point
 │   └── index.css                  # Global styles
 ├── public/                        # Static assets
@@ -133,9 +149,13 @@ Every console output is enhanced:
 
 ## Keyboard Shortcuts
 
-- **Ctrl/Cmd + Enter**: Run code
+Press **⌨** in the header (or `?` when not typing) for the full list.
+
+- **Ctrl/Cmd + Enter**: Run code (JS Farmer: Run / Stop)
+- **Ctrl/Cmd + S**: Save snapshot (JS Farmer: save code + farm)
+- **Esc**: Close History / dialogs
 - **Tab** (in autocomplete): Accept suggestion
-- Standard Monaco shortcuts (Ctrl+F for find, etc.)
+- Standard Monaco shortcuts (Ctrl+F find, Ctrl+H replace, Shift+Alt+F format, Ctrl+/ comment, F1 command palette, …)
 
 ## Browser Support
 
