@@ -34,9 +34,50 @@ function setupMonacoOnce(monaco) {
   // Enable eager model sync for better syntax highlighting
   monaco.languages.typescript.javascriptDefaults.setEagerModelSync(true);
 
+  // TypeScript mode (opt-in per editor via the `language` prop; the Farmer
+  // page uses it so players can write `function go(arg: GroundType)`).
+  // Deliberately lenient — a play editor, not a CI gate.
+  const tsDefaults = monaco.languages.typescript.typescriptDefaults;
+  tsDefaults.setCompilerOptions({
+    target: monaco.languages.typescript.ScriptTarget.ES2020,
+    allowNonTsExtensions: true,
+    noEmit: true,
+    strict: false,
+    noImplicitAny: false,
+    noImplicitThis: false,
+    noImplicitReturns: false,
+    noUnusedLocals: false,
+    noUnusedParameters: false,
+    allowUnreachableCode: true,
+    allowUnusedLabels: true,
+    // No DOM typings: farmer code never touches the page, and DOM globals
+    // (Report, Location, name, close, …) would clash with player names.
+    lib: ["es2020"],
+  });
+  tsDefaults.setDiagnosticsOptions({
+    noSemanticValidation: false,
+    noSyntaxValidation: false,
+    // Each Farmer file runs as its own program, and ESLint (with per-file
+    // globals for the other files' functions) already reports undefined
+    // names. The TS worker instead sees every open editor as one global
+    // script and nothing from closed windows, so these would be noise:
+    diagnosticCodesToIgnore: [
+      2304, // Cannot find name 'x'.
+      2552, // Cannot find name 'x'. Did you mean 'y'?
+      2584, // Cannot find name 'x' (DOM global; not in the es2020 lib).
+      2300, // Duplicate identifier 'x'.
+      2393, // Duplicate function implementation.
+      2451, // Cannot redeclare block-scoped variable 'x'.
+      1108, // A 'return' statement can only be used within a function body.
+      1308, // 'await' is only allowed within async functions (the program body is async).
+      1375, // 'await' at the top level needs a module (same).
+      1378, // Top-level 'await' needs target ES2017+ / module (same).
+    ],
+  });
+  tsDefaults.setEagerModelSync(true);
+
   // Add common JavaScript globals for better IntelliSense
-  monaco.languages.typescript.javascriptDefaults.addExtraLib(
-    `
+  const consoleLib = `
     declare const console: Console;
     interface Console {
       log(...data: any[]): void;
@@ -45,9 +86,9 @@ function setupMonacoOnce(monaco) {
       info(...data: any[]): void;
       clear(): void;
     }
-    `,
-    "ts:console.d.ts",
-  );
+    `;
+  monaco.languages.typescript.javascriptDefaults.addExtraLib(consoleLib, "ts:console.d.ts");
+  tsDefaults.addExtraLib(consoleLib, "ts:console.d.ts");
 
   // Define custom theme with proper syntax highlighting
   // Monaco's JavaScript tokens: identifier, keyword, string, number, etc.
@@ -235,19 +276,26 @@ function setupMonacoOnce(monaco) {
 // unmount on route change, so the playground never sees farmer globals.
 const extraLibRegistry = new Map(); // fileName -> { content, refs, disposable }
 
+// Registered with BOTH the JavaScript and the TypeScript defaults, so the lib
+// works whichever `language` the editor uses.
+function addLibEverywhere(monaco, lib) {
+  const { javascriptDefaults, typescriptDefaults } = monaco.languages.typescript;
+  const subs = [javascriptDefaults, typescriptDefaults].map((d) => d.addExtraLib(lib.content, lib.fileName));
+  return { dispose: () => subs.forEach((d) => d.dispose()) };
+}
+
 function acquireExtraLib(monaco, lib) {
   if (!lib || !lib.fileName || !lib.content) return () => {};
-  const defaults = monaco.languages.typescript.javascriptDefaults;
   let entry = extraLibRegistry.get(lib.fileName);
   if (entry && entry.content !== lib.content) {
     entry.disposable.dispose();
-    entry.disposable = defaults.addExtraLib(lib.content, lib.fileName);
+    entry.disposable = addLibEverywhere(monaco, lib);
     entry.content = lib.content;
   } else if (!entry) {
     entry = {
       content: lib.content,
       refs: 0,
-      disposable: defaults.addExtraLib(lib.content, lib.fileName),
+      disposable: addLibEverywhere(monaco, lib),
     };
     extraLibRegistry.set(lib.fileName, entry);
   }
@@ -271,7 +319,11 @@ function acquireExtraLib(monaco, lib) {
  *  - onSave: Ctrl/Cmd+S inside the editor (browser "Save page" is suppressed)
  *  - extraLib: { content, fileName } extra .d.ts for IntelliSense
  *  - lintGlobals: { name: "readonly" } extra ESLint globals
- *  - lintFilter: (messages) => messages — optional post-filter of lint results
+ *  - lintFilter: (messages, code) => messages — optional post-filter of lint results
+ *  - lintPreprocess: (code) => code — optional rewrite of the code before ESLint
+ *    sees it (must keep line/column positions, e.g. stripTypes)
+ *  - language: Monaco language id, "javascript" (default) or "typescript";
+ *    read once when the editor is created
  * Callbacks are read through refs, so passing inline functions does NOT
  * recreate the editor (AUDIT.md #2).
  */
@@ -284,6 +336,8 @@ export default function MonacoEditor({
   extraLib,
   lintGlobals,
   lintFilter,
+  lintPreprocess,
+  language = "javascript",
 }) {
   const [loaded, setLoaded] = useState(false);
   const containerRef = useRef(null);
@@ -297,8 +351,9 @@ export default function MonacoEditor({
   const onSaveRef = useRef(onSave);
   const lintGlobalsRef = useRef(lintGlobals);
   const lintFilterRef = useRef(lintFilter);
+  const lintPreprocessRef = useRef(lintPreprocess);
   // Captured once: which optional features the editor is created with.
-  const initRef = useRef({ hasRun: !!onRun, hasSave: !!onSave, extraLib });
+  const initRef = useRef({ hasRun: !!onRun, hasSave: !!onSave, extraLib, language });
 
   useEffect(() => {
     onChangeRef.current = onChange;
@@ -306,6 +361,7 @@ export default function MonacoEditor({
     onSaveRef.current = onSave;
     lintGlobalsRef.current = lintGlobals;
     lintFilterRef.current = lintFilter;
+    lintPreprocessRef.current = lintPreprocess;
   });
 
   // External value changes (snapshot load, reset, import, example load).
@@ -354,7 +410,7 @@ export default function MonacoEditor({
 
       const editor = monaco.editor.create(containerRef.current, {
         value: valueRef.current,
-        language: "javascript",
+        language: initRef.current.language,
         theme: "custom-dark",
         automaticLayout: true,
         minimap: { enabled: false },
@@ -434,8 +490,10 @@ export default function MonacoEditor({
       const runLint = () => {
         const model = editor.getModel();
         if (!isMounted || !model || model.isDisposed()) return;
-        let messages = lintCode(model.getValue(), lintGlobalsRef.current);
-        if (lintFilterRef.current) messages = lintFilterRef.current(messages);
+        const code = model.getValue();
+        const linted = lintPreprocessRef.current ? lintPreprocessRef.current(code) : code;
+        let messages = lintCode(linted, lintGlobalsRef.current);
+        if (lintFilterRef.current) messages = lintFilterRef.current(messages, code);
         const markers = convertToMonacoMarkers(messages);
         monaco.editor.setModelMarkers(model, "eslint", markers);
       };

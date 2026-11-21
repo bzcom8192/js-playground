@@ -8,6 +8,7 @@ import { lintCode } from "../utils/linter";
 import { ENTITY_INFO, ITEM_ICONS } from "./constants.js";
 import { FARMER_GLOBALS, FARMER_LIB, FARMER_LIB_FILE } from "./farmerLib.js";
 import { listDeclarations } from "./transform.js";
+import { dropStripArtifacts, stripTypes } from "./stripTypes.js";
 import { buildProgram, mapLine } from "./program.js";
 import { formatCount } from "./format.js";
 import * as W from "./world.js";
@@ -209,10 +210,12 @@ function CodeWindow({ file, win, floating, isRunning, paused, lintGlobals, ownFu
   useEffect(() => {
     ownRef.current = ownFunctions;
   });
+  // ESLint sees the type-stripped code (lintPreprocess); positions are
+  // unchanged, but blanked annotations must not count as "multiple spaces".
   // A helper file's top-level functions are used by OTHER files → not "unused".
   const lintFilter = useCallback(
-    (msgs) =>
-      msgs.filter((m) => {
+    (msgs, code) =>
+      dropStripArtifacts(msgs, code).filter((m) => {
         if (m.ruleId !== "no-unused-vars") return true;
         const name = /'([^']+)'/.exec(m.message)?.[1];
         return !ownRef.current.has(name);
@@ -244,8 +247,10 @@ function CodeWindow({ file, win, floating, isRunning, paused, lintGlobals, ownFu
           onRun={() => (isRunning ? onStop() : onRun())}
           onSave={onSave}
           extraLib={EXTRA_LIB}
+          language="typescript"
           lintGlobals={lintGlobals}
           lintFilter={lintFilter}
+          lintPreprocess={stripTypes}
           fallback={
             <textarea
               value={file.code}
@@ -384,7 +389,7 @@ export default function FarmerPage() {
     () =>
       Object.fromEntries(
         files.map((f) => {
-          const all = listDeclarations(f.code);
+          const all = listDeclarations(stripTypes(f.code));
           return [f.id, { fns: all.filter((d) => d.kind === "function").map((d) => d.name), names: new Set(all.map((d) => d.name)) }];
         }),
       ),
