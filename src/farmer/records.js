@@ -16,6 +16,9 @@
 //     at: Date.now() of the solve.
 //   DinoRecord = { bone, level, cut, at } — one harvest's Bone, the Dinosaurs
 //     level and how many segments that cut removed.
+//   contracts = { completed, bonus: { Gold, Bone } } — v3 phase 2: daily
+//     contracts delivered in total and the reward earned per reward item
+//     (see contracts.js). Older saves have none and load with zeros.
 
 import { parseSeed } from "./maze.js";
 
@@ -23,7 +26,10 @@ import { parseSeed } from "./maze.js";
 export const MAX_ATTEMPTS = 100;
 export const HISTOGRAM_BUCKETS = 10;
 
-export const emptyRecords = () => ({ mazes: {}, dino: null });
+export const CONTRACT_BONUS_ITEMS = ["Gold", "Bone"];
+const emptyContractStats = () => ({ completed: 0, bonus: Object.fromEntries(CONTRACT_BONUS_ITEMS.map((k) => [k, 0])) });
+
+export const emptyRecords = () => ({ mazes: {}, dino: null, contracts: emptyContractStats() });
 
 /** Records are written only to a real (non-demo) farm. */
 export const canRecord = (state) => !!state && !state.demo;
@@ -65,6 +71,18 @@ export function addDinoHarvest(state, rec) {
   const best = !recs.dino || rec.bone > recs.dino.bone;
   if (best) recs.dino = rec;
   return { recorded: true, best };
+}
+
+/** A delivered contract: +1 completed, + its reward to the bonus total. */
+export function addContractDone(state, contract) {
+  if (!canRecord(state)) return { recorded: false };
+  const recs = ensure(state);
+  if (!recs.contracts || typeof recs.contracts !== "object") recs.contracts = emptyContractStats();
+  const st = recs.contracts;
+  st.bonus ||= {};
+  st.completed = (st.completed || 0) + 1;
+  st.bonus[contract.rewardItem] = (st.bonus[contract.rewardItem] || 0) + contract.reward;
+  return { recorded: true };
 }
 
 // ---------- persistence ----------
@@ -117,6 +135,11 @@ export function sanitizeRecords(raw) {
     if (bone !== null && bone > 0) {
       out.dino = { bone, level: nonNeg(d.level) ?? 1, cut: nonNeg(d.cut) ?? 1, at: nonNeg(d.at) ?? 0 };
     }
+  }
+  const c = raw.contracts;
+  if (c && typeof c === "object") {
+    out.contracts.completed = nonNeg(c.completed) ?? 0;
+    for (const k of CONTRACT_BONUS_ITEMS) out.contracts.bonus[k] = nonNeg(c.bonus?.[k]) ?? 0;
   }
   return out;
 }

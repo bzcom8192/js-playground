@@ -26,6 +26,12 @@
 //  - program size of the main file (non-empty lines, characters).
 // Maze records use the counters at the maze spawn vs at the treasure harvest
 // (both inside the same run; see worldEvent).
+//
+// Contracts (v3 phase 2): the run clock also drives the save's farm clock
+// (state.clock): whenever the run clock grows, the farm clock grows by the
+// same amount (O(1): only the calling drone's timeline can have moved), and
+// active contracts past their deadline expire right there (≤ 3 to look at).
+// get_contracts() / deliver_contract(id) see today's contracts (`today`).
 
 import { transform } from "./transform.js";
 import {
@@ -41,6 +47,7 @@ import {
 } from "./constants.js";
 import * as W from "./world.js";
 import * as R from "./records.js";
+import * as C from "./contracts.js";
 
 export const STOP = Symbol("farmer-stop");
 
@@ -122,6 +129,8 @@ export function createRuntime(opts) {
     rng = Math.random,
     // Wall clock for record timestamps.
     wallClock = Date.now,
+    // Today's local date "YYYY-MM-DD" (which daily contracts are current).
+    today = () => C.localDate(new Date(wallClock())),
   } = opts;
 
   let current = null; // the current session
@@ -138,6 +147,7 @@ export function createRuntime(opts) {
       program, // { lines, chars } of the main file
       ops: 0, // farmer API calls, all drones combined
       maze: null, // { ref, ticks, ops } — counters when this run spawned the current maze
+      clockMark: 0, // run clock already added to the farm clock (state.clock)
       ctxs: [],
       stopped: false,
       finished: false,
@@ -216,6 +226,23 @@ export function createRuntime(opts) {
 
   // The run clock in ticks: the longest drone timeline (see the header).
   const runTicks = (session) => session.ctxs.reduce((m, c) => Math.max(m, c.t0 + c.ticks), 0);
+
+  // ctx spent `t` ticks. If that moved the run clock (the longest timeline),
+  // the farm clock moves with it and overdue contracts expire.
+  function addTicks(ctx, s, t) {
+    ctx.ticks += t;
+    const session = ctx.session;
+    const timeline = ctx.t0 + ctx.ticks;
+    if (timeline <= session.clockMark || session.finished) return;
+    s.clock = C.farmClock(s) + (timeline - session.clockMark);
+    session.clockMark = timeline;
+    for (const c of C.expireContracts(s)) log("warn", C.expiredText(c));
+  }
+
+  // Today's contracts (a new day rolls them over, also mid-run).
+  function contractsToday(s) {
+    for (const line of C.rolloverLines(C.ensureContracts(s, today()))) log("info", line);
+  }
 
   // A score-relevant world event during one of this run's actions.
   function worldEvent(ctx, s, ev) {
@@ -345,7 +372,7 @@ export function createRuntime(opts) {
           const [raw, events] = W.withEvents(() => asDrone(s, () => fn(s, ...args)));
           const res = report(name, raw);
           for (const ev of events) worldEvent(ctx, s, ev);
-          ctx.ticks += ticks;
+          addTicks(ctx, s, ticks);
           ctx.actions++;
           ctx.guardsSinceAction = 0;
           ctx.syncGuards = 0;
@@ -370,8 +397,8 @@ export function createRuntime(opts) {
           ctx.thrown = true;
           throw STOP;
         }
-        ctx.ticks += SENSE_TICKS;
         const s = state();
+        addTicks(ctx, s, SENSE_TICKS);
         if (needsSenses && !W.isUnlocked(s, "Senses")) {
           hintOnce(`🔒 Unlock Senses first (${name})`);
           return null;
@@ -425,6 +452,13 @@ export function createRuntime(opts) {
         },
         FLIP_TICKS,
       ),
+      // Contracts: deliver today's contract `id` from the shared inventory.
+      deliver_contract: action("deliver_contract", (s, id) => {
+        contractsToday(s);
+        const res = C.deliverContract(s, id);
+        if (res.ok) log("info", C.deliveredText(res.contract));
+        return res;
+      }),
       // Megafarm: a new drone on this tile runs this same program from the top.
       spawn_drone: action("spawn_drone", (s) => {
         if (session.finished || session.stopped || ctx.finished || current !== session) {
@@ -485,6 +519,15 @@ export function createRuntime(opts) {
       max_drones: sense("max_drones", (s) => (W.isUnlocked(s, "Megafarm") ? W.droneCap(s) : 1), false),
       get_time: sense("get_time", () => runSeconds(session), false),
       get_tick_count: sense("get_tick_count", () => ctx.ticks, false),
+      // Today's contracts: [{ id, item, amount, reward, rewardItem, ticksLeft, status }].
+      get_contracts: sense(
+        "get_contracts",
+        (s) => {
+          contractsToday(s);
+          return C.contractSnapshot(s);
+        },
+        false,
+      ),
 
       // output
       print,

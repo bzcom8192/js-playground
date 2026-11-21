@@ -4,12 +4,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import * as W from "./world.js";
 import { createRuntime } from "./runtime.js";
 import { createDemoGame, isDemoHash } from "./demo.js";
+import * as C from "./contracts.js";
 
 export const SAVE_KEY = "farmer_save_v1";
 const FRAME_MS = 33; // UI refresh (~30 fps)
 const TICK_MS = 100; // world simulation step (~10 ticks/s)
 const SAVE_EVERY_MS = 3000;
 const MAX_LOGS = 500;
+const DAY_CHECK_MS = 1000; // how often the loop checks for a new day (contracts)
 
 function loadGame() {
   if (typeof window !== "undefined" && isDemoHash(window.location.hash)) {
@@ -72,6 +74,15 @@ export default function useFarmEngine() {
     }
   }, []);
 
+  // Today's contracts: on load (first loop pass) and when the date changes
+  // while the page is open, the old day's contracts expire and a fresh set
+  // is generated. Also expires overdue ones (e.g. a save loaded past them).
+  const checkDay = useCallback(() => {
+    const res = C.ensureContracts(gameRef.current, C.localDate());
+    for (const line of C.rolloverLines(res)) pushLog("info", line);
+    if (res.generated || res.expired.length) dirtyRef.current = true;
+  }, [pushLog]);
+
   // Runtime (created once).
   useEffect(() => {
     const rt = createRuntime({
@@ -109,8 +120,13 @@ export default function useFarmEngine() {
   useEffect(() => {
     let lastTick = performance.now();
     let lastSave = lastTick;
+    let lastDayCheck = -Infinity;
     const id = setInterval(() => {
       const t = performance.now();
+      if (t - lastDayCheck >= DAY_CHECK_MS) {
+        lastDayCheck = t;
+        checkDay();
+      }
       let changed = dirtyRef.current;
       if (t - lastTick >= TICK_MS) {
         const dt = Math.min(2, (t - lastTick) / 1000); // clamp (background tabs)
@@ -156,7 +172,7 @@ export default function useFarmEngine() {
       document.removeEventListener("visibilitychange", onHide);
       save();
     };
-  }, [save]);
+  }, [save, checkDay]);
 
   // Leave demo mode: back to the real save (nothing of the demo is kept).
   const exitDemo = useCallback(() => {
@@ -234,6 +250,25 @@ export default function useFarmEngine() {
     [exitDemo, save],
   );
 
+  /** Contracts window: the Deliver button (same code path as deliver_contract). */
+  const deliverContract = useCallback(
+    (id) => {
+      // The demo's contracts are only for show: leave the demo, deliver nothing.
+      if (exitDemo()) return false;
+      checkDay();
+      const res = C.deliverContract(gameRef.current, id);
+      if (res.ok) {
+        pushLog("info", C.deliveredText(res.contract));
+        save();
+      } else {
+        pushLog("warn", `Deliver: ${res.msg}`);
+      }
+      dirtyRef.current = true;
+      return res.ok;
+    },
+    [exitDemo, checkDay, pushLog, save],
+  );
+
   const clearFarm = useCallback(() => {
     exitDemo();
     W.clearFarm(gameRef.current);
@@ -303,6 +338,7 @@ export default function useFarmEngine() {
     importSave,
     clearFarm,
     setPendingSeed,
+    deliverContract,
     buy,
     resetSave,
     saveNow: save,

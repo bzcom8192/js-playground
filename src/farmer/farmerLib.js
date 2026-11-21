@@ -150,6 +150,37 @@ declare function num_drones(): number;
 /** The drone cap: the farm's side length once Megafarm is unlocked (12 on 12×12), else 1. */
 declare function max_drones(): number;
 
+// ---------- contracts ----------
+
+/** One of today's contracts, as returned by get_contracts(). */
+interface Contract {
+  /** Pass this to deliver_contract(), e.g. "2026-11-21#1". */
+  id: string;
+  /** The item to deliver. */
+  item: ItemType;
+  /** How many of it. */
+  amount: number;
+  /** Bonus paid on delivery (in rewardItem). */
+  reward: number;
+  /** "Gold" or "Bone". */
+  rewardItem: ItemType;
+  /** Farm-clock ticks until it expires (0 once done / expired). */
+  ticksLeft: number;
+  status: "active" | "done" | "expired";
+}
+/**
+ * Today's 3 daily contracts (same for every player on the same date, with the
+ * same unlocks and farm size). The deadline counts down on the farm clock:
+ * the ticks your programs spend (actions 200, senses 1). 1 tick.
+ */
+declare function get_contracts(): Contract[];
+/**
+ * Deliver a contract: if it is active, not expired and you have the amount,
+ * the items are consumed, the reward is paid and it is done. Takes 200 ticks.
+ * @returns false when short of items, expired, already done or an unknown id.
+ */
+declare function deliver_contract(id: string): boolean;
+
 // ---------- output ----------
 
 /** Print to the log panel. */
@@ -195,6 +226,8 @@ export const FARMER_GLOBALS = Object.fromEntries(
     "spawn_drone",
     "num_drones",
     "max_drones",
+    "get_contracts",
+    "deliver_contract",
     "print",
     "quick_print",
   ].map((n) => [n, "readonly"]),

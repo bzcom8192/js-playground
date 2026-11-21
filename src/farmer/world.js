@@ -24,6 +24,7 @@ import {
 } from "./constants.js";
 import { generateSeededMaze, parseSeed, randomSeed, treasureDirection } from "./maze.js";
 import { emptyRecords, sanitizeRecords } from "./records.js";
+import { farmClock, sanitizeContracts } from "./contracts.js";
 
 const ok = { ok: true };
 
@@ -92,6 +93,11 @@ export function createGame() {
     // (set from the Records window's "replay seed"; null = draw a random one).
     records: emptyRecords(),
     pendingSeed: null,
+    // v3 phase 2: the farm clock in ticks (every run adds its run clock; see
+    // contracts.js) and today's daily contracts ({ date, contracts } or null
+    // until contracts.ensureContracts generates them).
+    clock: 0,
+    contracts: null,
   };
   // TFWR start: a single grassland tile with grass on it.
   state.tiles[0].entity = makeEntity("Grass", Math.random, 1);
@@ -620,6 +626,10 @@ export function serialize(state) {
     // neither and load with empty records.
     records: sanitizeRecords(state.records),
     pendingSeed: parseSeed(state.pendingSeed),
+    // v3 phase 2: farm clock + today's contracts. A demo farm's contracts are
+    // only for show and never persisted (the demo is never saved anyway).
+    clock: Math.floor(farmClock(state)),
+    contracts: state.demo ? null : sanitizeContracts(state.contracts),
     // progress (0..1) is stored directly, so growth survives a reload.
     tiles: state.tiles.map((t) => ({
       g: t.ground === "Soil" ? "S" : "G",
@@ -632,8 +642,11 @@ export function serialize(state) {
 export function deserialize(data) {
   const base = createGame();
   if (!data || data.v !== 1) return base;
-  // Records survive even if the farm part of the save is unusable.
+  // Records, the farm clock and contracts survive even if the farm part of
+  // the save is unusable (they are save-level, like the records).
   base.records = sanitizeRecords(data.records);
+  base.clock = Math.floor(farmClock(data));
+  base.contracts = sanitizeContracts(data.contracts);
   const size = Number(data.size);
   if (!WORLD_SIZES.includes(size)) return base;
   if (!Array.isArray(data.tiles) || data.tiles.length !== size * size) return base;

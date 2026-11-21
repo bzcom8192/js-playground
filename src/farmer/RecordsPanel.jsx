@@ -185,6 +185,23 @@ function MazeLevel({ level, entry, onSetSeed }) {
   );
 }
 
+// Save-level contract stats (v3 phase 2): one small row.
+function ContractStats({ stats }) {
+  const done = stats?.completed || 0;
+  const bonus = Object.entries(stats?.bonus || {}).filter(([, n]) => n > 0);
+  return (
+    <div className="flex flex-wrap items-baseline gap-x-2 text-xs text-stone-600" title="Daily contracts delivered and the bonus they paid, in total">
+      <span className="text-[11px] uppercase tracking-wider font-semibold text-stone-500">Contracts 📜</span>
+      <span className="font-mono font-bold text-stone-800">{fmt(done)} completed</span>
+      {bonus.map(([item, n]) => (
+        <span key={item} className="font-mono">
+          +{fmt(n)} {item}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 export default function RecordsPanel({ game, stats, onSetSeed }) {
   const recs = game.records;
   const levels = Object.keys(recs?.mazes || {})
@@ -220,6 +237,7 @@ export default function RecordsPanel({ game, stats, onSetSeed }) {
           </Section>
         </>
       )}
+      <ContractStats stats={recs?.contracts} />
       <p className="text-[10px] text-stone-400 leading-relaxed">
         Personal records on this device only (saved with your farm and in Save Data). Best = fewest ticks, then fewest ops.
       </p>

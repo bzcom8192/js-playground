@@ -23,6 +23,8 @@ import { Glyph, OLIVE, ORANGE } from "./farmerUi.jsx";
 import UnlocksPanel from "./UnlocksPanel.jsx";
 import DocsPanel from "./DocsPanel.jsx";
 import RecordsPanel from "./RecordsPanel.jsx";
+import ContractsPanel from "./ContractsPanel.jsx";
+import { isDeliverable } from "./contracts.js";
 import { programSize } from "./records.js";
 import LogPanel from "./LogPanel.jsx";
 
@@ -576,6 +578,7 @@ export default function FarmerPage() {
   const power = game.items.Power > 0 ? 2 : 1;
   const moveMs = Math.min(150, 200 / (W.speedMultiplier(game) * power));
   const affordable = Object.keys(game.unlocks).filter((id) => W.unlockStatus(game, id) === "affordable").length;
+  const deliverable = (game.contracts?.contracts || []).filter((c) => isDeliverable(game, c)).length;
 
   const windowProps = (key, extra = {}) => ({
     floating: desktop,
@@ -587,7 +590,7 @@ export default function FarmerPage() {
   });
 
   const openFiles = files.filter((f) => windows[f.id]?.open);
-  // On mobile, show windows in a stable order (files first, then Info, Unlocks, Records).
+  // On mobile, show windows in a stable order (files first, then Info, Unlocks, Records, Contracts).
   const codeWindows = openFiles.map((f) => (
     <CodeWindow
       key={f.id}
@@ -701,6 +704,21 @@ export default function FarmerPage() {
     </FloatingWindow>
   );
 
+  const contractsWindow = windows.contracts?.open && (
+    <FloatingWindow
+      key="contracts"
+      title={`Contracts${deliverable ? ` · ${deliverable} ready` : ""}`}
+      rect={windows.contracts}
+      {...windowProps("contracts")}
+      bodyClass="bg-white/95 flex flex-col"
+      mobileBodyClass="h-[24rem]"
+    >
+      <div className="flex-1 overflow-y-auto min-h-0 bg-stone-50/90">
+        <ContractsPanel game={game} onDeliver={engine.deliverContract} />
+      </div>
+    </FloatingWindow>
+  );
+
   return (
     <div
       className={`farmer-bg relative w-full min-h-screen md:h-screen md:overflow-hidden text-gray-200 font-sans flex flex-col md:block ${
@@ -709,7 +727,7 @@ export default function FarmerPage() {
     >
       <ShortcutsModal open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} sections={SHORTCUT_SECTIONS} />
 
-      {/* Top bar: inventory (left) + four buttons (right). Floats on the background. */}
+      {/* Top bar: inventory (left) + five buttons (right). Floats on the background. */}
       <div className="relative z-[60] flex items-start justify-between gap-3 px-3 pt-3 md:px-6 md:pt-5 md:absolute md:inset-x-0 md:top-0 pointer-events-none">
         <div className="pointer-events-auto min-w-0">
           <Inventory items={game.items} />
@@ -737,6 +755,20 @@ export default function FarmerPage() {
           </BigButton>
           <BigButton title="Records: best mazes, attempt histograms, replay seed" onClick={() => toggleWindow("records")} active={windows.records?.open}>
             {TrophyIcon}
+          </BigButton>
+          <BigButton
+            title={`Contracts: today's delivery orders${deliverable ? ` (${deliverable} ready to deliver)` : ""}`}
+            onClick={() => toggleWindow("contracts")}
+            active={windows.contracts?.open}
+          >
+            <span className="text-[24px] leading-none" aria-hidden="true">
+              📜
+            </span>
+            {deliverable > 0 && (
+              <span className="absolute -top-1.5 -right-1.5 min-w-4 h-4 px-1 rounded-full bg-orange-500 text-[10px] font-bold leading-4 text-center">
+                {deliverable}
+              </span>
+            )}
           </BigButton>
           {menuOpen && (
             <FilesMenu
@@ -777,6 +809,7 @@ export default function FarmerPage() {
           {infoWindow}
           {unlocksWindow}
           {recordsWindow}
+          {contractsWindow}
         </>
       ) : (
         <div className="flex flex-col gap-3 p-3">
@@ -784,6 +817,7 @@ export default function FarmerPage() {
           {infoWindow}
           {unlocksWindow}
           {recordsWindow}
+          {contractsWindow}
           <div className="flex justify-center gap-4 text-xs text-white/80 py-2">
             <a href={ROUTES.playground} className="hover:text-white">
               ← Playground

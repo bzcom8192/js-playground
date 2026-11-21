@@ -15,6 +15,7 @@ const API = [
       ["unlock(Unlocks.X)", "Buy the next level from code."],
       ["clear()", "Reset farm to empty grassland (no maze, no dinosaur), this drone to (0,0)."],
       ["do_a_flip()", "600 ticks of pure style."],
+      ["deliver_contract(id)", "Deliver today's contract id (from get_contracts()): consumes the items, pays the reward. false when short, expired, done or unknown."],
       ["spawn_drone()", "Megafarm: a new drone on this tile runs this same program from the top. false when locked or at the cap."],
     ],
   },
@@ -33,6 +34,7 @@ const API = [
       ["num_unlocked(thing)", "Unlock level (entities map to their unlock)."],
       ["can_move(dir)", "Always true in an open field; false into a Hedge or over a maze's edge."],
       ["get_time() / get_tick_count()", "Seconds since Run (one clock for all drones) / this drone's ticks."],
+      ["get_contracts()", "Today's contracts: [{ id, item, amount, reward, rewardItem, ticksLeft, status }]."],
       ["num_drones() / max_drones()", "Drones on the farm / the cap (farm size with Megafarm, else 1)."],
       ["print(...) / quick_print(...)", "Write to the Log (console.log works too)."],
     ],
@@ -91,6 +93,13 @@ const DINOSAURS = [
   ["Apples 🍎", "While it lives, an apple appears every 1.5 s on a random empty/grass tile (at most 1 per 16 tiles, min 1). Walking onto one eats it: +1 length. You can't harvest, plant on, till or swap apples."],
   ["Bone 🦴", "harvest() on a segment cuts off it and everything behind it: Bone = (segments removed)² × Dinosaurs level. The head takes the whole dinosaur (length²), the tail tip pays 1. When it's gone (apples vanish too) you can hatch a new one."],
   ["Meanwhile", "get_entity_type() is Entities.Dinosaur on every segment; the info strip shows which one (head 1/5…). Spawning a maze, clear() or Expand removes the dinosaur and apples. Try example 8."],
+];
+
+const CONTRACTS = [
+  ["Daily", "Every day (local midnight) brings 3 delivery orders from the day's seed: the same for every player with the same unlocks and farm size. Open them with the 📜 button."],
+  ["Pool", "Only items you can already produce: Hay and Wood always, Carrot / Pumpkin / Cactus with their unlock, Gold with Mazes, Bone with Dinosaurs. Amounts grow with your farm."],
+  ["Reward", "≈ amount × item value × 1.5, paid in Gold (Bone for Gold and Bone contracts). Deliver with the button or deliver_contract(id); totals show in 🏆 Records."],
+  ["Deadline", "Each contract has a tick budget on the farm clock, which runs only while your programs run (the same ticks as get_tick_count). Past it, or at the next day, an unfinished contract expires."],
 ];
 
 const MEGAFARM = [
@@ -203,6 +212,18 @@ export default function DocsPanel({ game, onLoadExample, targetName = "the edito
         <h3 className="text-[11px] uppercase tracking-wider font-semibold text-gray-500 mb-1.5">Megafarm 🏭</h3>
         <dl className="space-y-1">
           {MEGAFARM.map(([name, desc]) => (
+            <div key={name} className="grid grid-cols-[minmax(0,6.5rem)_1fr] gap-2">
+              <dt className="text-gray-200">{name}</dt>
+              <dd className="text-gray-400">{desc}</dd>
+            </div>
+          ))}
+        </dl>
+      </section>
+
+      <section>
+        <h3 className="text-[11px] uppercase tracking-wider font-semibold text-gray-500 mb-1.5">Contracts 📜</h3>
+        <dl className="space-y-1">
+          {CONTRACTS.map(([name, desc]) => (
             <div key={name} className="grid grid-cols-[minmax(0,6.5rem)_1fr] gap-2">
               <dt className="text-gray-200">{name}</dt>
               <dd className="text-gray-400">{desc}</dd>
