@@ -18,6 +18,7 @@ import {
   WATER_PER_USE,
   WORLD_SIZES,
 } from "./constants.js";
+import { generateMaze, treasureDirection } from "./maze.js";
 
 const ok = { ok: true };
 const fail = (msg, locked = null) => ({ ok: false, msg, locked });
@@ -44,6 +45,8 @@ export function createGame() {
     items: Object.fromEntries(ITEM_ORDER.map((k) => [k, 0])),
     unlocks: Object.fromEntries(UNLOCKS.map((u) => [u.id, 0])),
     waterTimer: 0,
+    // Active maze: { treasure: { x, y } } or null. Walls are Hedge entities on the tiles.
+    maze: null,
   };
   // TFWR start: a single grassland tile with grass on it.
   state.tiles[0].entity = makeEntity("Grass", Math.random, 1);
@@ -135,7 +138,7 @@ export function tick(state, dt, rng = Math.random) {
         const gt = effectiveGrowTime(state, x, y) || 1;
         e.progress += (dt * rate) / gt;
         if (e.progress >= 1) mature(tile, rng);
-      } else if (!e && tile.ground === "Grassland") {
+      } else if (!e && tile.ground === "Grassland" && !state.maze) {
         tile.regrow += dt;
         if (tile.regrow >= GRASS_REGROW_DELAY) {
           tile.regrow = 0;
@@ -160,8 +163,19 @@ export function tick(state, dt, rng = Math.random) {
 
 // ---------- drone actions ----------
 
+// Where move(dir) would take the drone, or null if it can't go there:
+// hedges are walls, and inside a maze the farm edge is a wall too (no wrap).
+function moveTarget(state, dir) {
+  const n = neighbor(state, state.drone.x, state.drone.y, dir, !state.maze);
+  if (!n) return null;
+  if (tileAt(state, n.x, n.y).entity?.type === "Hedge") return null;
+  return n;
+}
+
+export const canMove = (state, dir) => !!moveTarget(state, dir);
+
 export function moveDrone(state, dir) {
-  const n = neighbor(state, state.drone.x, state.drone.y, dir, true);
+  const n = moveTarget(state, dir);
   if (!n) return false;
   state.drone.x = n.x;
   state.drone.y = n.y;
@@ -237,7 +251,8 @@ export function harvest(state) {
   const { x, y } = state.drone;
   const tile = tileAt(state, x, y);
   const e = tile.entity;
-  if (!e) return false;
+  if (!e || e.type === "Hedge") return false;
+  if (e.type === "Treasure") return harvestTreasure(state);
   if (!isGrown(e)) {
     // Deviation: unripe Grass is left alone (returns false) so the very first
     // `while (true) { harvest(); }` program works at any speed.
@@ -294,7 +309,8 @@ export function harvest(state) {
 
 export function plant(state, type, rng = Math.random) {
   const info = ENTITY_INFO[type];
-  if (!info || type === "Dead_Pumpkin") return fail(`Can't plant ${String(type)}`);
+  if (!info || info.cost === null) return fail(`Can't plant ${String(type)}`);
+  if (state.maze) return fail(MAZE_BLOCKED);
   if (!isUnlocked(state, "Plant")) return fail("plant() is locked", "Plant");
   if (info.unlock && !isUnlocked(state, info.unlock)) {
     return fail(`${type} is locked`, info.unlock);
@@ -314,6 +330,7 @@ export function plant(state, type, rng = Math.random) {
 
 export function till(state) {
   if (!isUnlocked(state, "Carrots")) return fail("till() is locked", "Carrots");
+  if (state.maze) return fail(MAZE_BLOCKED);
   const tile = droneTile(state);
   tile.ground = tile.ground === "Soil" ? "Grassland" : "Soil";
   removeEntity(tile);
@@ -323,6 +340,7 @@ export function till(state) {
 // swap() does NOT wrap around edges (returns false there).
 export function swap(state, dir) {
   if (!isUnlocked(state, "Cactus")) return fail("swap() is locked", "Cactus");
+  if (state.maze) return fail(MAZE_BLOCKED);
   const { x, y } = state.drone;
   const n = neighbor(state, x, y, dir, false);
   if (!n) return fail("swap() can't cross the farm edge");
@@ -336,11 +354,12 @@ export function swap(state, dir) {
 
 export function clearFarm(state) {
   state.tiles = Array.from({ length: state.size * state.size }, newTile);
+  state.maze = null;
   state.drone.x = 0;
   state.drone.y = 0;
 }
 
-export function useItem(state, item, n = 1) {
+export function useItem(state, item, n = 1, rng = Math.random) {
   n = Math.max(1, Math.floor(n));
   const tile = droneTile(state);
   if (item === "Water") {
@@ -354,6 +373,11 @@ export function useItem(state, item, n = 1) {
     if (!isUnlocked(state, "Fertilizer")) return fail("Fertilizer is locked", "Fertilizer");
     if (state.items.Fertilizer < n) return fail("Not enough Fertilizer");
     const e = tile.entity;
+    if (e?.type === "Bush" && isGrown(e) && isUnlocked(state, "Mazes")) {
+      state.items.Fertilizer -= n;
+      spawnMaze(state, rng);
+      return ok;
+    }
     if (!e || isGrown(e)) return fail("Nothing growing here");
     state.items.Fertilizer -= n;
     const gt = effectiveGrowTime(state, state.drone.x, state.drone.y) || 1;
@@ -374,6 +398,7 @@ export function trade(state, item, n = 1) {
   const t = TRADES[item];
   if (!t) return fail(`Can't trade for ${String(item)} (only Fertilizer, Water)`);
   if (!isUnlocked(state, t.unlock)) return fail(`${item} is locked`, t.unlock);
+  if (state.maze) return fail(MAZE_BLOCKED);
   const cost = Object.fromEntries(Object.entries(t.cost).map(([k, v]) => [k, v * n]));
   if (!canAfford(state, cost)) return fail(`Not enough items (${costText(cost)})`);
   pay(state, cost);
@@ -427,9 +452,13 @@ export function costText(cost) {
 export function measure(state, dir) {
   let { x, y } = state.drone;
   if (dir !== undefined && dir !== null) {
-    const n = neighbor(state, x, y, dir, true);
+    const n = neighbor(state, x, y, dir, !state.maze);
     if (!n) return null;
     ({ x, y } = n);
+  }
+  if (state.maze) {
+    const t = state.maze.treasure;
+    return treasureDirection(x, y, t.x, t.y);
   }
   const e = tileAt(state, x, y).entity;
   if (!e) return null;
@@ -448,6 +477,8 @@ export function serialize(state) {
     items: { ...state.items },
     unlocks: { ...state.unlocks },
     waterTimer: state.waterTimer,
+    // Active maze (walls/treasure are entities on the tiles below).
+    maze: state.maze ? { tx: state.maze.treasure.x, ty: state.maze.treasure.y } : null,
     // progress (0..1) is stored directly, so growth survives a reload.
     tiles: state.tiles.map((t) => ({
       g: t.ground === "Soil" ? "S" : "G",
@@ -492,5 +523,54 @@ export function deserialize(data) {
   state.drone.x = Number.isInteger(dx) && dx >= 0 && dx < state.size ? dx : 0;
   state.drone.y = Number.isInteger(dy) && dy >= 0 && dy < state.size ? dy : 0;
   state.waterTimer = Number(data.waterTimer) || 0;
+  restoreMaze(state, data.maze);
   return state;
+}
+
+// ---------- mazes ----------
+
+const MAZE_BLOCKED = "not possible inside a maze — harvest the treasure (or clear()) first";
+
+/** Mazes level → Gold per treasure: farm tiles (size²) × level. */
+export const mazeGold = (state) => state.size * state.size * Math.max(1, level(state, "Mazes"));
+
+/** Turn the whole farm into a perfect hedge maze around the drone's tile. */
+export function spawnMaze(state, rng = Math.random) {
+  const { x, y } = state.drone;
+  const { walls, treasure } = generateMaze(state.size, x, y, rng);
+  state.tiles = walls.map((wall) => {
+    const t = newTile();
+    if (wall) t.entity = { type: "Hedge", progress: 1 };
+    return t;
+  });
+  tileAt(state, treasure.x, treasure.y).entity = { type: "Treasure", progress: 1 };
+  state.maze = { treasure: { ...treasure } };
+}
+
+function harvestTreasure(state) {
+  add(state, "Gold", mazeGold(state));
+  // The maze disappears; the farm is left as empty Grassland (drone stays put).
+  state.tiles = Array.from({ length: state.size * state.size }, newTile);
+  state.maze = null;
+  return true;
+}
+
+// Accept a saved maze only if it is consistent with the loaded tiles;
+// otherwise drop it and strip any stray maze entities.
+function restoreMaze(state, m) {
+  state.maze = null;
+  const tx = Number(m?.tx);
+  const ty = Number(m?.ty);
+  const inside = (v) => Number.isInteger(v) && v >= 0 && v < state.size;
+  if (m && inside(tx) && inside(ty) && tileAt(state, tx, ty).entity?.type === "Treasure" &&
+      droneTile(state).entity?.type !== "Hedge") {
+    state.maze = { treasure: { x: tx, y: ty } };
+    for (let i = 0; i < state.tiles.length; i++) {
+      if (i !== idx(state, tx, ty) && state.tiles[i].entity?.type === "Treasure") state.tiles[i].entity = null;
+    }
+    return;
+  }
+  for (const t of state.tiles) {
+    if (t.entity?.type === "Hedge" || t.entity?.type === "Treasure") t.entity = null;
+  }
 }

@@ -1,7 +1,7 @@
 // Low-poly farm models built only from three.js primitives.
 //
 // Every static model (wheat patch, bush, tree, carrots, pumpkin, sunflower,
-// cactus) is ONE merged, vertex-coloured geometry drawn with a shared
+// cactus, maze hedge, treasure chest) is ONE merged, vertex-coloured geometry drawn with a shared
 // flat-shaded material, so a model costs one draw call. Geometries are cached
 // per variant and shared by every tile that shows that model; the kit owns
 // and disposes them. The only textures are small canvas ones (soil rows,
@@ -391,6 +391,65 @@ function cactusGeometry(size, grown) {
   return merge(parts);
 }
 
+/** A boxy, dark-green hedge block that fills its tile (maze wall). */
+function hedgeGeometry(seed) {
+  const r = rng(seed);
+  const parts = [];
+  const H = 0.5;
+  // Darker toward the ground, like a clipped hedge in its own shade.
+  const shadeByHeight = (p, c) => c.multiplyScalar(0.62 + 0.38 * Math.max(0, Math.min(1, p.y / H)));
+  const body = new THREE.BoxGeometry(0.98, H, 0.98, 2, 2, 2);
+  body.translate(0, H / 2, 0);
+  parts.push(part(body, "#2f6a24", null, shadeByHeight));
+  // Leafy clumps on the top break up the perfect box a little.
+  const greens = ["#2a5f20", "#367a2a", "#3f852f", "#2c6522"];
+  for (let i = 0; i < 9; i++) {
+    const gx = ((i % 3) - 1) * 0.3 + (r() - 0.5) * 0.08;
+    const gz = (Math.floor(i / 3) - 1) * 0.3 + (r() - 0.5) * 0.08;
+    const w = 0.26 + r() * 0.08;
+    const h = 0.06 + r() * 0.05;
+    const clump = new THREE.BoxGeometry(w, h, w);
+    parts.push(part(clump, greens[i % greens.length], M(gx, H + h / 2 - 0.01, gz, 0, r() * 0.5, 0)));
+  }
+  return merge(parts);
+}
+
+/** A gold treasure chest: box + rounded lid + dark bands + lock, front faces +z (the camera). */
+function treasureGeometry() {
+  const parts = [];
+  const W = 0.68;
+  const D = 0.46;
+  const BH = 0.3;
+  const gold = "#e2a925";
+  const goldLight = "#f7d35c";
+  const band = "#6b3f12";
+  const body = new THREE.BoxGeometry(W, BH, D);
+  parts.push(part(body, gold, M(0, BH / 2, 0)));
+  // Rounded lid: half cylinder lying along x.
+  // (CylinderGeometry's θ ∈ [0, π] is the x ≥ 0 half; rotating about z turns it into the top half.)
+  const lid = new THREE.CylinderGeometry(D / 2, D / 2, W, 12, 1, false, 0, Math.PI);
+  parts.push(part(lid, goldLight, M(0, BH, 0, 0, 0, Math.PI / 2)));
+  // Bands: two straps over body and lid, plus a rim between them.
+  for (const x of [-W * 0.32, W * 0.32]) {
+    parts.push(part(new THREE.BoxGeometry(0.06, BH + 0.01, D + 0.02), band, M(x, BH / 2, 0)));
+    const strap = new THREE.CylinderGeometry(D / 2 + 0.012, D / 2 + 0.012, 0.06, 12, 1, false, 0, Math.PI);
+    parts.push(part(strap, band, M(x, BH, 0, 0, 0, Math.PI / 2)));
+  }
+  parts.push(part(new THREE.BoxGeometry(W + 0.02, 0.04, D + 0.02), band, M(0, BH - 0.01, 0)));
+  // Lock plate + keyhole on the front.
+  parts.push(part(new THREE.BoxGeometry(0.1, 0.12, 0.03), "#fff0a0", M(0, BH - 0.03, D / 2 + 0.012)));
+  parts.push(part(new THREE.BoxGeometry(0.025, 0.05, 0.01), "#3a2208", M(0, BH - 0.04, D / 2 + 0.03)));
+  // A few spilled coins.
+  for (const [x, z] of [
+    [0.4, 0.26],
+    [-0.38, 0.3],
+    [0.3, 0.36],
+  ]) {
+    parts.push(part(new THREE.CylinderGeometry(0.05, 0.05, 0.018, 10), goldLight, M(x, 0.01, z)));
+  }
+  return merge(parts);
+}
+
 // ---------- the kit ----------
 
 const VARIANTS = 3;
@@ -514,6 +573,13 @@ export function createModelKit() {
         obj.rotation.y = v * 2.1;
         break;
       }
+      case "Hedge":
+        obj = meshOf(geo(`hedge${v}`, () => hedgeGeometry(601 + v)), flat);
+        break;
+      case "Treasure":
+        obj = meshOf(geo("treasure", () => treasureGeometry()), flat);
+        obj.rotation.y = -0.18; // a slight turn so the lid and lock both read
+        break;
       default:
         return null;
     }

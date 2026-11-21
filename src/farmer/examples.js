@@ -206,4 +206,63 @@ while (true) {
 }
 `,
   },
+  {
+    id: "maze",
+    name: "7. Maze Runner",
+    needs: ["Mazes", "Fertilizer", "Plant", "Senses"],
+    code: `// Maze Runner — needs: Mazes, Fertilizer, Plant, Senses.
+// Grows a bush, turns it into a maze with fertilizer, then walks the maze
+// with the right-hand rule (keep a hand on the hedge to your right) until it
+// stands on the treasure. measure() points at the treasure inside a maze.
+const RIGHT = { North: East, East: South, South: West, West: North };
+const LEFT = { North: West, West: South, South: East, East: North };
+const BACK = { North: South, East: West, South: North, West: East };
+
+function in_maze() {
+  // Inside a maze measure() returns a direction (a string), or null on the treasure.
+  return typeof measure() === "string" || get_entity_type() === Entities.Treasure;
+}
+
+function spawn_maze() {
+  if (get_entity_type() !== Entities.Bush) {
+    harvest();
+    plant(Entities.Bush);
+  }
+  while (!can_harvest()) {
+    do_a_flip(); // wait for the bush to grow
+  }
+  if (num_items(Items.Fertilizer) < 1) {
+    trade(Items.Fertilizer);
+  }
+  use_item(Items.Fertilizer);
+}
+
+function solve_maze() {
+  let dir = measure() || North; // start by facing the treasure
+  while (get_entity_type() !== Entities.Treasure) {
+    // Right-hand rule: try right, straight, left, then turn back.
+    // move() returns false into a hedge (can_move(d) would check for free).
+    for (const d of [RIGHT[dir], dir, LEFT[dir], BACK[dir]]) {
+      if (move(d)) {
+        dir = d;
+        break;
+      }
+    }
+  }
+  harvest(); // treasure → Gold, the maze disappears
+}
+
+while (true) {
+  if (!in_maze()) {
+    spawn_maze();
+  }
+  if (!in_maze()) {
+    print("No maze — need Fertilizer (or Pumpkins to trade for it).");
+    break;
+  }
+  solve_maze();
+  print("Gold:", num_items(Items.Gold));
+}
+`,
+  },
 ];

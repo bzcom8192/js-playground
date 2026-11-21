@@ -14,7 +14,7 @@ type ItemType = keyof typeof Items;
 type GroundType = keyof typeof Grounds;
 type UnlockType = keyof typeof Unlocks;
 
-/** Entity types that can grow on a tile. */
+/** Entity types that can be on a tile (Hedge / Treasure only appear in a maze). */
 declare const Entities: {
 ${names(Entities)}
 };
@@ -45,6 +45,7 @@ declare const West: "West";
 /**
  * Harvest the entity under the drone. Ripe plants add their yield to your
  * inventory; unripe plants are destroyed (unripe grass is left alone).
+ * On the maze Treasure: Gold = farm tiles × Mazes level, and the maze is removed.
  * Takes 200 ticks.
  * @returns true if there was something to harvest.
  */
@@ -55,26 +56,31 @@ declare function harvest(): boolean;
  * automatically (see get_cost). Planting over Grass replaces it. 200 ticks.
  */
 declare function plant(entity: EntityType): boolean;
-/** Move one tile. Wraps around the edges of the farm. 200 ticks. */
+/**
+ * Move one tile. Wraps around the edges of the farm. Hedges are walls: moving
+ * into one returns false and the drone stays. Inside a maze the farm edge is a
+ * wall too (no wrap). 200 ticks.
+ */
 declare function move(direction: Direction): boolean;
-/** Always true in an open field (kept for TFWR compatibility). */
+/** Could move(direction) succeed? Always true in an open field; false into a Hedge or across a maze's edge. */
 declare function can_move(direction: Direction): boolean;
-/** Toggle Grassland ⇄ Soil under the drone and remove its entity. Needs Carrots. 200 ticks. */
+/** Toggle Grassland ⇄ Soil under the drone and remove its entity. Needs Carrots. Fails inside a maze. 200 ticks. */
 declare function till(): boolean;
-/** Reset every tile to empty Grassland and move the drone to (0, 0). 200 ticks. */
+/** Reset every tile to empty Grassland (also removes a maze) and move the drone to (0, 0). 200 ticks. */
 declare function clear(): boolean;
 /**
  * Swap the entity under the drone with its neighbour (growth, petals, size move
- * with it). Does not wrap: false at the edge. Needs Cactus. 200 ticks.
+ * with it). Does not wrap: false at the edge. Needs Cactus. Fails inside a maze. 200 ticks.
  */
 declare function swap(direction: Direction): boolean;
 /**
  * Use an item on the tile under the drone.
  * Items.Water: +0.25 water (growth ×(1 + 4×water)).
- * Items.Fertilizer: skip 2 s of growth per item.
+ * Items.Fertilizer: skip 2 s of growth per item. On a fully grown Bush with
+ * Mazes unlocked it instead turns the whole farm into a hedge maze.
  */
 declare function use_item(item: ItemType, n?: number): boolean;
-/** Buy items: Fertilizer costs 1 Pumpkin, Water costs 1 Carrot. 200 ticks. */
+/** Buy items: Fertilizer costs 1 Pumpkin, Water costs 1 Carrot. Fails inside a maze. 200 ticks. */
 declare function trade(item: ItemType, n?: number): boolean;
 /** Buy the next level of an unlock, if affordable. 200 ticks. */
 declare function unlock(unlock: UnlockType): boolean;
@@ -98,8 +104,11 @@ declare function get_water(): number | null;
 /**
  * Sunflower petals (7–15) or cactus size (0–9) under the drone, or of the
  * neighbour in \`direction\`. null for anything else. Needs Senses.
+ * Inside a maze: the Direction of the Treasure from here (or from the
+ * neighbour): the axis with the larger distance wins, ties go East/West;
+ * null on the Treasure itself.
  */
-declare function measure(direction?: Direction): number | null;
+declare function measure(direction?: Direction): number | Direction | null;
 /** Side length of the square farm. */
 declare function get_world_size(): number;
 /** How many of an item you have. */

@@ -14,9 +14,10 @@ export const STRIP_REFRESH_MS = 250;
 export function stripFields(game, stats, status, paused) {
   const tile = W.droneTile(game);
   const e = tile.entity;
-  const what = e
+  let what = e
     ? `${ENTITY_INFO[e.type]?.icon ?? ""} ${e.type.replace("_", " ")}${e.progress < 1 ? ` ${Math.floor(e.progress * 100)}%` : ""} / ${tile.ground}`
     : tile.ground;
+  if (game.maze) what += ` · ${mazeNeighbours(game)}`;
   return {
     x: game.drone.x,
     y: game.drone.y,
@@ -27,6 +28,23 @@ export function stripFields(game, stats, status, paused) {
     measure: stats.lastMeasure ?? null,
     status: paused ? "paused" : status,
   };
+}
+
+const SHORT = { North: "N", East: "E", South: "S", West: "W" };
+
+/** In a maze: which neighbouring tiles are Hedge / Treasure, e.g. "🟩 Hedge N S W · 💰 Treasure E". */
+export function mazeNeighbours(game) {
+  const near = { Hedge: [], Treasure: [] };
+  for (const dir of ["North", "East", "South", "West"]) {
+    const n = W.neighbor(game, game.drone.x, game.drone.y, dir, false);
+    // The farm edge is a maze wall too.
+    const type = n ? W.tileAt(game, n.x, n.y).entity?.type : "Hedge";
+    if (near[type]) near[type].push(SHORT[dir]);
+  }
+  const parts = Object.entries(near)
+    .filter(([, dirs]) => dirs.length)
+    .map(([type, dirs]) => `${ENTITY_INFO[type].icon} ${type} ${dirs.join(" ")}`);
+  return parts.length ? parts.join(" · ") : "🧩 Maze";
 }
 
 /** Shallow equality for flat snapshot objects. */

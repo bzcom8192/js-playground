@@ -202,6 +202,29 @@ function Crop({ type, p, t, z }) {
           {p >= 1 && <span className="farmer-flower" style={{ ...at(t, 0.44, 0.7), width: t * 0.14, height: t * 0.14 }} />}
         </Plant>
       );
+    case "Hedge":
+      // Maze wall: a dark-green clipped hedge block filling the tile.
+      return (
+        <div
+          className="absolute pointer-events-none rounded-[3px]"
+          style={{
+            inset: -1,
+            bottom: t * 0.04,
+            zIndex: z,
+            background: "linear-gradient(180deg, #3f8a30 0%, #2d6a22 45%, #1f4d17 100%)",
+            boxShadow: "inset 0 2px 0 rgba(160,220,120,.35), inset 0 -3px 0 rgba(0,0,0,.25), 0 3px 4px rgba(0,0,0,.3)",
+            transform: `translateY(${-t * 0.12}px)`,
+          }}
+          title="Hedge"
+        />
+      );
+    case "Treasure":
+      return (
+        <Plant t={t} z={z} bottom={0.08}>
+          <span className="absolute rounded-full" style={{ ...at(t, 0.12, 0.02), width: t * 0.76, height: t * 0.76, background: "radial-gradient(circle, rgba(255,215,90,.75), rgba(255,215,90,0) 70%)" }} />
+          <E size={t * 0.62} style={at(t, 0.19, 0.06)}>💰</E>
+        </Plant>
+      );
     default:
       return null;
   }

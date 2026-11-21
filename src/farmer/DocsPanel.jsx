@@ -7,10 +7,10 @@ const API = [
     items: [
       ["harvest()", "Harvest the tile. Ripe → yield; unripe → destroyed (unripe grass is left alone)."],
       ["plant(entity)", "Plant Entities.X (Plant unlock + its own unlock). Seed cost is paid automatically."],
-      ["move(dir)", "North / East / South / West. Wraps around the edges."],
+      ["move(dir)", "North / East / South / West. Wraps around the edges. Hedges block it (returns false)."],
       ["till()", "Grassland ⇄ Soil, removes the entity. Needs Carrots."],
       ["swap(dir)", "Swap entity with neighbour (no wrap). Needs Cactus."],
-      ["use_item(item, n=1)", "Items.Water: +0.25 water. Items.Fertilizer: −2 s growth."],
+      ["use_item(item, n=1)", "Items.Water: +0.25 water. Items.Fertilizer: −2 s growth (on a grown Bush with Mazes: spawns a maze)."],
       ["trade(item, n=1)", "Fertilizer = 1 Pumpkin, Water = 1 Carrot."],
       ["unlock(Unlocks.X)", "Buy the next level from code."],
       ["clear()", "Reset farm to empty grassland, drone to (0,0)."],
@@ -24,13 +24,13 @@ const API = [
       ["get_entity_type() 🔒", "Entities.X or null."],
       ["get_ground_type() 🔒", "Grounds.Grassland / Grounds.Soil."],
       ["get_pos_x() / get_pos_y() 🔒", "Drone position, (0,0) = South-West."],
-      ["measure(dir?) 🔒", "Sunflower petals (7–15) / cactus size (0–9), here or at a neighbour."],
+      ["measure(dir?) 🔒", "Sunflower petals (7–15) / cactus size (0–9), here or at a neighbour. In a maze: direction of the treasure."],
       ["get_water() 🔒", "Water level 0…1 here."],
       ["get_world_size()", "Farm side length."],
       ["num_items(item)", "Inventory count."],
       ["get_cost(thing)", "Unlock cost or seed cost, e.g. {Wood: 1, Hay: 1}. Cactus/Grass → unlock."],
       ["num_unlocked(thing)", "Unlock level (entities map to their unlock)."],
-      ["can_move(dir)", "Always true (open field)."],
+      ["can_move(dir)", "Always true in an open field; false into a Hedge or over a maze's edge."],
       ["get_time() / get_tick_count()", "Seconds / ticks since Run."],
       ["print(...) / quick_print(...)", "Write to the Log (console.log works too)."],
     ],
@@ -38,10 +38,10 @@ const API = [
   {
     title: "Constants",
     items: [
-      ["Entities", "Grass, Bush, Tree, Carrot, Pumpkin, Sunflower, Cactus, Dead_Pumpkin"],
-      ["Items", "Hay, Wood, Carrot, Pumpkin, Power, Cactus, Fertilizer, Water"],
+      ["Entities", "Grass, Bush, Tree, Carrot, Pumpkin, Sunflower, Cactus, Dead_Pumpkin, Hedge, Treasure"],
+      ["Items", "Hay, Wood, Carrot, Pumpkin, Power, Cactus, Fertilizer, Water, Gold"],
       ["Grounds", "Grassland, Soil"],
-      ["Unlocks", "Speed, Expand, Plant, Senses, Grass, Carrots, Trees, Watering, Pumpkins, Sunflowers, Fertilizer, Cactus"],
+      ["Unlocks", "Speed, Expand, Plant, Senses, Grass, Carrots, Trees, Watering, Pumpkins, Sunflowers, Fertilizer, Cactus, Mazes"],
       ["North East South West", "Directions (plain strings)."],
     ],
   },
@@ -72,6 +72,14 @@ const RULES = [
   ["Fertilizer 🧪", "Skips 2 s of growth on the plant under the drone."],
   ["Speed ⏩", "×2 drone speed per level (on top of the speed selector)."],
   ["Expand 🗺️", "1→2→3→4→5→6→7→8→10→12. Clears the farm."],
+];
+
+const MAZES = [
+  ["Spawn", "Stand on a fully grown Bush and use_item(Items.Fertilizer) (Mazes unlocked). The whole farm becomes a hedge maze; the fertilizer is only used if a maze appears."],
+  ["Layout", "A perfect maze: every path tile is reachable and there is exactly one way between any two. Hedges 🟩 are walls; the farm edge is a wall too (no wrap-around in a maze). You start where you stood."],
+  ["Treasure 💰", "Sits on the path tile farthest from your start. measure() returns its direction from you: the axis with the larger distance wins (ties → East/West); null when you are on it."],
+  ["Gold 🪙", "harvest() on the treasure → Gold = farm tiles (size²) × Mazes level. The maze disappears and the farm is empty Grassland again."],
+  ["Meanwhile", "plant, till, swap and trade fail inside a maze. clear() (or Expand) removes the maze without a reward. Try example 7 (a wall follower)."],
 ];
 
 export default function DocsPanel({ game, onLoadExample, targetName = "the editor" }) {
@@ -147,6 +155,18 @@ export default function DocsPanel({ game, onLoadExample, targetName = "the edito
           </dl>
         </section>
       ))}
+
+      <section>
+        <h3 className="text-[11px] uppercase tracking-wider font-semibold text-gray-500 mb-1.5">Mazes 🧩</h3>
+        <dl className="space-y-1">
+          {MAZES.map(([name, desc]) => (
+            <div key={name} className="grid grid-cols-[minmax(0,6.5rem)_1fr] gap-2">
+              <dt className="text-gray-200">{name}</dt>
+              <dd className="text-gray-400">{desc}</dd>
+            </div>
+          ))}
+        </dl>
+      </section>
 
       <section>
         <h3 className="text-[11px] uppercase tracking-wider font-semibold text-gray-500 mb-1.5">Farming rules</h3>

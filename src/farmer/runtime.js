@@ -287,7 +287,7 @@ export function createRuntime(opts) {
         checkDir("swap", dir);
         return W.swap(s, dir);
       }),
-      use_item: action("use_item", (s, item, n = 1) => W.useItem(s, item, n)),
+      use_item: action("use_item", (s, item, n = 1) => W.useItem(s, item, n, rng)),
       trade: action("trade", (s, item, n = 1) => W.trade(s, item, n)),
       unlock: action("unlock", (s, id) => W.buyUnlock(s, id)),
       do_a_flip: action(
@@ -314,7 +314,8 @@ export function createRuntime(opts) {
       }),
 
       // always available
-      can_move: sense("can_move", (s, dir) => !!DIR_DELTA[dir], false),
+      // Open field: always true. In a maze: false into a Hedge or across the edge.
+      can_move: sense("can_move", (s, dir) => !!DIR_DELTA[dir] && W.canMove(s, dir), false),
       get_world_size: sense("get_world_size", (s) => s.size, false),
       num_items: sense("num_items", (s, item) => s.items[item] ?? 0, false),
       get_cost: sense(

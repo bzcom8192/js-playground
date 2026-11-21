@@ -10,6 +10,8 @@ export const Entities = Object.freeze({
   Sunflower: "Sunflower",
   Cactus: "Cactus",
   Dead_Pumpkin: "Dead_Pumpkin",
+  Hedge: "Hedge",
+  Treasure: "Treasure",
 });
 
 export const Items = Object.freeze({
@@ -21,6 +23,7 @@ export const Items = Object.freeze({
   Cactus: "Cactus",
   Fertilizer: "Fertilizer",
   Water: "Water",
+  Gold: "Gold",
 });
 
 export const Grounds = Object.freeze({
@@ -41,6 +44,7 @@ export const Unlocks = Object.freeze({
   Sunflowers: "Sunflowers",
   Fertilizer: "Fertilizer",
   Cactus: "Cactus",
+  Mazes: "Mazes",
 });
 
 // Directions are plain strings; dx/dy follow "x grows East, y grows North".
@@ -67,6 +71,7 @@ export const ITEM_ORDER = [
   "Cactus",
   "Fertilizer",
   "Water",
+  "Gold",
 ];
 
 export const ITEM_ICONS = {
@@ -78,6 +83,7 @@ export const ITEM_ICONS = {
   Cactus: "🌵",
   Fertilizer: "🧪",
   Water: "💧",
+  Gold: "🪙",
 };
 
 // Per-entity rules. growTime is in seconds at water level 0.
@@ -123,6 +129,9 @@ export const ENTITY_INFO = {
     soil: true,
     cost: null,
   },
+  // Maze tiles: created only by spawning a maze, never planted (cost: null).
+  Hedge: { icon: "🟩", growTime: 0, unlock: "Mazes", soil: false, cost: null },
+  Treasure: { icon: "💰", growTime: 0, unlock: "Mazes", soil: false, cost: null },
 };
 
 // World sizes per Expand level (TFWR-like progression, max 12×12).
@@ -273,10 +282,21 @@ export const UNLOCKS = [
         ? { Pumpkin: 200 }
         : { Pumpkin: scale(500, 3, l - 1), Cactus: scale(100, 3, l - 1) },
   },
+  {
+    id: "Mazes",
+    name: "Mazes",
+    icon: "🧩",
+    desc: "use_item(Items.Fertilizer) on a grown Bush turns the farm into a hedge maze. Harvest the treasure → Gold (farm tiles × level).",
+    requires: "Cactus",
+    maxLevel: 3,
+    cost: (l) =>
+      l === 0
+        ? { Cactus: 2000, Pumpkin: 2000 }
+        : { Cactus: scale(6000, 3, l - 1), Gold: scale(300, 3, l - 1) },
+  },
 ];
 
 export const FUTURE_UNLOCKS = [
-  { id: "Mazes", name: "Mazes", icon: "🧩" },
   { id: "Dinosaurs", name: "Dinosaurs", icon: "🦕" },
   { id: "Megafarm", name: "Megafarm", icon: "🏭" },
 ];
@@ -292,4 +312,6 @@ export const ENTITY_UNLOCK = {
   Pumpkin: "Pumpkins",
   Sunflower: "Sunflowers",
   Cactus: "Cactus",
+  Hedge: "Mazes",
+  Treasure: "Mazes",
 };
