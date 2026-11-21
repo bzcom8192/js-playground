@@ -11,6 +11,8 @@ import { listDeclarations } from "./transform.js";
 import { dropStripArtifacts, stripTypes } from "./stripTypes.js";
 import { buildProgram, mapLine } from "./program.js";
 import { formatCount } from "./format.js";
+import { STRIP_REFRESH_MS, stripFields } from "./statusStrip.js";
+import useSampled from "./useSampled.js";
 import * as W from "./world.js";
 import useFarmEngine, { SAVE_KEY } from "./useFarmEngine.js";
 import useFarmerFiles, { FILES_KEY } from "./useFarmerFiles.js";
@@ -162,28 +164,26 @@ function FilesMenu({ files, windows, onNew, onToggle, onDelete, onClose }) {
 // ---------- status pill ----------
 
 function StatusPill({ game, stats, status, paused, demo, toast }) {
-  const tile = W.droneTile(game);
-  const e = tile.entity;
-  const [dot, label] = STATUS_LABEL[paused ? "paused" : status] || STATUS_LABEL.idle;
-  const what = e
-    ? `${ENTITY_INFO[e.type]?.icon ?? ""} ${e.type.replace("_", " ")}${e.progress < 1 ? ` ${Math.floor(e.progress * 100)}%` : ""} / ${tile.ground}`
-    : tile.ground;
+  // The engine mutates `game` and re-renders at ~30 fps; show a snapshot
+  // sampled every STRIP_REFRESH_MS so the numbers stay readable.
+  const f = useSampled(stripFields(game, stats, status, paused), STRIP_REFRESH_MS);
+  const [dot, label] = STATUS_LABEL[f.status] || STATUS_LABEL.idle;
   return (
     <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 px-3 py-1.5 rounded-full bg-black/40 backdrop-blur-md text-white text-[11px] sm:text-xs font-mono shadow-lg max-w-full">
       <span className="whitespace-nowrap">
-        📍 ({game.drone.x}, {game.drone.y})
+        📍 ({f.x}, {f.y})
       </span>
       <span className="opacity-50">·</span>
-      <span className="whitespace-nowrap">{what}</span>
-      {tile.water > 0.005 && <span className="whitespace-nowrap">💧{Math.round(tile.water * 100)}%</span>}
+      <span className="whitespace-nowrap">{f.what}</span>
+      {f.water !== null && <span className="whitespace-nowrap">💧{f.water}%</span>}
       <span className="opacity-50">·</span>
-      <span className="whitespace-nowrap">⏱ {stats.elapsed.toFixed(1)}s</span>
+      <span className="whitespace-nowrap">⏱ {f.elapsed}s</span>
       <span className="opacity-50">·</span>
-      <span className="whitespace-nowrap">{stats.ticks.toLocaleString("en-US")} ticks</span>
-      {stats.lastMeasure !== null && stats.lastMeasure !== undefined && (
+      <span className="whitespace-nowrap">{f.ticks} ticks</span>
+      {f.measure !== null && (
         <>
           <span className="opacity-50">·</span>
-          <span className="whitespace-nowrap">📏 {stats.lastMeasure}</span>
+          <span className="whitespace-nowrap">📏 {f.measure}</span>
         </>
       )}
       <span className="opacity-50">·</span>
