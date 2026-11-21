@@ -1,6 +1,16 @@
 // JS Farmer — execution runtime. Compiles transformed player code into an
 // AsyncFunction whose parameters are the drone API, runs it, and makes it
 // stoppable. No DOM dependencies: time sources are injectable for node tests.
+//
+// Megafarm: one Run is a *session* that owns one program instance (ctx) per
+// drone. Drone 0 runs the program as before; spawn_drone() adds a drone on the
+// caller's tile that runs the SAME program from the top in its own ctx. Every
+// API call acts on the calling drone (W.withDrone). The instances interleave
+// on the event loop: each one sleeps for its own action time, and each yields
+// to the event loop after YIELD_EVERY_MS of busy work, so the macrotask queue
+// steps them round-robin and none can starve the others or the UI.
+// Pause/Stop act on the whole session; an error stops only the drone that
+// threw it (the session reports "error" once every drone has finished).
 
 import { transform } from "./transform.js";
 import {
@@ -79,6 +89,7 @@ export function errorLine(err) {
  *  onChange()  → called after every action that changed the world
  *  onLog(entry) → { kind: "print"|"warn"|"error"|"info"|"clear", text }
  *  onStatus(status, info) → "running" | "done" | "stopped" | "error"
+ *  onDroneError(info) → one drone's program failed (Megafarm: others keep going)
  */
 export function createRuntime(opts) {
   const {
@@ -86,6 +97,8 @@ export function createRuntime(opts) {
     onChange = () => {},
     onLog = () => {},
     onStatus = () => {},
+    // A drone's program failed (that drone stops; the run may go on): { error, line, file, drone }.
+    onDroneError = () => {},
     getUiSpeed = () => 1,
     sleep = defaultSleep,
     now = defaultNow,
@@ -93,52 +106,93 @@ export function createRuntime(opts) {
     rng = Math.random,
   } = opts;
 
-  let current = null;
+  let current = null; // the current session
   let paused = false;
 
   const log = (kind, text) => onLog({ kind, text });
 
-  function finish(ctx, status, info, silent = false) {
-    if (ctx.finished) return;
-    ctx.finished = true;
-    ctx.endTime = now();
-    if (ctx.pauseStart !== null) {
-      ctx.pausedMs += ctx.endTime - ctx.pauseStart;
-      ctx.pauseStart = null;
-    }
-    if (current === ctx) paused = false;
-    if (current === ctx && !silent) onStatus(status, info);
-    ctx.resolveDone(status);
-  }
-
-  function makeCtx() {
-    let resolveStop, resolveDone;
-    const stopPromise = new Promise((r) => (resolveStop = r));
+  function makeSession(body, mapLine) {
+    let resolveDone;
     const donePromise = new Promise((r) => (resolveDone = r));
     return {
+      body, // transformed program source, compiled once per drone
+      mapLine,
+      ctxs: [],
+      stopped: false,
+      finished: false,
+      error: null, // { error, line, file, drone } of the first drone error
+      startTime: now(),
+      endTime: null,
+      pausedMs: 0,
+      pauseStart: null,
+      hints: new Set(),
+      donePromise,
+      resolveDone,
+    };
+  }
+
+  // The session ends when its last drone does: "stopped" after a Stop,
+  // otherwise "error" if any drone failed, otherwise "done".
+  function finishSession(session, status, info, silent = false) {
+    if (session.finished) return;
+    session.finished = true;
+    session.endTime = now();
+    if (session.pauseStart !== null) {
+      session.pausedMs += session.endTime - session.pauseStart;
+      session.pauseStart = null;
+    }
+    if (current === session) paused = false;
+    if (current === session && !silent) onStatus(status, info);
+    session.resolveDone(status);
+  }
+
+  function finish(ctx, status, info) {
+    if (ctx.finished) return;
+    ctx.finished = true;
+    ctx.status = status;
+    const session = ctx.session;
+    if (status === "error") {
+      const e = { ...info, drone: ctx.index };
+      if (!session.error) session.error = e;
+      if (current === session) onDroneError(e);
+    }
+    if (session.finished || session.ctxs.some((c) => !c.finished)) return;
+    if (session.stopped) finishSession(session, "stopped", null);
+    else if (session.error) finishSession(session, "error", session.error);
+    else finishSession(session, "done");
+  }
+
+  // drone: the world drone object this instance moves (null = drone 0, i.e.
+  // whatever `state.drone` is, exactly as before Megafarm).
+  function makeCtx(session, drone) {
+    let resolveStop;
+    const stopPromise = new Promise((r) => (resolveStop = r));
+    const ctx = {
+      session,
+      index: session.ctxs.length,
+      drone,
+      status: "running",
       stopped: false,
       thrown: false,
       finished: false,
       busy: false,
       ticks: 0,
       actions: 0,
-      startTime: now(),
-      endTime: null,
       debt: 0,
       lastYield: now(),
       guardsSinceAction: 0,
       syncGuards: 0,
       warnedRunaway: false,
-      hints: new Set(),
       stopPromise,
       resolveStop,
-      donePromise,
-      resolveDone,
       lastMeasure: null,
-      pausedMs: 0,
-      pauseStart: null,
     };
+    session.ctxs.push(ctx);
+    return ctx;
   }
+
+  // "Drone 2: " in front of errors from spawned drones (drone 0 logs as before).
+  const dronePrefix = (ctx) => (ctx.index > 0 ? `Drone ${ctx.index}: ` : "");
 
   // While paused, wait in small slices until resumed or stopped.
   async function waitWhilePaused(ctx) {
@@ -149,6 +203,9 @@ export function createRuntime(opts) {
 
   function buildApi(ctx) {
     const state = () => getState();
+    const session = ctx.session;
+    // Run a world function as this ctx's drone.
+    const asDrone = (s, fn) => W.withDrone(s, ctx.drone, fn);
 
     // Throws STOP once; afterwards — e.g. if the player
     // swallowed it in a try/catch, or for un-awaited callbacks — park forever.
@@ -161,9 +218,10 @@ export function createRuntime(opts) {
     };
     const sleepAbortable = (ms) => Promise.race([sleep(ms), ctx.stopPromise]);
 
+    // Hints are shared by all drones of a run, so 12 drones don't repeat them.
     const hintOnce = (msg) => {
-      if (ctx.hints.has(msg)) return;
-      ctx.hints.add(msg);
+      if (session.hints.has(msg)) return;
+      session.hints.add(msg);
       log("warn", msg);
     };
     const report = (fname, res) => {
@@ -207,7 +265,7 @@ export function createRuntime(opts) {
             `${name}(): the drone is still busy with another action. ` +
               "Actions inside callbacks (forEach/map/setTimeout) are not awaited — use a for…of loop instead.",
           );
-          log("error", `${err.name}: ${err.message}`);
+          log("error", `${dronePrefix(ctx)}${err.name}: ${err.message}`);
           ctx.stopped = true;
           ctx.thrown = true; // every other flow parks at its next gate
           ctx.resolveStop();
@@ -217,7 +275,7 @@ export function createRuntime(opts) {
         ctx.busy = true;
         try {
           const s = state();
-          const res = report(name, fn(s, ...args));
+          const res = report(name, asDrone(s, () => fn(s, ...args)));
           ctx.ticks += ticks;
           ctx.actions++;
           ctx.guardsSinceAction = 0;
@@ -227,7 +285,7 @@ export function createRuntime(opts) {
             s.items.Power -= 1; // each action while Power > 0 costs 1 Power…
             mult *= 2; // …and runs 2× faster
           }
-          if (name === "do_a_flip") s.drone.flipMs = Math.min(600, ticks / mult);
+          if (name === "do_a_flip") (ctx.drone ?? s.drone).flipMs = Math.min(600, ticks / mult);
           onChange();
           await spend(ticks / mult);
           return res;
@@ -249,7 +307,7 @@ export function createRuntime(opts) {
           hintOnce(`🔒 Unlock Senses first (${name})`);
           return null;
         }
-        return fn(s, ...args);
+        return asDrone(s, () => fn(s, ...args));
       };
 
     const checkDir = (fname, dir) => {
@@ -298,6 +356,15 @@ export function createRuntime(opts) {
         },
         FLIP_TICKS,
       ),
+      // Megafarm: a new drone on this tile runs this same program from the top.
+      spawn_drone: action("spawn_drone", (s) => {
+        if (session.finished || session.stopped || ctx.finished || current !== session) {
+          return { ok: false, msg: "only works inside a running program" };
+        }
+        const res = W.spawnDrone(s);
+        if (res.ok) startDrone(session, res.drone);
+        return res;
+      }),
 
       // senses (need the Senses unlock)
       // Apples are never harvestable (only the dinosaur eats them).
@@ -344,7 +411,10 @@ export function createRuntime(opts) {
         },
         false,
       ),
-      get_time: sense("get_time", () => runSeconds(ctx), false),
+      num_drones: sense("num_drones", (s) => W.allDrones(s).length, false),
+      // 1 until Megafarm is unlocked, then the cap (farm side length).
+      max_drones: sense("max_drones", (s) => (W.isUnlocked(s, "Megafarm") ? W.droneCap(s) : 1), false),
+      get_time: sense("get_time", () => runSeconds(session), false),
       get_tick_count: sense("get_tick_count", () => ctx.ticks, false),
 
       // output
@@ -409,40 +479,24 @@ export function createRuntime(opts) {
     return api;
   }
 
-  function compile(code, ctx) {
+  function compile(body, ctx) {
     const api = buildApi(ctx);
     const names = Object.keys(api);
-    const body = transform(code);
     // "use strict" is prepended on line 1 (no newline) so line numbers stay intact.
     const fn = new AsyncFunction(...names, '"use strict";' + body);
     return { fn, args: names.map((n) => api[n]) };
   }
 
-  // Seconds the program has been running, excluding paused time.
-  function runSeconds(ctx) {
-    const end = ctx.endTime ?? now();
-    const pausing = ctx.pauseStart !== null ? end - ctx.pauseStart : 0;
-    return Math.max(0, end - ctx.startTime - ctx.pausedMs - pausing) / 1000;
+  // Seconds since Run, excluding paused time (one clock for all drones).
+  function runSeconds(session) {
+    const end = session.endTime ?? now();
+    const pausing = session.pauseStart !== null ? end - session.pauseStart : 0;
+    return Math.max(0, end - session.startTime - session.pausedMs - pausing) / 1000;
   }
 
-  /**
-   * run(code, { mapLine }) — mapLine(line) → { name, line, main } maps a line of
-   * the combined multi-file program back to its file (see program.js).
-   */
-  function run(code, { mapLine } = {}) {
-    stop(true);
-    setPaused(false);
-    const ctx = makeCtx();
-    current = ctx;
-    let compiled;
-    try {
-      compiled = compile(code, ctx);
-    } catch (err) {
-      log("error", `${err.name || "Error"}: ${err.message}`);
-      finish(ctx, "error", { error: err });
-      return ctx.donePromise;
-    }
-    onStatus("running");
+  // Start one program instance. Errors stop only this drone.
+  function launch(ctx, compiled) {
+    const { mapLine } = ctx.session;
     compiled.fn(...compiled.args).then(
       () => finish(ctx, "done"),
       (err) => {
@@ -452,34 +506,91 @@ export function createRuntime(opts) {
         const where = line && mapLine ? mapLine(line) : null;
         let prefix = line ? `Line ${line}: ` : "";
         if (where) prefix = where.main ? `Line ${where.line}: ` : `${where.name}, line ${where.line}: `;
-        log("error", prefix + msg);
+        log("error", dronePrefix(ctx) + prefix + msg);
+        // Park this drone's other flows (un-awaited callbacks) at their next gate.
+        ctx.stopped = true;
+        ctx.thrown = true;
+        ctx.resolveStop();
         finish(ctx, "error", { error: err, line: where ? where.line : line, file: where?.name });
       },
     );
+  }
+
+  // spawn_drone(): the new drone starts on the next microtask, outside the
+  // spawning action (so none of its code runs inside the caller's call).
+  function startDrone(session, drone) {
+    const ctx = makeCtx(session, drone);
+    Promise.resolve().then(() => {
+      if (session.stopped || session.finished) return finish(ctx, "stopped");
+      launch(ctx, compile(session.body, ctx));
+    });
+  }
+
+  /**
+   * run(code, { mapLine }) — mapLine(line) → { name, line, main } maps a line of
+   * the combined multi-file program back to its file (see program.js).
+   */
+  function run(code, { mapLine } = {}) {
+    stop(true);
+    setPaused(false);
+    // A new Run starts with one drone: idle helpers (from the last run or a
+    // loaded save) are dismissed.
+    W.resetDrones(getState());
+    let body = null;
+    let compileError = null;
+    try {
+      body = transform(code);
+    } catch (err) {
+      compileError = err;
+    }
+    const session = makeSession(body, mapLine);
+    current = session;
+    const ctx = makeCtx(session, null);
+    let compiled;
+    try {
+      if (compileError) throw compileError;
+      compiled = compile(body, ctx);
+    } catch (err) {
+      log("error", `${err.name || "Error"}: ${err.message}`);
+      finish(ctx, "error", { error: err });
+      return session.donePromise;
+    }
+    onStatus("running");
+    launch(ctx, compiled);
     // Resolves with "done" | "stopped" | "error" — even if the player's code
     // is left parked forever after a stop.
-    return ctx.donePromise;
+    return session.donePromise;
   }
 
+  // Stop every drone of the current run.
   function stop(silent = false) {
-    const ctx = current;
-    if (!ctx || ctx.stopped || ctx.finished) return;
+    const session = current;
+    if (!session || session.stopped || session.finished) return;
     setPaused(false);
-    ctx.stopped = true;
-    ctx.resolveStop();
-    finish(ctx, "stopped", null, silent);
+    session.stopped = true;
+    for (const ctx of session.ctxs) {
+      ctx.stopped = true;
+      ctx.resolveStop();
+      if (!ctx.finished) {
+        ctx.finished = true;
+        ctx.status = "stopped";
+      }
+    }
+    finishSession(session, "stopped", null, silent);
   }
 
+  // Drone 0's numbers (the info strip follows drone 0) + how many drones run.
   function stats() {
-    const ctx = current;
-    if (!ctx) return { running: false, ticks: 0, actions: 0, elapsed: 0, lastMeasure: null };
-    const elapsed = runSeconds(ctx);
+    const session = current;
+    if (!session) return { running: false, ticks: 0, actions: 0, elapsed: 0, lastMeasure: null, drones: 0 };
+    const ctx = session.ctxs[0];
     return {
-      running: !ctx.finished,
+      running: !session.finished,
       ticks: ctx.ticks,
       actions: ctx.actions,
-      elapsed,
+      elapsed: runSeconds(session),
       lastMeasure: ctx.lastMeasure,
+      drones: session.ctxs.filter((c) => !c.finished).length,
     };
   }
 
@@ -487,14 +598,14 @@ export function createRuntime(opts) {
   function setPaused(p) {
     p = !!p;
     if (p === paused) return;
-    const ctx = current;
-    if (p && (!ctx || ctx.finished)) return; // nothing to pause
+    const session = current;
+    if (p && (!session || session.finished)) return; // nothing to pause
     paused = p;
-    if (!ctx) return;
-    if (p) ctx.pauseStart = now();
-    else if (ctx.pauseStart !== null) {
-      ctx.pausedMs += now() - ctx.pauseStart;
-      ctx.pauseStart = null;
+    if (!session) return;
+    if (p) session.pauseStart = now();
+    else if (session.pauseStart !== null) {
+      session.pausedMs += now() - session.pauseStart;
+      session.pauseStart = null;
     }
   }
 

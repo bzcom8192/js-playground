@@ -325,4 +325,38 @@ while (true) {
 }
 `,
   },
+  {
+    id: "megafarm",
+    name: "9. Drone Squad",
+    needs: ["Megafarm", "Senses"],
+    code: `// Drone Squad — needs: Megafarm, Senses.
+// spawn_drone() starts a new drone on this tile, and the new drone runs
+// THIS SAME FILE from the top. So every drone first hands the column east
+// of it to a new helper, then farms its own column forever. The result is
+// one drone per column. The cap, max_drones(), is the farm size, so it fits
+// exactly.
+const n = get_world_size();
+
+if (num_drones() === 1) {
+  // Only the very first drone (a Run starts with one): go to the West edge.
+  while (get_pos_x() > 0) move(West);
+}
+
+if (get_pos_x() < n - 1) {
+  move(East);
+  if (!spawn_drone()) print("No helper for column", get_pos_x(), "(Megafarm locked or at the cap)");
+  move(West);
+} else {
+  print(num_drones(), "drones farming,", n, "columns");
+}
+
+// My column: harvest whatever is ripe, walking North (wraps at the edge).
+while (true) {
+  if (can_harvest()) {
+    harvest();
+  }
+  move(North);
+}
+`,
+  },
 ];

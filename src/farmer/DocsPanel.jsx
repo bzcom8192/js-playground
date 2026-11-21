@@ -13,8 +13,9 @@ const API = [
       ["use_item(item, n=1)", "Items.Water: +0.25 water. Items.Fertilizer: −2 s growth (on a grown Bush with Mazes: spawns a maze)."],
       ["trade(item, n=1)", "Fertilizer = 1 Pumpkin, Water = 1 Carrot."],
       ["unlock(Unlocks.X)", "Buy the next level from code."],
-      ["clear()", "Reset farm to empty grassland (no maze, no dinosaur), drone to (0,0)."],
+      ["clear()", "Reset farm to empty grassland (no maze, no dinosaur), this drone to (0,0)."],
       ["do_a_flip()", "600 ticks of pure style."],
+      ["spawn_drone()", "Megafarm: a new drone on this tile runs this same program from the top. false when locked or at the cap."],
     ],
   },
   {
@@ -31,7 +32,8 @@ const API = [
       ["get_cost(thing)", "Unlock cost or seed cost, e.g. {Wood: 1, Hay: 1}. Cactus/Grass → unlock."],
       ["num_unlocked(thing)", "Unlock level (entities map to their unlock)."],
       ["can_move(dir)", "Always true in an open field; false into a Hedge or over a maze's edge."],
-      ["get_time() / get_tick_count()", "Seconds / ticks since Run."],
+      ["get_time() / get_tick_count()", "Seconds since Run (one clock for all drones) / this drone's ticks."],
+      ["num_drones() / max_drones()", "Drones on the farm / the cap (farm size with Megafarm, else 1)."],
       ["print(...) / quick_print(...)", "Write to the Log (console.log works too)."],
     ],
   },
@@ -41,7 +43,7 @@ const API = [
       ["Entities", "Grass, Bush, Tree, Carrot, Pumpkin, Sunflower, Cactus, Dead_Pumpkin, Hedge, Treasure, Dinosaur, Apple"],
       ["Items", "Hay, Wood, Carrot, Pumpkin, Power, Cactus, Fertilizer, Water, Gold, Bone"],
       ["Grounds", "Grassland, Soil"],
-      ["Unlocks", "Speed, Expand, Plant, Senses, Grass, Carrots, Trees, Watering, Pumpkins, Sunflowers, Fertilizer, Cactus, Mazes, Dinosaurs"],
+      ["Unlocks", "Speed, Expand, Plant, Senses, Grass, Carrots, Trees, Watering, Pumpkins, Sunflowers, Fertilizer, Cactus, Mazes, Dinosaurs, Megafarm"],
       ["North East South West", "Directions (plain strings)."],
     ],
   },
@@ -88,6 +90,14 @@ const DINOSAURS = [
   ["Apples 🍎", "While it lives, an apple appears every 1.5 s on a random empty/grass tile (at most 1 per 16 tiles, min 1). Walking onto one eats it: +1 length. You can't harvest, plant on, till or swap apples."],
   ["Bone 🦴", "harvest() on a segment cuts off it and everything behind it: Bone = (segments removed)² × Dinosaurs level. The head takes the whole dinosaur (length²), the tail tip pays 1. When it's gone (apples vanish too) you can hatch a new one."],
   ["Meanwhile", "get_entity_type() is Entities.Dinosaur on every segment; the info strip shows which one (head 1/5…). Spawning a maze, clear() or Expand removes the dinosaur and apples. Try example 8."],
+];
+
+const MEGAFARM = [
+  ["Spawn", "spawn_drone() (Megafarm unlocked) puts a new drone on the caller's tile. It takes 200 ticks and returns true, or false when locked, at the cap, or outside a running program."],
+  ["Same program", "The new drone runs the SAME program from the top, the file you pressed ▶ on, in parallel with the others. So branch on where you are or on num_drones() to give each drone its own job (example 9)."],
+  ["Cap", "max_drones() = the farm's side length (12 on 12×12, 1 on 1×1): one drone per column. num_drones() counts every drone on the farm, including drones whose program already ended."],
+  ["Shared", "All drones share the farm, the inventory and the unlocks. Every function acts on the drone that calls it (position, harvest, plant, measure, mazes, dinosaurs). Drones fly, so several can share a tile; the first harvest wins, the others find it empty."],
+  ["Stop & errors", "❚❚ / ■ pause and stop every drone. An error stops only the drone that threw it (the Log says which: \"Drone 2: …\"); the others keep going. Each new Run starts with drone 0 alone; leftover drones (also from a save) wait idle until then."],
 ];
 
 export default function DocsPanel({ game, onLoadExample, targetName = "the editor" }) {
@@ -180,6 +190,18 @@ export default function DocsPanel({ game, onLoadExample, targetName = "the edito
         <h3 className="text-[11px] uppercase tracking-wider font-semibold text-gray-500 mb-1.5">Dinosaurs 🦕</h3>
         <dl className="space-y-1">
           {DINOSAURS.map(([name, desc]) => (
+            <div key={name} className="grid grid-cols-[minmax(0,6.5rem)_1fr] gap-2">
+              <dt className="text-gray-200">{name}</dt>
+              <dd className="text-gray-400">{desc}</dd>
+            </div>
+          ))}
+        </dl>
+      </section>
+
+      <section>
+        <h3 className="text-[11px] uppercase tracking-wider font-semibold text-gray-500 mb-1.5">Megafarm 🏭</h3>
+        <dl className="space-y-1">
+          {MEGAFARM.map(([name, desc]) => (
             <div key={name} className="grid grid-cols-[minmax(0,6.5rem)_1fr] gap-2">
               <dt className="text-gray-200">{name}</dt>
               <dd className="text-gray-400">{desc}</dd>

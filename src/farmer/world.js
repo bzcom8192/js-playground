@@ -20,6 +20,7 @@ import {
   WATER_PER_USE,
   WORLD_SIZES,
   appleCap,
+  maxDrones,
 } from "./constants.js";
 import { generateMaze, treasureDirection } from "./maze.js";
 
@@ -40,11 +41,19 @@ export function makeEntity(type, rng = Math.random, progress = 0) {
   return e;
 }
 
+export const newDrone = (x = 0, y = 0) => ({ x, y, flips: 0 });
+
 export function createGame() {
+  const drone = newDrone();
   const state = {
     size: 1,
     tiles: [newTile()],
-    drone: { x: 0, y: 0, flips: 0 },
+    // `drone` is always drones[0], the original drone: the info strip, the
+    // UI buttons and every single-drone code path use it. Megafarm adds more
+    // drones to `drones`; while a world function runs on behalf of drone k,
+    // `drone` temporarily points at drones[k] (see withDrone).
+    drone,
+    drones: [drone],
     items: Object.fromEntries(ITEM_ORDER.map((k) => [k, 0])),
     unlocks: Object.fromEntries(UNLOCKS.map((u) => [u.id, 0])),
     waterTimer: 0,
@@ -66,6 +75,8 @@ export const isUnlocked = (state, id) => level(state, id) >= 1;
 export const idx = (state, x, y) => y * state.size + x;
 export const tileAt = (state, x, y) => state.tiles[idx(state, x, y)];
 export const droneTile = (state) => tileAt(state, state.drone.x, state.drone.y);
+/** Every drone (drone 0 first). Tolerates hand-made states without a `drones` list. */
+export const allDrones = (state) => (Array.isArray(state.drones) && state.drones.length ? state.drones : [state.drone]);
 export const isGrown = (e) => !!e && e.progress >= 1;
 export const speedMultiplier = (state) => 2 ** level(state, "Speed");
 export const waterCap = (state) => 5 + 5 * level(state, "Watering");
@@ -484,6 +495,64 @@ export function measure(state, dir) {
   return null;
 }
 
+// ---------- drones (Megafarm) ----------
+
+/**
+ * Run `fn(state)` with `state.drone` pointing at `drone` (the drone that
+ * called the API), so every world function acts on the caller's tile without
+ * knowing about multiple drones. World functions are synchronous, so the swap
+ * can't leak. `drone` 0 / null → plain call.
+ */
+export function withDrone(state, drone, fn) {
+  const home = state.drone;
+  if (!drone || drone === home) return fn(state);
+  state.drone = drone;
+  try {
+    return fn(state);
+  } finally {
+    state.drone = home;
+  }
+}
+
+/** Megafarm drone cap for this farm (see maxDrones in constants.js). */
+export const droneCap = (state) => maxDrones(state.size);
+
+/**
+ * Add a drone on the tile of `state.drone` (the caller, under withDrone).
+ * Returns { ok, drone, index } or a failure (locked / at the cap).
+ */
+export function spawnDrone(state) {
+  if (!isUnlocked(state, "Megafarm")) return fail("spawn_drone() is locked", "Megafarm");
+  const drones = ensureDrones(state);
+  const cap = droneCap(state);
+  if (drones.length >= cap) return fail(`already ${drones.length} drones — the cap is ${cap} on a ${state.size}×${state.size} farm`);
+  const d = newDrone(state.drone.x, state.drone.y);
+  drones.push(d);
+  return { ok: true, drone: d, index: drones.length - 1 };
+}
+
+/** Dismiss every drone except drone 0 (a new Run starts with one drone). */
+export function resetDrones(state) {
+  state.drones = [state.drones?.[0] ?? state.drone];
+  state.drone = state.drones[0];
+}
+
+function ensureDrones(state) {
+  if (!Array.isArray(state.drones) || !state.drones.length) state.drones = [state.drone];
+  return state.drones;
+}
+
+// Inside a maze no drone may stand on a hedge (it couldn't be told apart from
+// being walled in). Any drone on a hedge moves to `to` (always a path tile).
+function liftDronesOffHedges(state, to) {
+  for (const d of allDrones(state)) {
+    if (tileAt(state, d.x, d.y).entity?.type === "Hedge") {
+      d.x = to.x;
+      d.y = to.y;
+    }
+  }
+}
+
 // ---------- persistence ----------
 
 export function serialize(state) {
@@ -491,6 +560,9 @@ export function serialize(state) {
     v: 1,
     size: state.size,
     drone: { x: state.drone.x, y: state.drone.y },
+    // Megafarm: every drone's position, drone 0 first (`drone` above is kept
+    // for older readers). Programs never persist, so drones load idle.
+    drones: allDrones(state).map((d) => [d.x, d.y]),
     items: { ...state.items },
     unlocks: { ...state.unlocks },
     waterTimer: state.waterTimer,
@@ -549,10 +621,27 @@ export function deserialize(data) {
   const dy = Number(data.drone?.y);
   state.drone.x = Number.isInteger(dx) && dx >= 0 && dx < state.size ? dx : 0;
   state.drone.y = Number.isInteger(dy) && dy >= 0 && dy < state.size ? dy : 0;
+  restoreDrones(state, data.drones);
   state.waterTimer = Number(data.waterTimer) || 0;
   restoreMaze(state, data.maze);
   restoreDino(state, data.dino);
   return state;
+}
+
+// Extra drones from `drones: [[x, y], …]` (entry 0 is drone 0, already loaded
+// from `drone`). Out-of-bounds or malformed entries are dropped, and the list
+// is cut to the farm's drone cap. Old saves have no list → one drone.
+function restoreDrones(state, list) {
+  state.drones = [state.drone];
+  if (!Array.isArray(list)) return;
+  const inside = (v) => Number.isInteger(v) && v >= 0 && v < state.size;
+  const cap = droneCap(state);
+  for (const p of list.slice(1)) {
+    if (state.drones.length >= cap) break;
+    const x = Number(p?.[0]);
+    const y = Number(p?.[1]);
+    if (inside(x) && inside(y)) state.drones.push(newDrone(x, y));
+  }
 }
 
 // ---------- mazes ----------
@@ -573,6 +662,8 @@ export function spawnMaze(state, rng = Math.random) {
   });
   tileAt(state, treasure.x, treasure.y).entity = { type: "Treasure", progress: 1 };
   state.maze = { treasure: { ...treasure } };
+  // Other drones (Megafarm) caught on a hedge join the drone that spawned it.
+  liftDronesOffHedges(state, { x, y });
   // Simplest rule that can't corrupt either: a maze replaces the whole farm,
   // so the dinosaur and its apples are gone too (like clear()).
   state.dino = null;
@@ -596,6 +687,7 @@ function restoreMaze(state, m) {
   if (m && inside(tx) && inside(ty) && tileAt(state, tx, ty).entity?.type === "Treasure" &&
       droneTile(state).entity?.type !== "Hedge") {
     state.maze = { treasure: { x: tx, y: ty } };
+    liftDronesOffHedges(state, state.drone);
     for (let i = 0; i < state.tiles.length; i++) {
       if (i !== idx(state, tx, ty) && state.tiles[i].entity?.type === "Treasure") state.tiles[i].entity = null;
     }

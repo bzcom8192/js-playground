@@ -49,6 +49,7 @@ export const Unlocks = Object.freeze({
   Cactus: "Cactus",
   Mazes: "Mazes",
   Dinosaurs: "Dinosaurs",
+  Megafarm: "Megafarm",
 });
 
 // Directions are plain strings; dx/dy follow "x grows East, y grows North".
@@ -320,11 +321,22 @@ export const UNLOCKS = [
         ? { Gold: 600, Cactus: 6000 }
         : { Gold: scale(1800, 3, l - 1), Bone: scale(1000, 3, l - 1) },
   },
+  {
+    id: "Megafarm",
+    name: "Megafarm",
+    icon: "🏭",
+    desc: "spawn_drone() starts a helper drone on your tile running the same program from the top. Up to farm-size drones (12 on 12×12), all sharing the farm and inventory.",
+    requires: "Dinosaurs",
+    maxLevel: 1,
+    cost: () => ({ Bone: 2000, Gold: 1500 }),
+  },
 ];
 
-export const FUTURE_UNLOCKS = [
-  { id: "Megafarm", name: "Megafarm", icon: "🏭" },
-];
+// Every planned unlock is implemented (the "Coming in v2" rows are gone).
+export const FUTURE_UNLOCKS = [];
+
+/** Megafarm drone cap: one drone per farm column (the farm's side length), at least 1. */
+export const maxDrones = (size) => Math.max(1, Math.floor(size) || 0);
 
 export const UNLOCK_BY_ID = Object.fromEntries(UNLOCKS.map((u) => [u.id, u]));
 

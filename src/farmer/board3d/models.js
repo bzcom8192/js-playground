@@ -7,6 +7,7 @@
 // and disposes them. The only textures are small canvas ones (soil rows,
 // grass speckles, water ripples, slab strata, the drone's blob shadow).
 import * as THREE from "three";
+import { DRONE_BAND_0 } from "../droneBands.js";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 
 const hasDOM = typeof document !== "undefined";
@@ -809,7 +810,8 @@ export function createModelKit() {
   }
 
   /** The pumpkin drone: ribbed body, straw hat, X arms with four rotors. */
-  function buildDrone() {
+  /** band: hat band colour (drone 0 keeps the original red; Megafarm helpers get DRONE_BANDS). */
+  function buildDrone(band = DRONE_BAND_0) {
     const root = new THREE.Group(); // positioned on the board
     const yaw = new THREE.Group(); // faces the movement direction
     const flip = new THREE.Group(); // do_a_flip()
@@ -827,8 +829,8 @@ export function createModelKit() {
     const hat = M(0, 0.15, -0.07, -0.45, 0, 0);
     const brim = new THREE.CylinderGeometry(0.24, 0.25, 0.022, 16);
     parts.push(part(brim, "#dcb35c", hat));
-    const band = new THREE.CylinderGeometry(0.12, 0.125, 0.04, 12);
-    parts.push(part(band, "#b5462b", hat.clone().multiply(M(0, 0.03, 0))));
+    const bandGeo = new THREE.CylinderGeometry(0.12, 0.125, 0.04, 12);
+    parts.push(part(bandGeo, band, hat.clone().multiply(M(0, 0.03, 0))));
     const crown = new THREE.ConeGeometry(0.125, 0.16, 12);
     parts.push(part(crown, "#ecc96f", hat.clone().multiply(M(0, 0.1, 0))));
     for (const a of [Math.PI / 4, -Math.PI / 4]) {
@@ -843,7 +845,7 @@ export function createModelKit() {
       hubs.push([hx, hz]);
       parts.push(part(new THREE.CylinderGeometry(0.025, 0.03, 0.06, 6), "#35383d", M(hx, 0.03, hz)));
     }
-    const bodyGeo = geo("droneBody", () => merge(parts.splice(0)));
+    const bodyGeo = geo(band === DRONE_BAND_0 ? "droneBody" : `droneBody:${band}`, () => merge(parts.splice(0)));
     const bodyMesh = meshOf(bodyGeo, flat, { cast: false, receive: false });
     flip.add(bodyMesh);
 
@@ -912,6 +914,8 @@ export function createModelKit() {
     _geometryCache: geos,
   };
 }
+
+export { DRONE_BAND_0, DRONE_BANDS, droneBand } from "../droneBands.js";
 
 /** Triangle count of an object tree (for the perf budget test). */
 export function countTriangles(obj) {

@@ -80,7 +80,7 @@ function checkChain(s) {
 
 // ---------- unlock & content ----------
 
-test("Dinosaurs is a real unlock after Mazes; Megafarm stays future; new constants", () => {
+test("Dinosaurs is a real unlock after Mazes; no future unlocks remain; new constants", () => {
   const ids = UNLOCKS.map((u) => u.id);
   assert.equal(ids.indexOf("Dinosaurs"), ids.indexOf("Mazes") + 1);
   assert.equal(UNLOCK_BY_ID.Dinosaurs.requires, "Mazes");
@@ -90,7 +90,7 @@ test("Dinosaurs is a real unlock after Mazes; Megafarm stays future; new constan
   assert.deepEqual(UNLOCK_BY_ID.Dinosaurs.cost(2), { Gold: 5400, Bone: 3000 });
   assert.deepEqual(
     FUTURE_UNLOCKS.map((u) => u.id),
-    ["Megafarm"],
+    [], // Megafarm became a real unlock in v2 phase 3 (BRIEF8)
   );
   assert.equal(Entities.Dinosaur, "Dinosaur");
   assert.equal(Entities.Apple, "Apple");

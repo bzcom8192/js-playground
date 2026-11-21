@@ -71,13 +71,13 @@ function spawn(s, seed = 7) {
 
 // ---------- unlock & content ----------
 
-test("Mazes is a real unlock after Cactus; Megafarm stays future", () => {
+test("Mazes is a real unlock after Cactus; no future unlocks remain", () => {
   const ids = UNLOCKS.map((u) => u.id);
   assert.equal(ids.indexOf("Mazes"), ids.indexOf("Cactus") + 1);
   assert.equal(UNLOCK_BY_ID.Mazes.requires, "Cactus");
   assert.deepEqual(
     FUTURE_UNLOCKS.map((u) => u.id),
-    ["Megafarm"], // Dinosaurs became a real unlock in v2 phase 2 (BRIEF7)
+    [], // Dinosaurs (BRIEF7) and Megafarm (BRIEF8) became real unlocks
   );
   assert.equal(Items.Gold, "Gold");
   assert.equal(ITEM_ICONS.Gold, "🪙");

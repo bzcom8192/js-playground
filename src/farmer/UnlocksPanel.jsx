@@ -1,4 +1,4 @@
-import { FUTURE_UNLOCKS, ITEM_ICONS, UNLOCKS } from "./constants.js";
+import { ITEM_ICONS, UNLOCKS } from "./constants.js";
 import * as W from "./world.js";
 
 function CostChips({ cost, items }) {
@@ -78,16 +78,6 @@ export default function UnlocksPanel({ game, onBuy }) {
           </div>
         );
       })}
-      {FUTURE_UNLOCKS.map((u) => (
-        <div
-          key={u.id}
-          className="flex items-center gap-3 p-2 rounded-md border border-dashed border-stone-300 opacity-50"
-        >
-          <span className="text-xl w-7 text-center grayscale">{u.icon}</span>
-          <span className="flex-1 text-sm text-stone-500">{u.name}</span>
-          <span className="text-[11px] text-stone-400">Coming in v2</span>
-        </div>
-      ))}
     </div>
   );
 }

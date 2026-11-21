@@ -46,6 +46,8 @@ export default function useFarmEngine() {
   const [paused, setPausedState] = useState(false);
   const [demo, setDemo] = useState(!!initial.demo);
   const [logs, setLogs] = useState([]);
+  // Bumped on every drone error, also while other drones keep running (Megafarm).
+  const [errorSeq, setErrorSeq] = useState(0);
   const [view, setView] = useState(() => ({
     game: initial.game,
     stats: { running: false, ticks: 0, actions: 0, elapsed: 0, lastMeasure: null },
@@ -87,6 +89,7 @@ export default function useFarmEngine() {
           }
         }
       },
+      onDroneError: () => setErrorSeq((n) => n + 1),
       onStatus: (s) => {
         setStatus(s);
         if (s !== "running") {
@@ -276,6 +279,7 @@ export default function useFarmEngine() {
   return {
     view,
     status,
+    errorSeq,
     logs,
     paused,
     setPaused,

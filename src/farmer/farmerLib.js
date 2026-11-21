@@ -130,10 +130,25 @@ declare function num_items(item: ItemType): number;
 declare function get_cost(thing: UnlockType | EntityType): Partial<Record<ItemType, number>> | null;
 /** Current level of an unlock (0 = locked). Entities map to their unlock. */
 declare function num_unlocked(thing: UnlockType | EntityType): number;
-/** Seconds since this run started. */
+/** Seconds since this run started (the same clock for every drone). */
 declare function get_time(): number;
-/** Ticks used by this run (actions 200, flips 600, senses 1). */
+/** Ticks used by this drone in this run (actions 200, flips 600, senses 1). */
 declare function get_tick_count(): number;
+
+// ---------- Megafarm ----------
+
+/**
+ * Megafarm: spawn a new drone on this drone's tile. The new drone runs THIS
+ * SAME program from the top, at the same time as the others, sharing the farm
+ * and the inventory. Every function acts on the drone that calls it.
+ * Returns false when Megafarm is locked or max_drones() drones already exist.
+ * Takes 200 ticks.
+ */
+declare function spawn_drone(): boolean;
+/** How many drones are on the farm (1 without Megafarm). */
+declare function num_drones(): number;
+/** The drone cap: the farm's side length once Megafarm is unlocked (12 on 12×12), else 1. */
+declare function max_drones(): number;
 
 // ---------- output ----------
 
@@ -177,6 +192,9 @@ export const FARMER_GLOBALS = Object.fromEntries(
     "num_unlocked",
     "get_time",
     "get_tick_count",
+    "spawn_drone",
+    "num_drones",
+    "max_drones",
     "print",
     "quick_print",
   ].map((n) => [n, "readonly"]),

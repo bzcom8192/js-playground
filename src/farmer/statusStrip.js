@@ -18,7 +18,7 @@ export function stripFields(game, stats, status, paused) {
     ? `${ENTITY_INFO[e.type]?.icon ?? ""} ${e.type.replace("_", " ")}${e.progress < 1 ? ` ${Math.floor(e.progress * 100)}%` : ""}${dinoPart(game)} / ${tile.ground}`
     : tile.ground;
   if (game.maze) what += ` · ${mazeNeighbours(game)}`;
-  return {
+  const fields = {
     x: game.drone.x,
     y: game.drone.y,
     what,
@@ -28,6 +28,12 @@ export function stripFields(game, stats, status, paused) {
     measure: stats.lastMeasure ?? null,
     status: paused ? "paused" : status,
   };
+  // Megafarm: the strip still follows drone 0; with helpers on the farm it
+  // also notes how many drones there are (absent with one drone, so the
+  // single-drone strip is exactly as before).
+  const drones = W.allDrones(game).length;
+  if (drones > 1) fields.drones = drones;
+  return fields;
 }
 
 /** On a dinosaur segment: " head 1/5", " 3/5" or " tail 5/5" (segment from the head / length). */

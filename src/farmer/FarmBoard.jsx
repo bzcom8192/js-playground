@@ -3,6 +3,7 @@
 // Original art: emoji + CSS + small inline SVGs.
 import { memo, useEffect, useId, useRef, useState } from "react";
 import { findGiantPumpkins } from "./boardModel.js";
+import { DRONE_BAND_0, droneBand } from "./droneBands.js";
 
 // ---------- small inline SVG art ----------
 
@@ -35,7 +36,7 @@ export function PumpkinSvg({ dead = false, className = "", style }) {
   );
 }
 
-function DroneSvg() {
+function DroneSvg({ band = DRONE_BAND_0 }) {
   const id = useId().replace(/:/g, "");
   return (
     <svg viewBox="0 0 120 92" className="w-full h-auto overflow-visible" aria-hidden="true">
@@ -68,7 +69,7 @@ function DroneSvg() {
       {/* straw hat */}
       <ellipse cx="60" cy="36" rx="30" ry="7" fill="#d9b25a" stroke="#a9842f" strokeWidth="1.2" />
       <path d="M45 35 C45 21 75 21 75 35 Z" fill="#ecc96f" stroke="#a9842f" strokeWidth="1.2" />
-      <path d="M45.5 32 C52 34.5 68 34.5 74.5 32 L75 35 C68 37.5 52 37.5 45 35 Z" fill="#b5462b" />
+      <path d="M45.5 32 C52 34.5 68 34.5 74.5 32 L75 35 C68 37.5 52 37.5 45 35 Z" fill={band} />
     </svg>
   );
 }
@@ -292,6 +293,49 @@ const Tile = memo(function Tile({ ground, type, p, water, t, z, hideCrop, dinoPa
   );
 });
 
+// ---------- drones ----------
+
+// One hovering drone. Drone 0 is the original; Megafarm helpers (index ≥ 1)
+// get a coloured hat band and bob out of phase.
+function DroneSprite({ drone, index, n, t, step, moveMs, paused }) {
+  const { x, y, flips = 0, flipMs = 600 } = drone;
+  // No slide across a wrap-around jump.
+  const [prevPos, setPrevPos] = useState({ x, y });
+  const [jump, setJump] = useState(false);
+  if (prevPos.x !== x || prevPos.y !== y) {
+    setJump(Math.abs(prevPos.x - x) > 1 || Math.abs(prevPos.y - y) > 1);
+    setPrevPos({ x, y });
+  }
+  const slide = jump ? "none" : `left ${moveMs}ms linear, top ${moveMs}ms linear`;
+  const droneW = Math.max(40, Math.min(110, t * 1.35));
+  return (
+    <div
+      className="absolute pointer-events-none"
+      style={{
+        left: x * step,
+        top: (n - 1 - y) * step,
+        width: t,
+        height: t,
+        transition: slide,
+        zIndex: 1000 + index,
+      }}
+      aria-label={index ? `Drone ${index} at ${x}, ${y}` : `Drone at ${x}, ${y}`}
+    >
+      <div className={`farmer-drone-shadow ${paused ? "is-paused" : ""}`} style={{ width: Math.min(t * 0.6, droneW * 0.8), height: Math.min(t * 0.22, droneW * 0.3) }} />
+      <div
+        className="absolute"
+        style={{ left: t * 0.5 + Math.min(t * 0.14, droneW * 0.2), top: t * 0.5 - Math.min(t * 0.55, droneW * 0.8), width: droneW, marginLeft: -droneW / 2, marginTop: -droneW / 2 }}
+      >
+        <div className={`farmer-bob ${paused ? "is-paused" : ""}`} style={index ? { animationDelay: `${-index * 0.37}s` } : undefined}>
+          <div key={flips} className={flips ? "farmer-flip" : ""} style={{ animationDuration: `${Math.max(80, flipMs)}ms` }}>
+            <DroneSvg band={droneBand(index)} />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ---------- board ----------
 
 const TILT_DEG = 13;
@@ -315,15 +359,8 @@ export default function FarmBoard({ game, moveMs, paused }) {
   // The board grows with the farm (like TFWR): a 1×1 farm is a small plot,
   // 6×6 and up use all the room there is.
   const boardPx = Math.min(areaPx, 170 + 95 * n);
-  const { x, y, flips = 0, flipMs = 600 } = game.drone;
-
-  // No slide across a wrap-around jump.
-  const [prevPos, setPrevPos] = useState({ x, y });
-  const [jump, setJump] = useState(false);
-  if (prevPos.x !== x || prevPos.y !== y) {
-    setJump(Math.abs(prevPos.x - x) > 1 || Math.abs(prevPos.y - y) > 1);
-    setPrevPos({ x, y });
-  }
+  // Drone 0 is always game.drone (= drones[0]); Megafarm adds helpers.
+  const drones = Array.isArray(game.drones) && game.drones.length ? game.drones : [game.drone];
 
   const pad = Math.max(6, Math.round(boardPx * 0.018));
   const gap = n > 8 ? 2 : 3;
@@ -364,9 +401,6 @@ export default function FarmBoard({ game, moveMs, paused }) {
     }
   }
 
-  const slide = jump ? "none" : `left ${moveMs}ms linear, top ${moveMs}ms linear`;
-  const droneW = Math.max(40, Math.min(110, t * 1.35));
-
   return (
     <div ref={wrapRef} className="w-full h-full flex items-center justify-center min-h-0">
       {boardPx > 0 && (
@@ -405,31 +439,10 @@ export default function FarmBoard({ game, moveMs, paused }) {
                   );
                 })}
 
-                {/* Drone: shadow marks its tile; the body hovers above and to the right. */}
-                <div
-                  className="absolute pointer-events-none"
-                  style={{
-                    left: x * step,
-                    top: (n - 1 - y) * step,
-                    width: t,
-                    height: t,
-                    transition: slide,
-                    zIndex: 1000,
-                  }}
-                  aria-label={`Drone at ${x}, ${y}`}
-                >
-                  <div className={`farmer-drone-shadow ${paused ? "is-paused" : ""}`} style={{ width: Math.min(t * 0.6, droneW * 0.8), height: Math.min(t * 0.22, droneW * 0.3) }} />
-                  <div
-                    className="absolute"
-                    style={{ left: t * 0.5 + Math.min(t * 0.14, droneW * 0.2), top: t * 0.5 - Math.min(t * 0.55, droneW * 0.8), width: droneW, marginLeft: -droneW / 2, marginTop: -droneW / 2 }}
-                  >
-                    <div className={`farmer-bob ${paused ? "is-paused" : ""}`}>
-                      <div key={flips} className={flips ? "farmer-flip" : ""} style={{ animationDuration: `${Math.max(80, flipMs)}ms` }}>
-                        <DroneSvg />
-                      </div>
-                    </div>
-                  </div>
-                </div>
+                {/* Drones: the shadow marks the tile; the body hovers above and to the right. */}
+                {drones.map((d, i) => (
+                  <DroneSprite key={i} drone={i === 0 ? game.drone : d} index={i} n={n} t={t} step={step} moveMs={moveMs} paused={paused} />
+                ))}
               </div>
             </div>
           </div>

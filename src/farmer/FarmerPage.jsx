@@ -173,6 +173,11 @@ function StatusPill({ game, stats, status, paused, demo, toast }) {
       <span className="whitespace-nowrap">
         📍 ({f.x}, {f.y})
       </span>
+      {f.drones !== undefined && (
+        <span className="whitespace-nowrap" title={`${f.drones} drones on the farm (the strip follows drone 0)`}>
+          🚁×{f.drones}
+        </span>
+      )}
       <span className="opacity-50">·</span>
       <span className="whitespace-nowrap">{f.what}</span>
       {f.water !== null && <span className="whitespace-nowrap">💧{f.water}%</span>}
@@ -461,11 +466,15 @@ export default function FarmerPage() {
     onEscape: () => setMenuOpen(false),
   });
 
-  // Errors → show the Output tab.
+  // Errors → show the Output tab (also when one Megafarm drone fails while
+  // the others keep running).
   const [prevStatus, setPrevStatus] = useState(status);
-  if (prevStatus !== status) {
+  const [prevErrorSeq, setPrevErrorSeq] = useState(engine.errorSeq);
+  if (prevStatus !== status || prevErrorSeq !== engine.errorSeq) {
+    const failed = (prevStatus !== status && status === "error") || prevErrorSeq !== engine.errorSeq;
     setPrevStatus(status);
-    if (status === "error") {
+    setPrevErrorSeq(engine.errorSeq);
+    if (failed) {
       setInfoTab("log");
       if (!windows.info?.open) fm.setOpen("info", true);
     }

@@ -7,7 +7,7 @@
 //  fit(w, h)         fixed camera framing for the current farm size
 import * as THREE from "three";
 import { findGiantPumpkins } from "../boardModel.js";
-import { createModelKit } from "./models.js";
+import { createModelKit, droneBand } from "./models.js";
 import {
   boardTargetPx,
   dieScale,
@@ -85,9 +85,19 @@ export class FarmScene {
     this.animT = 0;
     this.builds = 0; // entity models built (tests / perf checks)
 
-    const d = this.kit.buildDrone();
-    this.drone = {
+    // Drone 0 (the original). Megafarm helpers live in extraDrones
+    // (extraDrones[k − 1] shows game.drones[k]), built on demand.
+    this.drone = this._makeDrone(0);
+    this.extraDrones = [];
+  }
+
+  _makeDrone(i) {
+    const d = this.kit.buildDrone(droneBand(i));
+    this.scene.add(d.root);
+    this.scene.add(d.shadow);
+    return {
       ...d,
+      index: i,
       x: 0,
       z: 0,
       tx: null,
@@ -97,8 +107,17 @@ export class FarmScene {
       flipStart: -1,
       flipDur: 0.6,
     };
-    this.scene.add(d.root);
-    this.scene.add(d.shadow);
+  }
+
+  _dropDrone(rec) {
+    this.scene.remove(rec.root, rec.shadow);
+    this.kit.release(rec.shadow);
+    this.kit.release(rec.root);
+  }
+
+  /** Every drone record, drone 0 first (index-aligned with game.drones). */
+  get droneRecs() {
+    return [this.drone, ...this.extraDrones];
   }
 
   // ---------- board structure ----------
@@ -436,13 +455,27 @@ export class FarmScene {
     }
 
     if (this._updateDino(dt, paused)) moving = true;
-    if (this._updateDrone(dt, paused, moveMs)) moving = true;
+    if (this._updateDrones(dt, paused, moveMs)) moving = true;
     return moving;
   }
 
-  _updateDrone(dt, paused, moveMs) {
-    const d = this.drone;
-    const { x, y, flips = 0, flipMs = 600 } = this.game.drone;
+  _updateDrones(dt, paused, moveMs) {
+    const game = this.game;
+    const list = Array.isArray(game.drones) && game.drones.length ? game.drones : [game.drone];
+    // Add / remove helper models to match the drone list (Megafarm).
+    while (this.extraDrones.length < list.length - 1) this.extraDrones.push(this._makeDrone(this.extraDrones.length + 1));
+    while (this.extraDrones.length > list.length - 1) this._dropDrone(this.extraDrones.pop());
+    let moving = false;
+    // Drone 0 always shows game.drone (the same object as drones[0]).
+    if (this._updateDrone(this.drone, game.drone, dt, paused, moveMs)) moving = true;
+    for (let k = 1; k < list.length; k++) {
+      if (this._updateDrone(this.extraDrones[k - 1], list[k], dt, paused, moveMs)) moving = true;
+    }
+    return moving;
+  }
+
+  _updateDrone(d, drone, dt, paused, moveMs) {
+    const { x, y, flips = 0, flipMs = 600 } = drone;
     const n = this.n;
     const target = tileToWorld(n, Math.min(x, n - 1), Math.min(y, n - 1));
     let moving = false;
@@ -488,7 +521,8 @@ export class FarmScene {
       }
     }
 
-    const bob = Math.sin(this.animT * 3.4) * 0.045;
+    // Helpers bob out of phase with drone 0, so a stack on one tile still reads as several.
+    const bob = Math.sin(this.animT * 3.4 + d.index * 1.9) * 0.045;
     // ~1.2 tiles wide on normal farms (like the reference), smaller on tiny ones.
     const scale = n <= 2 ? 0.62 : Math.min(1.45, 0.95 + 0.07 * n);
     d.root.position.set(d.x, HOVER + bob + flipLift, d.z);
@@ -567,9 +601,9 @@ export class FarmScene {
 
   dispose() {
     this._clearBoard();
-    this.scene.remove(this.drone.root, this.drone.shadow);
-    this.kit.release(this.drone.shadow);
-    this.kit.release(this.drone.root);
+    this._dropDrone(this.drone);
+    for (const rec of this.extraDrones) this._dropDrone(rec);
+    this.extraDrones = [];
     if (this.sun.shadow.map) {
       this.sun.shadow.map.dispose();
       this.sun.shadow.map = null;

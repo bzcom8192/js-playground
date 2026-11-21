@@ -41,6 +41,7 @@ export const ACTIONS = [
   "trade",
   "unlock",
   "do_a_flip",
+  "spawn_drone",
 ];
 const ACTION_SET = new Set(ACTIONS);
 
