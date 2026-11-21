@@ -28,6 +28,7 @@ import ArenaPanel from "./ArenaPanel.jsx";
 import { isDeliverable } from "./contracts.js";
 import { programSize } from "./records.js";
 import LogPanel from "./LogPanel.jsx";
+import WeatherPanel from "./WeatherPanel.jsx";
 
 const MonacoEditor = lazy(() => import("../components/MonacoEditor"));
 
@@ -194,6 +195,14 @@ function StatusPill({ game, stats, status, paused, demo, toast }) {
       <span className="opacity-50">·</span>
       <span className="whitespace-nowrap">{f.what}</span>
       {f.water !== null && <span className="whitespace-nowrap">💧{f.water}%</span>}
+      {f.weather !== undefined && (
+        <>
+          <span className="opacity-50">·</span>
+          <span className="whitespace-nowrap" title="Weather (Info → Weather for the forecast)">
+            {f.weather}
+          </span>
+        </>
+      )}
       <span className="opacity-50">·</span>
       <span className="whitespace-nowrap">⏱ {f.elapsed}s</span>
       <span className="opacity-50">·</span>
@@ -618,6 +627,7 @@ export default function FarmerPage() {
           ["docs", "Docs"],
           ["log", `Output${logs.length ? ` (${logs.length})` : ""}`],
           ["files", `Files (${files.length})`],
+          ["weather", "Weather"],
         ].map(([id, label]) => (
           <button
             key={id}
@@ -640,6 +650,7 @@ export default function FarmerPage() {
       <div className="flex-1 overflow-y-auto custom-scrollbar min-h-0 text-gray-200">
         {infoTab === "docs" && <DocsPanel game={game} onLoadExample={handleLoadExample} targetName={activeFile.name} />}
         {infoTab === "log" && <LogPanel logs={logs} />}
+        {infoTab === "weather" && <WeatherPanel game={game} />}
         {infoTab === "files" && (
           <FilesPanel
             files={files}

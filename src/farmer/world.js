@@ -26,6 +26,7 @@ import { generateSeededMaze, parseSeed, randomSeed, treasureDirection } from "./
 import { emptyRecords, sanitizeRecords } from "./records.js";
 import { farmClock, sanitizeContracts } from "./contracts.js";
 import { emptyArena, sanitizeArena } from "./arenaRating.js";
+import * as WX from "./weather.js";
 
 const ok = { ok: true };
 
@@ -101,10 +102,27 @@ export function createGame() {
     contracts: null,
     // v3 phase 3: the arena rating + last matches (see arenaRating.js).
     arena: emptyArena(),
+    // v3 phase 4: { seed, time } (see weather.js) or null = no weather. A
+    // plain createGame() world is weatherless (tests, arena worlds); the page
+    // creates its saves with newFarm(), which draws the weather seed once.
+    weather: null,
   };
   // TFWR start: a single grassland tile with grass on it.
   state.tiles[0].entity = makeEntity("Grass", Math.random, 1);
   return state;
+}
+
+/** A new player save: createGame() + its weather seed (drawn once, here). */
+export function newFarm(rng = Math.random) {
+  const state = createGame();
+  state.weather = WX.newWeather(rng);
+  return state;
+}
+
+/** Give a weatherless player save its weather seed (no-op if it has one). */
+export function ensureWeather(state, rng = Math.random) {
+  if (!state.weather) state.weather = WX.newWeather(rng);
+  return state.weather;
 }
 
 // ---------- helpers ----------
@@ -182,15 +200,84 @@ function mature(tile, rng) {
 
 // ---------- real-time simulation ----------
 
-// Advance the world by dt seconds. Growth multiplier = 1 + 4 × water (1×…5×).
+// Advance the world by dt seconds. Growth multiplier = 1 + 4 × water (1×…5×),
+// times the weather's growth factor. Without weather (state.weather null:
+// arena worlds, hand-made test states) this is exactly the pre-weather tick.
+//
+// With weather (see weather.js) the step is cut at every weather event inside
+// it — a segment boundary or a storm's strike moment — so each piece runs
+// under one weather state and strikes happen at their exact tick, whatever
+// dt the caller uses. The water model is the same one: weather only scales
+// its evaporation and adds rain to Soil.
 export function tick(state, dt, rng = Math.random) {
+  const w = state.weather;
+  if (!w) {
+    simulate(state, dt, rng, WX.NO_WEATHER);
+    return;
+  }
+  let left = dt * WX.WEATHER_TICKS_PER_SEC; // world ticks still to run
+  while (left > 1e-9) {
+    const t = w.time;
+    const seg = WX.segmentOf(Math.floor(t));
+    const segEnd = (seg + 1) * WX.SEGMENT_TICKS;
+    const weather = WX.segmentWeather(w.seed, seg);
+    const moments = weather === "Storm" ? WX.strikeMoments(w.seed, seg) : [];
+    const k = moments.findIndex((m) => m > t);
+    const boundary = k >= 0 ? moments[k] : segEnd;
+    const step = Math.min(left, boundary - t);
+    simulate(state, step / WX.WEATHER_TICKS_PER_SEC, rng, WX.WEATHER_EFFECTS[weather]);
+    left -= step;
+    if (step >= boundary - t) {
+      w.time = boundary;
+      if (boundary === segEnd) {
+        const next = WX.segmentWeather(w.seed, seg + 1);
+        if (next !== weather) emit({ type: "weather", from: weather, to: next, tick: segEnd });
+      } else {
+        lightning(state, seg, k);
+      }
+    } else {
+      w.time = t + step;
+    }
+  }
+}
+
+/** Only the weather clock moves (the frozen demo farm: weather runs, the farm doesn't). */
+export function advanceWeatherClock(state, dt) {
+  if (state.weather) state.weather.time += dt * WX.WEATHER_TICKS_PER_SEC;
+}
+
+/** Current weather state, or null on a weatherless world (the arena). */
+export const currentWeather = (state) => (state.weather ? WX.weatherAt(state.weather.seed, state.weather.time) : null);
+
+/** get_forecast(): { next, inTicks } (approximate; see weather.js), or null without weather. */
+export const weatherForecast = (state) => (state.weather ? WX.forecast(state.weather.seed, state.weather.time) : null);
+
+// Storm strike k of segment `seg`: destroy a few crops (the ground and its
+// water stay), and report which ones.
+function lightning(state, seg, k) {
+  if (state.maze) return;
+  const crops = [];
+  state.tiles.forEach((t, i) => {
+    if (t.entity && WX.STRIKABLE.has(t.entity.type)) crops.push(i);
+  });
+  if (!crops.length) return;
+  const hits = WX.strikeTargets(state.weather.seed, seg, k, crops).map((i) => {
+    const type = state.tiles[i].entity.type;
+    removeEntity(state.tiles[i]);
+    return { x: i % state.size, y: Math.floor(i / state.size), type };
+  });
+  emit({ type: "strike", hits, tick: state.weather.time });
+}
+
+function simulate(state, dt, rng, fx) {
   const n = state.size;
   for (let y = 0; y < n; y++) {
     for (let x = 0; x < n; x++) {
       const tile = tileAt(state, x, y);
       const e = tile.entity;
       if (e && e.progress < 1) {
-        const rate = 1 + 4 * tile.water;
+        let rate = 1 + 4 * tile.water;
+        if (fx !== WX.NO_WEATHER) rate *= fx.growth * (tile.water >= WX.DROUGHT_WET_WATER ? 1 : fx.dryGrowth);
         const gt = effectiveGrowTime(state, x, y) || 1;
         e.progress += (dt * rate) / gt;
         if (e.progress >= 1) mature(tile, rng);
@@ -202,7 +289,10 @@ export function tick(state, dt, rng = Math.random) {
         }
       }
       if (tile.water > 0) {
-        tile.water = Math.max(0, tile.water - WATER_DECAY_PER_SEC * dt);
+        tile.water = Math.max(0, tile.water - WATER_DECAY_PER_SEC * fx.evaporation * dt);
+      }
+      if (fx.rain > 0 && tile.ground === "Soil") {
+        tile.water = Math.min(1, tile.water + fx.rain * dt);
       }
     }
   }
@@ -635,6 +725,8 @@ export function serialize(state) {
     contracts: state.demo ? null : sanitizeContracts(state.contracts),
     // v3 phase 3: arena rating + match history (own section, not in records).
     arena: state.demo ? null : sanitizeArena(state.arena),
+    // v3 phase 4: weather seed + clock. The demo's weather is not persisted.
+    weather: state.demo ? null : WX.sanitizeWeather(state.weather),
     // progress (0..1) is stored directly, so growth survives a reload.
     tiles: state.tiles.map((t) => ({
       g: t.ground === "Soil" ? "S" : "G",
@@ -646,6 +738,8 @@ export function serialize(state) {
 
 export function deserialize(data) {
   const base = createGame();
+  // Weather is save-level too; a garbage / missing save is a new save.
+  base.weather = restoreWeather(data);
   if (!data || data.v !== 1) return base;
   // Records, the farm clock and contracts survive even if the farm part of
   // the save is unusable (they are save-level, like the records).
@@ -691,6 +785,15 @@ export function deserialize(data) {
   state.records = sanitizeRecords(data.records);
   state.pendingSeed = parseSeed(data.pendingSeed);
   return state;
+}
+
+// The save's weather section. A save written before weather has no
+// `weather` key (and garbage / missing data is a new save): it gets its seed
+// now, on first load, and keeps it from then on. An explicit `weather: null`
+// (a weatherless world serialized on purpose) stays weatherless.
+function restoreWeather(data) {
+  if (data && typeof data === "object" && data.weather === null) return null;
+  return WX.sanitizeWeather(data?.weather) ?? WX.newWeather();
 }
 
 // Extra drones from `drones: [[x, y], …]` (entry 0 is drone 0, already loaded

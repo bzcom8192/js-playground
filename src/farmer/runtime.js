@@ -32,6 +32,11 @@
 // same amount (O(1): only the calling drone's timeline can have moved), and
 // active contracts past their deadline expire right there (≤ 3 to look at).
 // get_contracts() / deliver_contract(id) see today's contracts (`today`).
+//
+// Weather (v3 phase 4): get_weather() is a free sense (1 op, 1 tick).
+// get_forecast() — information about the FUTURE — is priced: it counts as
+// FORECAST_OPS = 25 ops (1 for the call + 24 extra), still 1 tick. Both read
+// the world's weather (null on a weatherless world such as the arena).
 
 import { transform } from "./transform.js";
 import {
@@ -48,6 +53,7 @@ import {
 import * as W from "./world.js";
 import * as R from "./records.js";
 import * as C from "./contracts.js";
+import { FORECAST_OPS } from "./weather.js";
 
 export const STOP = Symbol("farmer-stop");
 
@@ -545,6 +551,11 @@ export function createRuntime(opts) {
         },
         false,
       ),
+      // Weather: the current state ("Sunny" | "Rain" | "Storm" | "Drought").
+      get_weather: sense("get_weather", (s) => W.currentWeather(s), false),
+      // { next, inTicks }: the true next segment's weather + an APPROXIMATE
+      // tick count (±20 %, never exact). Costs FORECAST_OPS ops (see below).
+      get_forecast: sense("get_forecast", (s) => W.weatherForecast(s), false),
       // Arena: this match's goal { item, amount }; null outside the arena.
       get_arena_goal: sense("get_arena_goal", () => (arenaGoal ? { item: arenaGoal.item, amount: arenaGoal.amount } : null), false),
 
@@ -618,6 +629,12 @@ export function createRuntime(opts) {
     for (const name of Object.keys(api)) {
       if (typeof api[name] === "function" && !name.startsWith("__")) api[name] = counted(api[name]);
     }
+    // get_forecast() is the one priced call: 25 ops in total.
+    const forecast = api.get_forecast;
+    api.get_forecast = function (...args) {
+      if (!session.finished) session.ops += FORECAST_OPS - 1;
+      return forecast.apply(this, args);
+    };
     api.console = Object.fromEntries(Object.entries(api.console).map(([k, f]) => [k, counted(f)]));
     if (mathRandom) api.Math = seededMath(mathRandom);
     return api;

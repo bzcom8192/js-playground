@@ -190,6 +190,25 @@ declare function deliver_contract(id: string): boolean;
  */
 declare function get_arena_goal(): { item: ItemType; amount: number } | null;
 
+// ---------- weather ----------
+
+/** The farm's weather states. */
+type WeatherType = "Sunny" | "Rain" | "Storm" | "Drought";
+/**
+ * The weather right now: "Sunny" (normal), "Rain" (Soil slowly gains water),
+ * "Storm" (growth ×1.5, lightning destroys a few crops) or "Drought" (water
+ * evaporates 3× faster; growth ×0.5 on tiles with water < 0.5).
+ * null on a weatherless world (the arena). Free sense: 1 op, 1 tick.
+ */
+declare function get_weather(): WeatherType | null;
+/**
+ * The forecast: the true weather of the next segment (it may be the same as
+ * now) and APPROXIMATELY how many world ticks until it starts (10 per second;
+ * the true value ±20 %, never exact). Expensive: counts as 25 ops (1 tick).
+ * null on a weatherless world (the arena).
+ */
+declare function get_forecast(): { next: WeatherType; inTicks: number } | null;
+
 // ---------- output ----------
 
 /** Print to the log panel. */
@@ -238,6 +257,8 @@ export const FARMER_GLOBALS = Object.fromEntries(
     "get_contracts",
     "deliver_contract",
     "get_arena_goal",
+    "get_weather",
+    "get_forecast",
     "print",
     "quick_print",
   ].map((n) => [n, "readonly"]),

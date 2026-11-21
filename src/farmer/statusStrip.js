@@ -7,6 +7,7 @@
 // engine still runs at full speed.
 import { ENTITY_INFO } from "./constants.js";
 import * as W from "./world.js";
+import { WEATHER_TICKS_PER_SEC, weatherLabel } from "./weather.js";
 
 export const STRIP_REFRESH_MS = 250;
 
@@ -33,6 +34,9 @@ export function stripFields(game, stats, status, paused) {
   // single-drone strip is exactly as before).
   const drones = W.allDrones(game).length;
   if (drones > 1) fields.drones = drones;
+  // Weather (v3 phase 4): icon + name, absent on a weatherless world.
+  const weather = W.currentWeather(game);
+  if (weather) fields.weather = weatherLabel(weather);
   return fields;
 }
 
@@ -69,4 +73,24 @@ export function sameFields(a, b) {
   const ka = Object.keys(a);
   if (ka.length !== Object.keys(b).length) return false;
   return ka.every((k) => Object.is(a[k], b[k]));
+}
+
+// Info window → Weather: sampled like the strip, but once a second (the
+// forecast's tick count is re-blurred every world tick). The forecast shown
+// is exactly what get_forecast() returns at that tick — the same approximate
+// data, never the true time — so the UI gives away nothing a program can't buy.
+export const WEATHER_REFRESH_MS = 1000;
+
+/** Plain display values for the Weather section, or null without weather. */
+export function weatherFields(game) {
+  const now = W.currentWeather(game);
+  if (!now) return null;
+  const f = W.weatherForecast(game);
+  return {
+    now,
+    next: f.next,
+    inTicks: f.inTicks,
+    // ≈ farm time, from the approximate ticks (10 world ticks per second).
+    approxSeconds: Math.round(f.inTicks / WEATHER_TICKS_PER_SEC),
+  };
 }

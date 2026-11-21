@@ -36,6 +36,8 @@ const API = [
       ["get_time() / get_tick_count()", "Seconds since Run (one clock for all drones) / this drone's ticks."],
       ["get_contracts()", "Today's contracts: [{ id, item, amount, reward, rewardItem, ticksLeft, status }]."],
       ["get_arena_goal()", "In an arena match: its goal { item, amount }, e.g. { item: \"Hay\", amount: 500 }. null on your own farm."],
+      ["get_weather()", "The weather now: \"Sunny\", \"Rain\", \"Storm\" or \"Drought\" (null in the arena)."],
+      ["get_forecast()", "Costs 25 ops! { next, inTicks }: the true next weather and ≈ world ticks until then (±20%, never exact)."],
       ["num_drones() / max_drones()", "Drones on the farm / the cap (farm size with Megafarm, else 1)."],
       ["print(...) / quick_print(...)", "Write to the Log (console.log works too)."],
     ],
@@ -46,10 +48,21 @@ const API = [
       ["Entities", "Grass, Bush, Tree, Carrot, Pumpkin, Sunflower, Cactus, Dead_Pumpkin, Hedge, Treasure, Dinosaur, Apple"],
       ["Items", "Hay, Wood, Carrot, Pumpkin, Power, Cactus, Fertilizer, Water, Gold, Bone"],
       ["Grounds", "Grassland, Soil"],
+      ["Weather", "Plain strings: \"Sunny\", \"Rain\", \"Storm\", \"Drought\" (what get_weather() returns)."],
       ["Unlocks", "Speed, Expand, Plant, Senses, Grass, Carrots, Trees, Watering, Pumpkins, Sunflowers, Fertilizer, Cactus, Mazes, Dinosaurs, Megafarm"],
       ["North East South West", "Directions (plain strings)."],
     ],
   },
+];
+
+const WEATHER = [
+  ["Segments", "The weather changes every 1,200 world ticks (10 per second of farm time ≈ 2 min), from your save's own seed. Paused = frozen."],
+  ["☀️ Sunny", "Normal."],
+  ["🌧 Rain", "Every Soil tile gains water slowly (+0.03/s, so +0.01/s net of evaporation)."],
+  ["🏜 Drought", "Water evaporates 3× faster. Crops grow at half speed unless their tile water ≥ 0.5."],
+  ["⛈ Storm", "Growth ×1.5. Lightning strikes 3 times per storm, each destroying 1–3 random crops (the ground stays). Logged."],
+  ["get_forecast()", "The future costs: 25 ops per call (records count ops). inTicks is approximate (±20%, never exact); next is exact."],
+  ["Arena", "Arena worlds have no weather: get_weather() / get_forecast() return null there."],
 ];
 
 const RULES = [
@@ -245,6 +258,18 @@ export default function DocsPanel({ game, onLoadExample, targetName = "the edito
         <h3 className="text-[11px] uppercase tracking-wider font-semibold text-gray-500 mb-1.5">Arena ⚔️</h3>
         <dl className="space-y-1">
           {ARENA.map(([name, desc]) => (
+            <div key={name} className="grid grid-cols-[minmax(0,6.5rem)_1fr] gap-2">
+              <dt className="text-gray-200">{name}</dt>
+              <dd className="text-gray-400">{desc}</dd>
+            </div>
+          ))}
+        </dl>
+      </section>
+
+      <section>
+        <h3 className="text-[11px] uppercase tracking-wider font-semibold text-gray-500 mb-1.5">Weather 🌦</h3>
+        <dl className="space-y-1">
+          {WEATHER.map(([name, desc]) => (
             <div key={name} className="grid grid-cols-[minmax(0,6.5rem)_1fr] gap-2">
               <dt className="text-gray-200">{name}</dt>
               <dd className="text-gray-400">{desc}</dd>

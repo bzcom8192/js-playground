@@ -6,6 +6,7 @@ import { createRuntime } from "./runtime.js";
 import { createDemoGame, isDemoHash } from "./demo.js";
 import * as C from "./contracts.js";
 import { BOTS, GOALS, deltaText, recordMatch } from "./arena.js";
+import { tickEventLines } from "./weather.js";
 
 export const SAVE_KEY = "farmer_save_v1";
 const FRAME_MS = 33; // UI refresh (~30 fps)
@@ -26,12 +27,14 @@ function loadSavedGame() {
     const raw = localStorage.getItem(SAVE_KEY);
     if (raw) {
       const data = JSON.parse(raw);
-      return { game: W.deserialize(data) };
+      const game = W.deserialize(data);
+      W.ensureWeather(game); // old saves gain their weather seed on first load
+      return { game };
     }
   } catch (e) {
     void e;
   }
-  return { game: W.createGame() };
+  return { game: W.newFarm() };
 }
 
 let logId = 0;
@@ -133,9 +136,14 @@ export default function useFarmEngine() {
         const dt = Math.min(2, (t - lastTick) / 1000); // clamp (background tabs)
         lastTick = t;
         if (!pausedRef.current && !demoRef.current) {
-          // Pause freezes the world too (growth, water, regrowth). The demo
-          // farm is a static showcase (frozen until you leave demo mode).
-          W.tick(gameRef.current, dt);
+          // Pause freezes the world too (growth, water, regrowth, weather).
+          const [, events] = W.withEvents(() => W.tick(gameRef.current, dt));
+          for (const [kind, text] of tickEventLines(events)) pushLog(kind, text);
+          changed = true;
+        } else if (!pausedRef.current) {
+          // The demo farm is a static showcase (frozen until you leave demo
+          // mode); only its (fixed-seed, never saved) weather moves on.
+          W.advanceWeatherClock(gameRef.current, dt);
           changed = true;
         }
       }
@@ -173,7 +181,7 @@ export default function useFarmEngine() {
       document.removeEventListener("visibilitychange", onHide);
       save();
     };
-  }, [save, checkDay]);
+  }, [save, checkDay, pushLog]);
 
   // Leave demo mode: back to the real save (nothing of the demo is kept).
   const exitDemo = useCallback(() => {
@@ -234,6 +242,7 @@ export default function useFarmEngine() {
       pausedRef.current = false;
       setPausedState(false);
       gameRef.current = W.deserialize(data);
+      W.ensureWeather(gameRef.current);
       dirtyRef.current = true;
       save();
     },
@@ -319,7 +328,7 @@ export default function useFarmEngine() {
       setDemo(false);
     }
     setStatus("idle");
-    gameRef.current = W.createGame();
+    gameRef.current = W.newFarm();
     try {
       localStorage.removeItem(SAVE_KEY);
     } catch (e) {

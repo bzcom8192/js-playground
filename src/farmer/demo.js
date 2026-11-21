@@ -2,6 +2,7 @@
 // demo mode (back to the real save) on the first edit / run / save / buy.
 import { UNLOCKS, WORLD_SIZES } from "./constants.js";
 import * as W from "./world.js";
+import { DEMO_WEATHER_SEED } from "./weather.js";
 
 // Rows from North (y = 7) to South (y = 0).
 //  W wheat (grown grass)  g young grass  T tree  B bush  C carrot
@@ -65,6 +66,9 @@ export function createDemoGame() {
   s.drone.y = 4;
   // Demo farms never write personal records (records.js checks this flag).
   s.demo = true;
+  // Weather runs on the demo farm from a fixed seed; it is never persisted
+  // (serialize writes weather: null for a demo farm).
+  s.weather = { seed: DEMO_WEATHER_SEED, time: 0 };
   return s;
 }
 

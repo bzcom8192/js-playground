@@ -11,6 +11,7 @@ import { createRuntime } from "./runtime.js";
 import { buildExport, parseImport } from "./saveData.js";
 import { createDemoGame } from "./demo.js";
 import { FARMER_GLOBALS } from "./farmerLib.js";
+import { FORECAST_OPS } from "./weather.js";
 
 /** n×n farm (Expand level to match) with the given unlocks. */
 function farm(n, unlocks = {}) {
@@ -116,7 +117,8 @@ test("ops: every function the program is given is counted (the whole API surface
   // Every non-constant global in the .d.ts (spawn_drone needs Megafarm; covered below), called once.
   const calls = fns.map((n) => `${n}(${n === "move" || n === "swap" || n === "can_move" ? "North" : ""});`).join("\n");
   assert.equal(await rt.run(calls), "done");
-  assert.equal(rt.stats().ops, fns.length);
+  // v3 phase 4: get_forecast() is the one priced call (25 ops = 1 + 24 extra).
+  assert.equal(rt.stats().ops, fns.length + (FORECAST_OPS - 1));
 });
 
 test("ops: counted across all drones combined; the run clock follows the longest timeline", async () => {
