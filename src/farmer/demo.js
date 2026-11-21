@@ -58,6 +58,8 @@ export function createDemoGame() {
     Cactus: 2300,
     Water: 616,
     Fertilizer: 155,
+    Gold: 1440,
+    Bone: 625,
   });
   s.drone.x = 4;
   s.drone.y = 4;

@@ -15,7 +15,7 @@ export function stripFields(game, stats, status, paused) {
   const tile = W.droneTile(game);
   const e = tile.entity;
   let what = e
-    ? `${ENTITY_INFO[e.type]?.icon ?? ""} ${e.type.replace("_", " ")}${e.progress < 1 ? ` ${Math.floor(e.progress * 100)}%` : ""} / ${tile.ground}`
+    ? `${ENTITY_INFO[e.type]?.icon ?? ""} ${e.type.replace("_", " ")}${e.progress < 1 ? ` ${Math.floor(e.progress * 100)}%` : ""}${dinoPart(game)} / ${tile.ground}`
     : tile.ground;
   if (game.maze) what += ` · ${mazeNeighbours(game)}`;
   return {
@@ -28,6 +28,15 @@ export function stripFields(game, stats, status, paused) {
     measure: stats.lastMeasure ?? null,
     status: paused ? "paused" : status,
   };
+}
+
+/** On a dinosaur segment: " head 1/5", " 3/5" or " tail 5/5" (segment from the head / length). */
+export function dinoPart(game) {
+  const i = W.dinoSegment(game, game.drone.x, game.drone.y);
+  if (i < 0) return "";
+  const len = game.dino.body.length;
+  const label = i === 0 ? " head" : i === len - 1 ? " tail" : "";
+  return `${label} ${i + 1}/${len}`;
 }
 
 const SHORT = { North: "N", East: "E", South: "S", West: "W" };

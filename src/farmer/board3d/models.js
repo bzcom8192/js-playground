@@ -1,7 +1,7 @@
 // Low-poly farm models built only from three.js primitives.
 //
 // Every static model (wheat patch, bush, tree, carrots, pumpkin, sunflower,
-// cactus, maze hedge, treasure chest) is ONE merged, vertex-coloured geometry drawn with a shared
+// cactus, maze hedge, treasure chest, apple, dinosaur segment) is ONE merged, vertex-coloured geometry drawn with a shared
 // flat-shaded material, so a model costs one draw call. Geometries are cached
 // per variant and shared by every tile that shows that model; the kit owns
 // and disposes them. The only textures are small canvas ones (soil rows,
@@ -450,6 +450,113 @@ function treasureGeometry() {
   return merge(parts);
 }
 
+// ---------- dinosaur + apple ----------
+// Dinosaur segments face +z: a segment's +z points at the segment ahead of it
+// (toward the head), and the head's +z is its snout. Body/tail segments carry
+// a "bridge" reaching forward to the next segment so the chain reads as one
+// continuous animal at tile size.
+
+const DINO_GREEN = "#58ab3d";
+const DINO_DARK = "#2f6e22";
+const DINO_BELLY = "#cfe39a";
+const DINO_PLATE = "#eea43a";
+
+/** Darker underneath, a pale belly band low down. */
+const dinoShade = (p, c) => {
+  if (p.y < 0.17) return c.lerp(new THREE.Color(DINO_BELLY), 0.55);
+  return c.multiplyScalar(0.78 + 0.22 * Math.min(1, p.y / 0.45));
+};
+
+function dinoHeadGeometry() {
+  const parts = [];
+  const skull = new THREE.SphereGeometry(0.26, 10, 8);
+  parts.push(part(skull, DINO_GREEN, M(0, 0.31, -0.03, 0, 0, 0, 1, 0.86, 1.08), dinoShade));
+  // Snout + lower jaw, pushed forward.
+  parts.push(part(new THREE.BoxGeometry(0.3, 0.18, 0.28, 1, 1, 1), "#66bb48", M(0, 0.28, 0.22)));
+  parts.push(part(new THREE.BoxGeometry(0.26, 0.07, 0.26), DINO_BELLY, M(0, 0.17, 0.21)));
+  // A little smile line and nostrils.
+  parts.push(part(new THREE.BoxGeometry(0.27, 0.018, 0.02), "#24521a", M(0, 0.205, 0.347)));
+  for (const x of [-0.07, 0.07]) {
+    parts.push(part(new THREE.BoxGeometry(0.035, 0.02, 0.03), "#24521a", M(x, 0.37, 0.34)));
+  }
+  // Big eyes on top of the head (they read from the 55° camera whichever way it faces).
+  for (const x of [-0.12, 0.12]) {
+    parts.push(part(new THREE.SphereGeometry(0.068, 8, 6), "#ffffff", M(x, 0.45, 0.08)));
+    parts.push(part(new THREE.SphereGeometry(0.036, 6, 4), "#1b1b1b", M(x * 1.08, 0.47, 0.13)));
+    parts.push(part(new THREE.SphereGeometry(0.012, 4, 3), "#ffffff", M(x * 1.08 + 0.012, 0.49, 0.158)));
+  }
+  // Crest plates down the back of the head.
+  for (const [z, h] of [
+    [-0.06, 0.12],
+    [-0.19, 0.1],
+  ]) {
+    parts.push(part(new THREE.ConeGeometry(0.055, h, 4), DINO_PLATE, M(0, 0.54 + h / 2 - 0.03 + z * 0.4, z)));
+  }
+  return merge(parts);
+}
+
+function dinoBodyGeometry(legs) {
+  const parts = [];
+  const torso = new THREE.SphereGeometry(0.27, 10, 7);
+  parts.push(part(torso, DINO_GREEN, M(0, 0.27, 0, 0, 0, 0, 1, 0.82, 1.12), dinoShade));
+  // Bridge to the segment ahead (+z).
+  const bridge = new THREE.CylinderGeometry(0.2, 0.22, 0.6, 8);
+  parts.push(part(bridge, DINO_GREEN, M(0, 0.26, 0.33, Math.PI / 2, 0, 0, 1, 1, 0.85), dinoShade));
+  // Back plates.
+  for (const [z, h] of [
+    [-0.1, 0.14],
+    [0.1, 0.16],
+    [0.42, 0.11],
+  ]) {
+    const y = z > 0.3 ? 0.43 : 0.49;
+    parts.push(part(new THREE.ConeGeometry(0.06, h, 4), DINO_PLATE, M(0, y + h / 2 - 0.02, z)));
+  }
+  if (legs) {
+    for (const x of [-0.21, 0.21]) {
+      for (const z of [-0.12, 0.14]) {
+        parts.push(part(new THREE.CylinderGeometry(0.06, 0.07, 0.14, 6), DINO_DARK, M(x, 0.07, z)));
+      }
+    }
+  }
+  return merge(parts);
+}
+
+function dinoTailGeometry() {
+  const parts = [];
+  parts.push(part(new THREE.SphereGeometry(0.21, 9, 6), DINO_GREEN, M(0, 0.23, 0, 0, 0, 0, 1, 0.85, 1), dinoShade));
+  const bridge = new THREE.CylinderGeometry(0.19, 0.21, 0.62, 8);
+  parts.push(part(bridge, DINO_GREEN, M(0, 0.24, 0.32, Math.PI / 2, 0, 0, 1, 1, 0.85), dinoShade));
+  // Tapering tail tip pointing backwards (−z), curling up slightly.
+  const tip = new THREE.ConeGeometry(0.19, 0.42, 8);
+  parts.push(part(tip, DINO_GREEN, M(0, 0.25, -0.26, -Math.PI / 2 - 0.15, 0, 0, 1, 0.85, 1), dinoShade));
+  parts.push(part(new THREE.ConeGeometry(0.05, 0.1, 4), DINO_PLATE, M(0, 0.43, 0.02)));
+  return merge(parts);
+}
+
+function appleGeometry() {
+  const parts = [];
+  const body = new THREE.SphereGeometry(0.15, 12, 9);
+  // Dimpled top, a lighter cheek facing the camera (+z) and the sun.
+  const pos = body.attributes.position;
+  const v = new THREE.Vector3();
+  for (let i = 0; i < pos.count; i++) {
+    v.fromBufferAttribute(pos, i);
+    const top = Math.max(0, v.y / 0.15);
+    const r = Math.hypot(v.x, v.z) / 0.15;
+    v.y -= 0.05 * top ** 6 * (1 - r) * 3;
+    pos.setXYZ(i, v.x, v.y, v.z);
+  }
+  body.computeVertexNormals();
+  parts.push(
+    part(body, "#d32f27", M(0, 0.145, 0, 0, 0, 0, 1, 0.92, 1), (p, c) =>
+      p.z > 0.04 && p.y > 0.12 ? c.lerp(new THREE.Color("#ff6a4d"), 0.45) : c.multiplyScalar(0.85 + 0.15 * (p.y / 0.28)),
+    ),
+  );
+  parts.push(part(new THREE.CylinderGeometry(0.012, 0.016, 0.09, 5), "#6b4220", M(0.01, 0.3, 0, 0, 0, -0.25)));
+  parts.push(part(new THREE.SphereGeometry(0.05, 6, 4), "#4f9d2c", M(0.06, 0.32, 0, 0, 0.3, -0.5, 1.5, 0.3, 0.75)));
+  return merge(parts);
+}
+
 // ---------- the kit ----------
 
 const VARIANTS = 3;
@@ -580,6 +687,15 @@ export function createModelKit() {
         obj = meshOf(geo("treasure", () => treasureGeometry()), flat);
         obj.rotation.y = -0.18; // a slight turn so the lid and lock both read
         break;
+      case "Apple":
+        obj = meshOf(geo("apple", () => appleGeometry()), flat);
+        obj.rotation.y = v * 1.3;
+        break;
+      case "Dinosaur":
+        // The scene draws the dinosaur as one animated chain (buildDinoSegment);
+        // a lone segment model is still available for generic callers.
+        obj = meshOf(dinoGeo("body"), flat);
+        break;
       default:
         return null;
     }
@@ -589,6 +705,31 @@ export function createModelKit() {
     wrap.userData.type = e.type;
     wrap.userData.wheatMaterial = obj.userData.wheatMaterial || null;
     return wrap;
+  }
+
+  const DINO_PARTS = ["head", "body", "legs", "tail"];
+  const dinoGeo = (p) =>
+    geo(`dino-${p}`, () =>
+      p === "head" ? dinoHeadGeometry() : p === "tail" ? dinoTailGeometry() : dinoBodyGeometry(p === "legs"),
+    );
+
+  /**
+   * One dinosaur segment, `part` = "head" | "body" | "legs" (body with feet) | "tail".
+   * Front (+z) points at the segment ahead; the scene sets position/yaw/scale.
+   */
+  function buildDinoSegment(p) {
+    const m = meshOf(dinoGeo(DINO_PARTS.includes(p) ? p : "body"), flat);
+    const wrap = new THREE.Group();
+    wrap.add(m);
+    wrap.userData.type = "Dinosaur";
+    wrap.userData.part = p;
+    return wrap;
+  }
+  /** Swap a segment's shape in place (e.g. the old tail becomes body after a meal). */
+  function setDinoPart(obj, p) {
+    if (obj.userData.part === p) return;
+    obj.userData.part = p;
+    obj.children[0].geometry = dinoGeo(DINO_PARTS.includes(p) ? p : "body");
   }
 
   /** One pumpkin spanning a k×k group of tiles. */
@@ -757,6 +898,8 @@ export function createModelKit() {
   return {
     buildEntity,
     buildGiantPumpkin,
+    buildDinoSegment,
+    setDinoPart,
     buildTile,
     setTileGround,
     buildWater,

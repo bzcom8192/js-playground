@@ -14,7 +14,10 @@ type ItemType = keyof typeof Items;
 type GroundType = keyof typeof Grounds;
 type UnlockType = keyof typeof Unlocks;
 
-/** Entity types that can be on a tile (Hedge / Treasure only appear in a maze). */
+/**
+ * Entity types that can be on a tile. Hedge / Treasure only appear in a maze;
+ * every tile of the dinosaur's body is a Dinosaur; Apples spawn while it lives.
+ */
 declare const Entities: {
 ${names(Entities)}
 };
@@ -46,14 +49,18 @@ declare const West: "West";
  * Harvest the entity under the drone. Ripe plants add their yield to your
  * inventory; unripe plants are destroyed (unripe grass is left alone).
  * On the maze Treasure: Gold = farm tiles × Mazes level, and the maze is removed.
- * Takes 200 ticks.
+ * On a Dinosaur segment: that segment and the whole tail behind it are cut off
+ * → Bone = (segments removed)² × Dinosaurs level (the head takes it all).
+ * Apples can't be harvested (false). Takes 200 ticks.
  * @returns true if there was something to harvest.
  */
 declare function harvest(): boolean;
 /**
  * Plant an entity under the drone. Needs the Plant unlock plus the entity's own
  * unlock; Carrots/Pumpkins/Sunflowers/Cactus need Soil. Seed cost is paid
- * automatically (see get_cost). Planting over Grass replaces it. 200 ticks.
+ * automatically (see get_cost). Planting over Grass replaces it.
+ * Entities.Dinosaur (Dinosaurs unlock, 10 Gold) hatches a length-1 dinosaur
+ * that roams by itself and grows by eating apples. One per farm. 200 ticks.
  */
 declare function plant(entity: EntityType): boolean;
 /**
@@ -64,20 +71,22 @@ declare function plant(entity: EntityType): boolean;
 declare function move(direction: Direction): boolean;
 /** Could move(direction) succeed? Always true in an open field; false into a Hedge or across a maze's edge. */
 declare function can_move(direction: Direction): boolean;
-/** Toggle Grassland ⇄ Soil under the drone and remove its entity. Needs Carrots. Fails inside a maze. 200 ticks. */
+/** Toggle Grassland ⇄ Soil under the drone and remove its entity. Needs Carrots. Fails inside a maze and on the dinosaur / an apple. 200 ticks. */
 declare function till(): boolean;
-/** Reset every tile to empty Grassland (also removes a maze) and move the drone to (0, 0). 200 ticks. */
+/** Reset every tile to empty Grassland (also removes a maze and the dinosaur) and move the drone to (0, 0). 200 ticks. */
 declare function clear(): boolean;
 /**
  * Swap the entity under the drone with its neighbour (growth, petals, size move
- * with it). Does not wrap: false at the edge. Needs Cactus. Fails inside a maze. 200 ticks.
+ * with it). Does not wrap: false at the edge. Needs Cactus. Fails inside a maze
+ * and when either tile is the dinosaur or an apple. 200 ticks.
  */
 declare function swap(direction: Direction): boolean;
 /**
  * Use an item on the tile under the drone.
  * Items.Water: +0.25 water (growth ×(1 + 4×water)).
  * Items.Fertilizer: skip 2 s of growth per item. On a fully grown Bush with
- * Mazes unlocked it instead turns the whole farm into a hedge maze.
+ * Mazes unlocked it instead turns the whole farm into a hedge maze (the
+ * dinosaur and its apples disappear with the old farm).
  */
 declare function use_item(item: ItemType, n?: number): boolean;
 /** Buy items: Fertilizer costs 1 Pumpkin, Water costs 1 Carrot. Fails inside a maze. 200 ticks. */
@@ -89,7 +98,7 @@ declare function do_a_flip(): boolean;
 
 // ---------- senses (instant, 1 tick) ----------
 
-/** true if the entity under the drone is fully grown. Needs Senses. */
+/** true if the entity under the drone is fully grown (a dinosaur always is; an apple never). Needs Senses. */
 declare function can_harvest(): boolean | null;
 /** Type of the entity under the drone, or null. Needs Senses. */
 declare function get_entity_type(): EntityType | null;

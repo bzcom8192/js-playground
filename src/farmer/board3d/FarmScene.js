@@ -29,6 +29,28 @@ const DIE_S = 0.24;
 const WHEAT_GREEN = new THREE.Color("#7fb23e");
 const WHEAT_GOLD = new THREE.Color("#e6ad3c");
 
+/** Segment shape: head, tail tip, or body (every other body segment has feet). */
+export function dinoPartFor(i, len) {
+  if (i === 0) return "head";
+  if (i === len - 1) return "tail";
+  return i % 2 === 1 ? "legs" : "body";
+}
+
+/** Width/height scale of segment i: a slightly big head, then the body tapers to ~0.78 at the tail. */
+export const dinoSegScale = (i, len) => (i === 0 ? 1.12 : 1 - 0.22 * (i / Math.max(1, len - 1)));
+
+const DIR_YAW = { North: Math.PI, East: Math.PI / 2, South: 0, West: -Math.PI / 2 };
+
+/** Yaw of segment i: it faces the segment ahead (the head faces its last step). */
+export function dinoYaw(body, i, dir) {
+  const ahead = i === 0 ? null : body[i - 1];
+  const from = i === 0 ? body[1] : body[i];
+  const to = i === 0 ? body[0] : ahead;
+  if (!from || !to) return DIR_YAW[dir] ?? 0;
+  // Tile (dx, dy) → world (x, z) = (dx, −dy); model front is +z.
+  return Math.atan2(to.x - from.x, -(to.y - from.y));
+}
+
 const variantOf = (x, y) => (x * 7 + y * 13 + ((x * y) % 5)) % 3;
 
 export class FarmScene {
@@ -55,6 +77,9 @@ export class FarmScene {
     this.tiles = [];
     this.giants = new Map();
     this.dying = [];
+    // The dinosaur: one record per body segment (index-aligned with game.dino.body).
+    this.dinoSegs = [];
+    this.dinoSig = "";
     this.slab = null;
     this.view = { w: 0, h: 0 };
     this.animT = 0;
@@ -85,6 +110,9 @@ export class FarmScene {
     }
     for (const g of this.giants.values()) this._removeModel(g.model, false);
     for (const d of this.dying) this._removeModel(d.obj, false);
+    for (const seg of this.dinoSegs) this._removeModel(seg.obj, false);
+    this.dinoSegs = [];
+    this.dinoSig = "";
     this.tiles = [];
     this.giants.clear();
     this.dying = [];
@@ -202,6 +230,8 @@ export class FarmScene {
       changed = true;
       const giants = findGiantPumpkins(game);
       const hidden = new Set(giants.flatMap((g) => g.cells));
+      // Dinosaur tiles are drawn by the animated chain (_syncDino), not per tile.
+      for (const p of game.dino?.body ?? []) hidden.add(p.y * n + p.x);
 
       for (const rec of this.tiles) {
         const t = game.tiles[rec.y * n + rec.x];
@@ -253,7 +283,87 @@ export class FarmScene {
         this.giants.delete(gk);
       }
     }
+    if (this._syncDino(game, fresh)) changed = true;
     return changed;
+  }
+
+  /**
+   * Keep one segment model per body tile. Records stay index-aligned with
+   * game.dino.body (0 = head), so after a step every segment glides one tile
+   * forward; a meal adds a segment where the tail was; a harvest pops the cut
+   * segments away.
+   */
+  _syncDino(game, fresh) {
+    const d = game.dino;
+    const body = d?.body ?? [];
+    const sig = body.map((p) => `${p.x},${p.y}`).join(";") + `|${d?.dir ?? ""}`;
+    if (!fresh && sig === this.dinoSig) return false;
+    this.dinoSig = sig;
+    const n = this.n;
+    const L = body.length;
+    while (this.dinoSegs.length > L) {
+      const seg = this.dinoSegs.pop();
+      this._removeModel(seg.obj, !fresh);
+    }
+    for (let i = 0; i < L; i++) {
+      const part = dinoPartFor(i, L);
+      const w = tileToWorld(n, body[i].x, body[i].y);
+      const yaw = dinoYaw(body, i, d.dir);
+      let seg = this.dinoSegs[i];
+      if (!seg) {
+        const obj = this.kit.buildDinoSegment(part);
+        this.board.add(obj);
+        seg = { obj, x: w.x, z: w.z, yaw, pop: fresh ? 1 : 0 };
+        this.dinoSegs.push(seg);
+      } else {
+        this.kit.setDinoPart(seg.obj, part);
+        // A brand-new dinosaur somewhere else: jump instead of gliding across the farm.
+        if (Math.abs(seg.x - w.x) + Math.abs(seg.z - w.z) > 1.6) {
+          seg.x = w.x;
+          seg.z = w.z;
+          seg.yaw = yaw;
+        }
+      }
+      seg.tx = w.x;
+      seg.tz = w.z;
+      seg.tyaw = yaw;
+      seg.scale = dinoSegScale(i, L);
+      this._placeDinoSeg(seg);
+    }
+    return true;
+  }
+
+  _placeDinoSeg(seg) {
+    const p = popScale(seg.pop);
+    seg.obj.position.set(seg.x, 0, seg.z);
+    seg.obj.rotation.y = seg.yaw;
+    // Thinner toward the tail, but always a full tile long so the bridges meet.
+    seg.obj.scale.set(seg.scale * p, seg.scale * p, p);
+  }
+
+  _updateDino(dt, paused) {
+    let moving = false;
+    for (const seg of this.dinoSegs) {
+      let dirty = false;
+      if (!paused && (seg.x !== seg.tx || seg.z !== seg.tz || seg.yaw !== seg.tyaw)) {
+        seg.x = smoothToward(seg.x, seg.tx, dt, 16);
+        seg.z = smoothToward(seg.z, seg.tz, dt, 16);
+        seg.yaw = lerpAngle(seg.yaw, seg.tyaw, 1 - Math.exp(-dt * 18));
+        if (Math.abs(seg.x - seg.tx) < 1e-3) seg.x = seg.tx;
+        if (Math.abs(seg.z - seg.tz) < 1e-3) seg.z = seg.tz;
+        if (Math.abs(lerpAngle(seg.yaw, seg.tyaw, 1) - seg.yaw) < 1e-3) seg.yaw = seg.tyaw;
+        dirty = true;
+      }
+      if (seg.pop < 1) {
+        seg.pop = Math.min(1, seg.pop + dt / POP_S);
+        dirty = true;
+      }
+      if (dirty) {
+        this._placeDinoSeg(seg);
+        moving = true;
+      }
+    }
+    return moving;
   }
 
   _applyGrowth(rec, force = false) {
@@ -325,6 +435,7 @@ export class FarmScene {
       });
     }
 
+    if (this._updateDino(dt, paused)) moving = true;
     if (this._updateDrone(dt, paused, moveMs)) moving = true;
     return moving;
   }

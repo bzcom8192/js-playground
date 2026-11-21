@@ -300,7 +300,11 @@ export function createRuntime(opts) {
       ),
 
       // senses (need the Senses unlock)
-      can_harvest: sense("can_harvest", (s) => W.isGrown(W.droneTile(s).entity)),
+      // Apples are never harvestable (only the dinosaur eats them).
+      can_harvest: sense("can_harvest", (s) => {
+        const e = W.droneTile(s).entity;
+        return W.isGrown(e) && e.type !== "Apple";
+      }),
       get_entity_type: sense("get_entity_type", (s) => W.droneTile(s).entity?.type ?? null),
       get_ground_type: sense("get_ground_type", (s) => W.droneTile(s).ground),
       get_pos_x: sense("get_pos_x", (s) => s.drone.x),

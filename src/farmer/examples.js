@@ -265,4 +265,64 @@ while (true) {
 }
 `,
   },
+  {
+    id: "dinosaur",
+    name: "8. Bone Farm",
+    needs: ["Dinosaurs", "Plant", "Senses"],
+    code: `// Bone Farm — needs: Dinosaurs, Plant, Senses (and 10 Gold per dinosaur).
+// Clears the field, hatches a dinosaur and lets it roam: it eats the apples
+// that keep appearing and grows 1 tile per apple. Then the drone sweeps the
+// farm and harvests the dinosaur wherever it meets it: that cuts off the
+// segment and the whole tail behind it for (segments removed)² Bone.
+// When nothing is left, plant() works again and a new dinosaur hatches.
+const GROW_SECONDS = 30;
+const n = get_world_size();
+
+function go_to(x, y) {
+  // Shortest way (movement wraps around the edges outside a maze).
+  while (get_pos_x() !== x) move((x - get_pos_x() + n) % n <= n / 2 ? East : West);
+  while (get_pos_y() !== y) move((y - get_pos_y() + n) % n <= n / 2 ? North : South);
+}
+
+function wait(seconds) {
+  const start = get_time();
+  while (get_time() - start < seconds) {
+    do_a_flip(); // the dinosaur moves on its own meanwhile
+  }
+}
+
+function sweep_and_cut() {
+  // Visit every tile once, column by column, cutting the dinosaur wherever we meet it.
+  go_to(0, 0);
+  for (let x = 0; x < n; x++) {
+    for (let i = 0; i < n; i++) {
+      if (get_entity_type() === Entities.Dinosaur) {
+        harvest();
+      }
+      if (i < n - 1) {
+        move(x % 2 === 0 ? North : South);
+      }
+    }
+    move(East);
+  }
+}
+
+clear(); // a free field: the dinosaur can't walk through crops
+while (true) {
+  go_to(0, 0);
+  // plant() fails while the last dinosaur still roams (one per farm).
+  if (plant(Entities.Dinosaur)) {
+    wait(GROW_SECONDS);
+  } else if (num_items(Items.Gold) < get_cost(Entities.Dinosaur).Gold) {
+    print("Out of Gold — solve some mazes first (example 7).");
+    break;
+  }
+  const before = num_items(Items.Bone);
+  sweep_and_cut();
+  if (num_items(Items.Bone) > before) {
+    print("Bone:", num_items(Items.Bone));
+  }
+}
+`,
+  },
 ];

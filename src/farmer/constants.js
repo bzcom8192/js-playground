@@ -12,6 +12,8 @@ export const Entities = Object.freeze({
   Dead_Pumpkin: "Dead_Pumpkin",
   Hedge: "Hedge",
   Treasure: "Treasure",
+  Dinosaur: "Dinosaur",
+  Apple: "Apple",
 });
 
 export const Items = Object.freeze({
@@ -24,6 +26,7 @@ export const Items = Object.freeze({
   Fertilizer: "Fertilizer",
   Water: "Water",
   Gold: "Gold",
+  Bone: "Bone",
 });
 
 export const Grounds = Object.freeze({
@@ -45,6 +48,7 @@ export const Unlocks = Object.freeze({
   Fertilizer: "Fertilizer",
   Cactus: "Cactus",
   Mazes: "Mazes",
+  Dinosaurs: "Dinosaurs",
 });
 
 // Directions are plain strings; dx/dy follow "x grows East, y grows North".
@@ -72,6 +76,7 @@ export const ITEM_ORDER = [
   "Fertilizer",
   "Water",
   "Gold",
+  "Bone",
 ];
 
 export const ITEM_ICONS = {
@@ -84,6 +89,7 @@ export const ITEM_ICONS = {
   Fertilizer: "🧪",
   Water: "💧",
   Gold: "🪙",
+  Bone: "🦴",
 };
 
 // Per-entity rules. growTime is in seconds at water level 0.
@@ -132,6 +138,10 @@ export const ENTITY_INFO = {
   // Maze tiles: created only by spawning a maze, never planted (cost: null).
   Hedge: { icon: "🟩", growTime: 0, unlock: "Mazes", soil: false, cost: null },
   Treasure: { icon: "💰", growTime: 0, unlock: "Mazes", soil: false, cost: null },
+  // Dinosaur: plant() hatches the (single) dinosaur; every body tile holds one.
+  // Apples only spawn by themselves while a dinosaur is alive (cost: null).
+  Dinosaur: { icon: "🦖", growTime: 0, unlock: "Dinosaurs", soil: false, cost: { Gold: 10 } },
+  Apple: { icon: "🍎", growTime: 0, unlock: "Dinosaurs", soil: false, cost: null },
 };
 
 // World sizes per Expand level (TFWR-like progression, max 12×12).
@@ -144,6 +154,10 @@ export const WATER_PER_USE = 0.25;
 export const FERTILIZER_SECONDS = 2;
 export const DEAD_PUMPKIN_CHANCE = 0.2;
 export const WATER_BASE_INTERVAL = 10; // s per Water item at Watering level 1
+export const DINO_STEP_SECONDS = 0.3; // game seconds per dinosaur step (3 world ticks of 100 ms)
+export const APPLE_SPAWN_SECONDS = 1.5; // game seconds between apple spawns while a dinosaur lives
+/** Max apples on the farm at once: one per 16 tiles, at least 1 (12×12 → 9). */
+export const appleCap = (size) => Math.max(1, Math.floor((size * size) / 16));
 
 const scale = (base, factor, level) => Math.round(base * factor ** level);
 
@@ -294,10 +308,21 @@ export const UNLOCKS = [
         ? { Cactus: 2000, Pumpkin: 2000 }
         : { Cactus: scale(6000, 3, l - 1), Gold: scale(300, 3, l - 1) },
   },
+  {
+    id: "Dinosaurs",
+    name: "Dinosaurs",
+    icon: "🦕",
+    desc: "plant(Entities.Dinosaur) (10 Gold) hatches a dinosaur that roams and eats apples to grow. Harvest a segment → Bone = (segments cut off)² × level.",
+    requires: "Mazes",
+    maxLevel: 3,
+    cost: (l) =>
+      l === 0
+        ? { Gold: 600, Cactus: 6000 }
+        : { Gold: scale(1800, 3, l - 1), Bone: scale(1000, 3, l - 1) },
+  },
 ];
 
 export const FUTURE_UNLOCKS = [
-  { id: "Dinosaurs", name: "Dinosaurs", icon: "🦕" },
   { id: "Megafarm", name: "Megafarm", icon: "🏭" },
 ];
 
@@ -314,4 +339,6 @@ export const ENTITY_UNLOCK = {
   Cactus: "Cactus",
   Hedge: "Mazes",
   Treasure: "Mazes",
+  Dinosaur: "Dinosaurs",
+  Apple: "Dinosaurs",
 };

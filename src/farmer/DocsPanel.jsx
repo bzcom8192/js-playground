@@ -5,22 +5,22 @@ const API = [
   {
     title: "Actions — take time (200 ticks), no await needed",
     items: [
-      ["harvest()", "Harvest the tile. Ripe → yield; unripe → destroyed (unripe grass is left alone)."],
-      ["plant(entity)", "Plant Entities.X (Plant unlock + its own unlock). Seed cost is paid automatically."],
+      ["harvest()", "Harvest the tile. Ripe → yield; unripe → destroyed (unripe grass is left alone). On the dinosaur: cuts off that segment and its tail → Bone."],
+      ["plant(entity)", "Plant Entities.X (Plant unlock + its own unlock). Seed cost is paid automatically. Entities.Dinosaur hatches the dinosaur."],
       ["move(dir)", "North / East / South / West. Wraps around the edges. Hedges block it (returns false)."],
-      ["till()", "Grassland ⇄ Soil, removes the entity. Needs Carrots."],
-      ["swap(dir)", "Swap entity with neighbour (no wrap). Needs Cactus."],
+      ["till()", "Grassland ⇄ Soil, removes the entity. Needs Carrots. Not on the dinosaur / an apple."],
+      ["swap(dir)", "Swap entity with neighbour (no wrap). Needs Cactus. Not with the dinosaur / an apple."],
       ["use_item(item, n=1)", "Items.Water: +0.25 water. Items.Fertilizer: −2 s growth (on a grown Bush with Mazes: spawns a maze)."],
       ["trade(item, n=1)", "Fertilizer = 1 Pumpkin, Water = 1 Carrot."],
       ["unlock(Unlocks.X)", "Buy the next level from code."],
-      ["clear()", "Reset farm to empty grassland, drone to (0,0)."],
+      ["clear()", "Reset farm to empty grassland (no maze, no dinosaur), drone to (0,0)."],
       ["do_a_flip()", "600 ticks of pure style."],
     ],
   },
   {
     title: "Senses — instant (1 tick). 🔒 = needs Senses, returns null before",
     items: [
-      ["can_harvest() 🔒", "Is the entity under the drone ripe?"],
+      ["can_harvest() 🔒", "Is the entity under the drone ripe? (Dinosaur: always; Apple: never.)"],
       ["get_entity_type() 🔒", "Entities.X or null."],
       ["get_ground_type() 🔒", "Grounds.Grassland / Grounds.Soil."],
       ["get_pos_x() / get_pos_y() 🔒", "Drone position, (0,0) = South-West."],
@@ -38,10 +38,10 @@ const API = [
   {
     title: "Constants",
     items: [
-      ["Entities", "Grass, Bush, Tree, Carrot, Pumpkin, Sunflower, Cactus, Dead_Pumpkin, Hedge, Treasure"],
-      ["Items", "Hay, Wood, Carrot, Pumpkin, Power, Cactus, Fertilizer, Water, Gold"],
+      ["Entities", "Grass, Bush, Tree, Carrot, Pumpkin, Sunflower, Cactus, Dead_Pumpkin, Hedge, Treasure, Dinosaur, Apple"],
+      ["Items", "Hay, Wood, Carrot, Pumpkin, Power, Cactus, Fertilizer, Water, Gold, Bone"],
       ["Grounds", "Grassland, Soil"],
-      ["Unlocks", "Speed, Expand, Plant, Senses, Grass, Carrots, Trees, Watering, Pumpkins, Sunflowers, Fertilizer, Cactus, Mazes"],
+      ["Unlocks", "Speed, Expand, Plant, Senses, Grass, Carrots, Trees, Watering, Pumpkins, Sunflowers, Fertilizer, Cactus, Mazes, Dinosaurs"],
       ["North East South West", "Directions (plain strings)."],
     ],
   },
@@ -80,6 +80,14 @@ const MAZES = [
   ["Treasure 💰", "Sits on the path tile farthest from your start. measure() returns its direction from you: the axis with the larger distance wins (ties → East/West); null when you are on it."],
   ["Gold 🪙", "harvest() on the treasure → Gold = farm tiles (size²) × Mazes level. The maze disappears and the farm is empty Grassland again."],
   ["Meanwhile", "plant, till, swap and trade fail inside a maze. clear() (or Expand) removes the maze without a reward. Try example 7 (a wall follower)."],
+];
+
+const DINOSAURS = [
+  ["Hatch", "plant(Entities.Dinosaur) on an empty (or grass) tile, Dinosaurs unlocked, 10 Gold. It starts 1 tile long. One dinosaur per farm."],
+  ["Roaming", "Every 0.3 s of game time its head steps to a random free neighbour: empty ground, grass (trampled) or an apple. Never into its own body, a hedge or a crop, never across the edge; boxed in, it waits. The drone flies over it."],
+  ["Apples 🍎", "While it lives, an apple appears every 1.5 s on a random empty/grass tile (at most 1 per 16 tiles, min 1). Walking onto one eats it: +1 length. You can't harvest, plant on, till or swap apples."],
+  ["Bone 🦴", "harvest() on a segment cuts off it and everything behind it: Bone = (segments removed)² × Dinosaurs level. The head takes the whole dinosaur (length²), the tail tip pays 1. When it's gone (apples vanish too) you can hatch a new one."],
+  ["Meanwhile", "get_entity_type() is Entities.Dinosaur on every segment; the info strip shows which one (head 1/5…). Spawning a maze, clear() or Expand removes the dinosaur and apples. Try example 8."],
 ];
 
 export default function DocsPanel({ game, onLoadExample, targetName = "the editor" }) {
@@ -160,6 +168,18 @@ export default function DocsPanel({ game, onLoadExample, targetName = "the edito
         <h3 className="text-[11px] uppercase tracking-wider font-semibold text-gray-500 mb-1.5">Mazes 🧩</h3>
         <dl className="space-y-1">
           {MAZES.map(([name, desc]) => (
+            <div key={name} className="grid grid-cols-[minmax(0,6.5rem)_1fr] gap-2">
+              <dt className="text-gray-200">{name}</dt>
+              <dd className="text-gray-400">{desc}</dd>
+            </div>
+          ))}
+        </dl>
+      </section>
+
+      <section>
+        <h3 className="text-[11px] uppercase tracking-wider font-semibold text-gray-500 mb-1.5">Dinosaurs 🦕</h3>
+        <dl className="space-y-1">
+          {DINOSAURS.map(([name, desc]) => (
             <div key={name} className="grid grid-cols-[minmax(0,6.5rem)_1fr] gap-2">
               <dt className="text-gray-200">{name}</dt>
               <dd className="text-gray-400">{desc}</dd>

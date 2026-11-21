@@ -35,8 +35,8 @@ const SHORTCUT_SECTIONS = [
 const GLOBALS_CACHE = new Map();
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 
-// Inventory order from the reference: Hay, Wood, Carrot, Pumpkin, Power, Cactus, Water, Fertilizer, Gold.
-const INVENTORY = ["Hay", "Wood", "Carrot", "Pumpkin", "Power", "Cactus", "Water", "Fertilizer", "Gold"];
+// Inventory order from the reference: Hay, Wood, Carrot, Pumpkin, Power, Cactus, Water, Fertilizer, Gold, Bone.
+const INVENTORY = ["Hay", "Wood", "Carrot", "Pumpkin", "Power", "Cactus", "Water", "Fertilizer", "Gold", "Bone"];
 
 const STATUS_LABEL = {
   idle: ["bg-white/50", "Idle"],

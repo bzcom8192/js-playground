@@ -5,7 +5,9 @@
 // result object `{ ok, msg?, locked? }` so the runtime can log helpful hints.
 
 import {
+  APPLE_SPAWN_SECONDS,
   DEAD_PUMPKIN_CHANCE,
+  DINO_STEP_SECONDS,
   DIR_DELTA,
   ENTITY_INFO,
   FERTILIZER_SECONDS,
@@ -17,6 +19,7 @@ import {
   WATER_DECAY_PER_SEC,
   WATER_PER_USE,
   WORLD_SIZES,
+  appleCap,
 } from "./constants.js";
 import { generateMaze, treasureDirection } from "./maze.js";
 
@@ -47,6 +50,9 @@ export function createGame() {
     waterTimer: 0,
     // Active maze: { treasure: { x, y } } or null. Walls are Hedge entities on the tiles.
     maze: null,
+    // The dinosaur: { body: [{x, y}, …] (head first), dir, stepTimer, appleTimer } or null.
+    // Every body tile holds a { type: "Dinosaur" } entity; apples are "Apple" entities.
+    dino: null,
   };
   // TFWR start: a single grassland tile with grass on it.
   state.tiles[0].entity = makeEntity("Grass", Math.random, 1);
@@ -150,6 +156,7 @@ export function tick(state, dt, rng = Math.random) {
       }
     }
   }
+  if (state.dino) dinoTick(state, dt, rng);
   const wl = level(state, "Watering");
   if (wl > 0) {
     const interval = WATER_BASE_INTERVAL / wl;
@@ -253,6 +260,8 @@ export function harvest(state) {
   const e = tile.entity;
   if (!e || e.type === "Hedge") return false;
   if (e.type === "Treasure") return harvestTreasure(state);
+  if (e.type === "Apple") return fail(APPLE_BLOCKED);
+  if (e.type === "Dinosaur") return harvestDino(state, x, y);
   if (!isGrown(e)) {
     // Deviation: unripe Grass is left alone (returns false) so the very first
     // `while (true) { harvest(); }` program works at any speed.
@@ -319,11 +328,16 @@ export function plant(state, type, rng = Math.random) {
   if (tile.entity && tile.entity.type !== "Grass") {
     return fail(`Tile already has ${tile.entity.type}`);
   }
+  if (type === "Dinosaur" && state.dino) return fail("only one dinosaur per farm — harvest the old one first");
   if (info.soil && tile.ground !== "Soil") return fail(`${type} needs Soil — till() first`);
   if (!canAfford(state, info.cost)) {
     return fail(`Not enough items for ${type} seed (${costText(info.cost)})`);
   }
   pay(state, info.cost);
+  if (type === "Dinosaur") {
+    hatchDino(state);
+    return ok;
+  }
   tile.entity = makeEntity(type, rng);
   return ok;
 }
@@ -332,6 +346,7 @@ export function till(state) {
   if (!isUnlocked(state, "Carrots")) return fail("till() is locked", "Carrots");
   if (state.maze) return fail(MAZE_BLOCKED);
   const tile = droneTile(state);
+  if (isDinoTile(tile)) return fail(DINO_BLOCKED);
   tile.ground = tile.ground === "Soil" ? "Grassland" : "Soil";
   removeEntity(tile);
   return ok;
@@ -346,6 +361,7 @@ export function swap(state, dir) {
   if (!n) return fail("swap() can't cross the farm edge");
   const a = tileAt(state, x, y);
   const b = tileAt(state, n.x, n.y);
+  if (isDinoTile(a) || isDinoTile(b)) return fail(DINO_BLOCKED);
   [a.entity, b.entity] = [b.entity, a.entity];
   a.regrow = 0;
   b.regrow = 0;
@@ -355,6 +371,7 @@ export function swap(state, dir) {
 export function clearFarm(state) {
   state.tiles = Array.from({ length: state.size * state.size }, newTile);
   state.maze = null;
+  state.dino = null;
   state.drone.x = 0;
   state.drone.y = 0;
 }
@@ -479,6 +496,16 @@ export function serialize(state) {
     waterTimer: state.waterTimer,
     // Active maze (walls/treasure are entities on the tiles below).
     maze: state.maze ? { tx: state.maze.treasure.x, ty: state.maze.treasure.y } : null,
+    // The dinosaur's body chain (head first) and its timers; segments and
+    // apples are also entities on the tiles below.
+    dino: state.dino
+      ? {
+          body: state.dino.body.map((p) => [p.x, p.y]),
+          dir: state.dino.dir,
+          st: state.dino.stepTimer,
+          at: state.dino.appleTimer,
+        }
+      : null,
     // progress (0..1) is stored directly, so growth survives a reload.
     tiles: state.tiles.map((t) => ({
       g: t.ground === "Soil" ? "S" : "G",
@@ -524,6 +551,7 @@ export function deserialize(data) {
   state.drone.y = Number.isInteger(dy) && dy >= 0 && dy < state.size ? dy : 0;
   state.waterTimer = Number(data.waterTimer) || 0;
   restoreMaze(state, data.maze);
+  restoreDino(state, data.dino);
   return state;
 }
 
@@ -545,6 +573,9 @@ export function spawnMaze(state, rng = Math.random) {
   });
   tileAt(state, treasure.x, treasure.y).entity = { type: "Treasure", progress: 1 };
   state.maze = { treasure: { ...treasure } };
+  // Simplest rule that can't corrupt either: a maze replaces the whole farm,
+  // so the dinosaur and its apples are gone too (like clear()).
+  state.dino = null;
 }
 
 function harvestTreasure(state) {
@@ -573,4 +604,165 @@ function restoreMaze(state, m) {
   for (const t of state.tiles) {
     if (t.entity?.type === "Hedge" || t.entity?.type === "Treasure") t.entity = null;
   }
+}
+
+// ---------- dinosaurs ----------
+
+const DINO_BLOCKED = "not possible on the dinosaur or an apple";
+const APPLE_BLOCKED = "apples are for the dinosaur — it eats them by walking onto them";
+const DIRS = ["North", "East", "South", "West"];
+
+const isDinoTile = (tile) => tile.entity?.type === "Dinosaur" || tile.entity?.type === "Apple";
+
+/** Bone for cutting off `k` segments: k² × Dinosaurs level. */
+export const boneFor = (state, k) => k * k * Math.max(1, level(state, "Dinosaurs"));
+
+/** Tiles the dinosaur's head may step onto: empty ground, Grass (trampled) or an Apple (eaten). */
+function dinoCanEnter(tile) {
+  const e = tile.entity;
+  return !e || e.type === "Grass" || e.type === "Apple";
+}
+
+/** Index of (x, y) in the dinosaur's body (0 = head), or -1. */
+export function dinoSegment(state, x, y) {
+  if (!state.dino) return -1;
+  return state.dino.body.findIndex((p) => p.x === x && p.y === y);
+}
+
+/** Valid head moves right now: [{ dir, x, y, eat }]. No wrap; never into the body or a hedge. */
+export function dinoMoves(state) {
+  if (!state.dino) return [];
+  const head = state.dino.body[0];
+  const out = [];
+  for (const dir of DIRS) {
+    const n = neighbor(state, head.x, head.y, dir, false);
+    if (!n) continue;
+    const tile = tileAt(state, n.x, n.y);
+    if (!dinoCanEnter(tile)) continue;
+    out.push({ dir, x: n.x, y: n.y, eat: tile.entity?.type === "Apple" });
+  }
+  return out;
+}
+
+function hatchDino(state) {
+  const { x, y } = state.drone;
+  const tile = tileAt(state, x, y);
+  tile.entity = { type: "Dinosaur", progress: 1 };
+  tile.regrow = 0;
+  state.dino = { body: [{ x, y }], dir: "South", stepTimer: 0, appleTimer: 0 };
+}
+
+/**
+ * One autonomous step: the head moves to a random valid neighbour. Eating an
+ * apple grows the body by one (the tail stays); otherwise the tail follows.
+ * With no valid move the dinosaur stays put. Returns true if it moved.
+ */
+export function dinoStep(state, rng = Math.random) {
+  const moves = dinoMoves(state);
+  if (!moves.length) return false;
+  const m = moves[Math.min(moves.length - 1, Math.floor(rng() * moves.length))];
+  const d = state.dino;
+  const tile = tileAt(state, m.x, m.y);
+  tile.entity = { type: "Dinosaur", progress: 1 };
+  tile.regrow = 0;
+  d.body.unshift({ x: m.x, y: m.y });
+  d.dir = m.dir;
+  if (!m.eat) {
+    const tail = d.body.pop();
+    removeEntity(tileAt(state, tail.x, tail.y));
+  }
+  return true;
+}
+
+/** Spawn one apple on a random empty (or grass) tile, if under the cap. */
+export function spawnApple(state, rng = Math.random) {
+  let apples = 0;
+  const free = [];
+  state.tiles.forEach((t, i) => {
+    if (t.entity?.type === "Apple") apples++;
+    else if (!t.entity || t.entity.type === "Grass") free.push(i);
+  });
+  if (apples >= appleCap(state.size) || !free.length) return false;
+  const t = state.tiles[free[Math.min(free.length - 1, Math.floor(rng() * free.length))]];
+  t.entity = { type: "Apple", progress: 1 };
+  t.regrow = 0;
+  return true;
+}
+
+function dinoTick(state, dt, rng) {
+  const d = state.dino;
+  d.appleTimer += dt;
+  while (d.appleTimer >= APPLE_SPAWN_SECONDS) {
+    d.appleTimer -= APPLE_SPAWN_SECONDS;
+    spawnApple(state, rng);
+  }
+  d.stepTimer += dt;
+  while (d.stepTimer >= DINO_STEP_SECONDS) {
+    d.stepTimer -= DINO_STEP_SECONDS;
+    dinoStep(state, rng);
+  }
+}
+
+function removeApples(state) {
+  for (const t of state.tiles) if (t.entity?.type === "Apple") removeEntity(t);
+}
+
+/**
+ * Harvest the body segment at (x, y): it and everything behind it (toward the
+ * tail) is cut off, paying (segments removed)² × level Bone. Cutting the head
+ * removes the whole dinosaur (and its apples), so a new one can be planted.
+ */
+function harvestDino(state, x, y) {
+  const i = dinoSegment(state, x, y);
+  if (i < 0) {
+    removeEntity(tileAt(state, x, y)); // stray segment (can't happen in a consistent state)
+    return true;
+  }
+  const body = state.dino.body;
+  const cut = body.splice(i);
+  add(state, "Bone", boneFor(state, cut.length));
+  for (const p of cut) removeEntity(tileAt(state, p.x, p.y));
+  if (!body.length) {
+    state.dino = null;
+    removeApples(state);
+  }
+  return true;
+}
+
+// Accept a saved dinosaur only if its chain is consistent with the tiles
+// (in bounds, unique, each segment next to the one before, every segment tile
+// holds a Dinosaur, no maze). Otherwise drop it with its apples.
+function restoreDino(state, d) {
+  state.dino = null;
+  const n = state.size;
+  const raw = Array.isArray(d?.body) ? d.body : null;
+  const body = raw ? raw.map((p) => ({ x: Number(p?.[0]), y: Number(p?.[1]) })) : [];
+  const inside = (v) => Number.isInteger(v) && v >= 0 && v < n;
+  const seen = new Set();
+  let valid = !state.maze && body.length > 0;
+  for (let i = 0; valid && i < body.length; i++) {
+    const p = body[i];
+    if (!inside(p.x) || !inside(p.y) || seen.has(idx(state, p.x, p.y))) valid = false;
+    else if (tileAt(state, p.x, p.y).entity?.type !== "Dinosaur") valid = false;
+    else if (i > 0 && Math.abs(p.x - body[i - 1].x) + Math.abs(p.y - body[i - 1].y) !== 1) valid = false;
+    else seen.add(idx(state, p.x, p.y));
+  }
+  if (valid) {
+    const timer = (v, max) => {
+      const t = Number(v);
+      return Number.isFinite(t) && t >= 0 && t < max ? t : 0;
+    };
+    state.dino = {
+      body,
+      dir: DIRS.includes(d.dir) ? d.dir : "South",
+      stepTimer: timer(d.st, DINO_STEP_SECONDS),
+      appleTimer: timer(d.at, APPLE_SPAWN_SECONDS),
+    };
+  }
+  state.tiles.forEach((t, i) => {
+    const type = t.entity?.type;
+    if (type !== "Dinosaur" && type !== "Apple") return;
+    const keep = valid && (type === "Apple" || seen.has(i));
+    t.entity = keep ? { type, progress: 1 } : null;
+  });
 }
