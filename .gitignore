@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# JS Farmer Online server data (SQLite)
+server/data/

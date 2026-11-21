@@ -8,6 +8,13 @@ export default defineConfig({
     react(),
     tailwindcss(),
   ],
+  // `npm run dev` + `npm run server`: the game's same-origin /api goes to
+  // the Online server (server/index.js, port 4188).
+  server: {
+    proxy: {
+      '/api': { target: 'http://localhost:4188', changeOrigin: true },
+    },
+  },
   build: {
     rollupOptions: {
       output: {

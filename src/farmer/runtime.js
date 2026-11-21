@@ -127,6 +127,7 @@ export function errorLine(err) {
  *  onLog(entry) → { kind: "print"|"warn"|"error"|"info"|"clear", text }
  *  onStatus(status, info) → "running" | "done" | "stopped" | "error"
  *  onDroneError(info) → one drone's program failed (Megafarm: others keep going)
+ *  onRecord(ev) → a new local best maze / dino record (v4 Online auto-submit)
  */
 export function createRuntime(opts) {
   const {
@@ -152,7 +153,18 @@ export function createRuntime(opts) {
     // Arena: a seeded replacement for Math.random inside the program (the
     // program gets its own frozen `Math` whose random() is this function).
     mathRandom = null,
+    // v4 Online: a run just set a new LOCAL best → onRecord({ kind: "maze", attempt })
+    // or onRecord({ kind: "dino", rec }). Display/network side effects only;
+    // it must not throw into the run (errors are swallowed).
+    onRecord = () => {},
   } = opts;
+  const notifyRecord = (ev) => {
+    try {
+      onRecord(ev);
+    } catch (e) {
+      void e;
+    }
+  };
 
   let current = null; // the current session
   let paused = false;
@@ -298,11 +310,16 @@ export function createRuntime(opts) {
       let msg = `🏁 Maze solved in ${fmt(attempt.ticks)} ticks · ${fmt(attempt.ops)} ops`;
       if (r.best) msg += ` — new best for Mazes level ${ev.level}!`;
       log("info", msg);
+      if (r.best) notifyRecord({ kind: "maze", attempt });
       return;
     }
     if (ev.type === "dinoHarvest") {
-      const r = R.addDinoHarvest(s, { bone: ev.bone, level: ev.level, cut: ev.cut, at: wallClock() });
-      if (r.best) log("info", `🦴 New best dinosaur harvest: ${ev.bone.toLocaleString("en-US")} Bone (${ev.cut} cut)`);
+      const rec = { bone: ev.bone, level: ev.level, cut: ev.cut, at: wallClock() };
+      const r = R.addDinoHarvest(s, rec);
+      if (r.best) {
+        log("info", `🦴 New best dinosaur harvest: ${ev.bone.toLocaleString("en-US")} Bone (${ev.cut} cut)`);
+        notifyRecord({ kind: "dino", rec });
+      }
     }
   }
 

@@ -7,6 +7,7 @@ import { createDemoGame, isDemoHash } from "./demo.js";
 import * as C from "./contracts.js";
 import { BOTS, GOALS, deltaText, recordMatch } from "./arena.js";
 import { tickEventLines } from "./weather.js";
+import { submitRecord } from "./onlineApi.js";
 
 export const SAVE_KEY = "farmer_save_v1";
 const FRAME_MS = 33; // UI refresh (~30 fps)
@@ -54,6 +55,8 @@ export default function useFarmEngine() {
   const [logs, setLogs] = useState([]);
   // Bumped on every drone error, also while other drones keep running (Megafarm).
   const [errorSeq, setErrorSeq] = useState(0);
+  // Bumped after an auto-submitted online score (the Online window refreshes).
+  const [onlineSeq, setOnlineSeq] = useState(0);
   const [view, setView] = useState(() => ({
     game: initial.game,
     stats: { running: false, ticks: 0, actions: 0, elapsed: 0, lastMeasure: null, runTicks: 0, ops: 0, lines: 0, chars: 0 },
@@ -105,6 +108,18 @@ export default function useFarmEngine() {
         }
       },
       onDroneError: () => setErrorSeq((n) => n + 1),
+      // v4 Online: a new LOCAL best goes to the leaderboard if this browser
+      // has an identity. Fire-and-forget: failures are silent, gameplay never
+      // waits on the network (a demo farm never records, so never submits).
+      onRecord: (ev) => {
+        if (demoRef.current) return;
+        void submitRecord(ev).then((r) => {
+          if (!r.sent) return;
+          const what = r.score.category === "maze" ? `Maze L${r.score.level}` : "Dino";
+          logBuffer.current.push({ id: ++logId, kind: "info", text: `🌐 Sent your new best (${what}) to the online leaderboard` });
+          setOnlineSeq((n) => n + 1);
+        });
+      },
       onStatus: (s) => {
         setStatus(s);
         if (s !== "running") {
@@ -357,6 +372,7 @@ export default function useFarmEngine() {
     view,
     status,
     errorSeq,
+    onlineSeq,
     logs,
     paused,
     setPaused,

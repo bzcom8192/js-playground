@@ -182,7 +182,7 @@ function makeSide(id, label, code, { seed, goal, clock, mapLine }) {
  * Resolves with:
  *  { goal, bot, seed, ticks, result: "win"|"draw"|"loss" (for the player),
  *    winner: "you"|"bot"|"draw", reason: "goal"|"error"|"cap"|"idle", text,
- *    amounts: { you, bot }, sides: { you, bot }: { amount, reachedAt, error, cut, drones } }
+ *    amounts: { you, bot }, sides: { you, bot }: { amount, reachedAt, error, cut, drones, ops } }
  */
 export async function runMatch(opts) {
   const {
@@ -296,7 +296,7 @@ export async function runMatch(opts) {
   const result = winner === "you" ? "win" : winner === "bot" ? "loss" : "draw";
   const ticks = Math.round(clock.t);
   const amounts = { you: you.amount(), bot: opp.amount() };
-  const sideInfo = (s) => ({ amount: s.amount(), reachedAt: s.reachedAt, error: s.error, cut: s.cut, drones: s.maxDrones });
+  const sideInfo = (s) => ({ amount: s.amount(), reachedAt: s.reachedAt, error: s.error, cut: s.cut, drones: s.maxDrones, ops: s.rt.stats().ops });
   const out = {
     goal: goal.id,
     bot: bot.id,
@@ -311,6 +311,42 @@ export async function runMatch(opts) {
   out.text = matchText(out);
   onProgress({ ticks, you: amounts.you, bot: amounts.bot, cap: tickCap });
   return out;
+}
+
+/** A solo run that did not reach the goal reports this many ticks (always loses). */
+export const DNF_TICKS = TICK_CAP + 1;
+
+/**
+ * runSolo({ code, goal, seed, mapLine, … }) — v4 friend arena: the player's
+ * program alone on the fixed arena world (same rules, unlocks and clock as a
+ * match; the opponent side runs an empty program). Used both to create a
+ * challenge and to answer one: two players' solo runs on the same seed are
+ * exactly the two sides of a match, since the sides never interact.
+ * Resolves with { goal, seed, reached, ticks, ops, amount, error, cut, drones, reason }
+ *  ticks: the tick the goal was reached, else DNF_TICKS. ops: API calls by then.
+ */
+export async function runSolo(opts) {
+  const { onProgress, ...rest } = opts;
+  const m = await runMatch({
+    ...rest,
+    bot: "rookie", // placeholder: its code is replaced by the empty program
+    botCode: "",
+    onProgress: onProgress ? (p) => onProgress({ ticks: p.ticks, you: p.you, cap: p.cap }) : undefined,
+  });
+  const you = m.sides.you;
+  const reached = you.reachedAt !== null && you.error === null;
+  return {
+    goal: m.goal,
+    seed: m.seed,
+    reached,
+    ticks: reached ? you.reachedAt : DNF_TICKS,
+    ops: you.ops,
+    amount: you.amount,
+    error: you.error,
+    cut: you.cut,
+    drones: you.drones,
+    reason: m.reason,
+  };
 }
 
 const fmt = (n) => Number(n || 0).toLocaleString("en-US");

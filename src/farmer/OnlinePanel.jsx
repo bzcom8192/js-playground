@@ -1,0 +1,495 @@
+// Online window (v4 phase 1): identity, the shared leaderboard and the friend
+// arena, all against the Node server in server/ (same-origin /api; see
+// onlineApi.js). Offline-first: if the API does not answer, the window says
+// so ("เซิร์ฟเวอร์ไม่ตอบสนอง") and nothing else in the game changes. The
+// demo farm can look but not register, submit or race.
+import { useCallback, useEffect, useRef, useState } from "react";
+import { GOALS, GOAL_IDS, TICK_CAP } from "./arena.js";
+import { playSolo } from "./arenaClient.js";
+import { ITEM_ICONS } from "./constants.js";
+import { randomSeed } from "./maze.js";
+import { buildProgram } from "./program.js";
+import { OLIVE } from "./farmerUi.jsx";
+import { CODE_MAX, NAME_MAX } from "./onlineRules.js";
+import { OFFLINE_MESSAGE, clearIdentity, loadIdentity, onlineApi, saveIdentity } from "./onlineApi.js";
+
+const fmt = (n) => Number(n || 0).toLocaleString("en-US");
+const signed = (d) => (d > 0 ? `+${d}` : d < 0 ? `−${-d}` : "±0");
+
+const TABS = [
+  { id: "maze1", label: "Maze L1", category: "maze", level: 1 },
+  { id: "maze2", label: "Maze L2", category: "maze", level: 2 },
+  { id: "maze3", label: "Maze L3", category: "maze", level: 3 },
+  { id: "dino", label: "Dino", category: "dino", level: null },
+];
+
+const OUTCOME = {
+  win: { title: "🏆 You win!", cls: "text-lime-700" },
+  loss: { title: "You lose", cls: "text-red-600" },
+  draw: { title: "Draw", cls: "text-stone-600" },
+};
+
+function Section({ title, right, children }) {
+  return (
+    <section className="space-y-1.5">
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="text-[11px] uppercase tracking-wider font-semibold text-stone-500">{title}</h3>
+        {right}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+const btn = "px-3 py-1 rounded text-xs font-semibold text-white hover:brightness-110 disabled:opacity-50 disabled:hover:brightness-100";
+
+function Leaderboard({ tab, board, meId }) {
+  if (!board) return <p className="text-center text-stone-400 text-xs py-3">Loading…</p>;
+  if (!board.entries.length) return <p className="text-center text-stone-400 text-xs py-3">No entries yet. Be the first!</p>;
+  const dino = tab.category === "dino";
+  return (
+    <table className="w-full text-[11px] tabular-nums">
+      <thead>
+        <tr className="text-[10px] uppercase tracking-wider text-stone-400">
+          <th className="text-left font-semibold w-8 py-0.5">#</th>
+          <th className="text-left font-semibold">Name</th>
+          {dino ? <th className="text-right font-semibold">Bone</th> : <th className="text-right font-semibold">Ticks / ops</th>}
+        </tr>
+      </thead>
+      <tbody>
+        {board.entries.map((e) => {
+          const mine = e.playerId === meId;
+          return (
+            <tr key={e.playerId} className={mine ? "bg-lime-100 font-semibold text-lime-900" : "odd:bg-white even:bg-stone-50 text-stone-700"}>
+              <td className="px-1 py-0.5 font-mono">{e.rank}</td>
+              <td className="truncate max-w-0 w-full">
+                {e.name}
+                {mine ? " (you)" : ""}
+              </td>
+              <td className="px-1 text-right font-mono whitespace-nowrap">
+                {dino ? `${fmt(e.value)} ${ITEM_ICONS.Bone}` : `${fmt(e.ticks)} / ${fmt(e.ops)}`}
+              </td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+}
+
+function SoloProgress({ p, goal }) {
+  const pct = Math.min(100, ((p.you || 0) / goal.amount) * 100);
+  return (
+    <div className="rounded-lg border border-stone-200 bg-white p-2 space-y-1" aria-live="polite">
+      <div className="flex justify-between text-[11px] text-stone-500">
+        <span className="font-semibold">{p.label}</span>
+        <span className="font-mono tabular-nums">
+          {fmt(p.ticks)} / {fmt(p.cap || TICK_CAP)} ticks
+        </span>
+      </div>
+      <div className="flex items-center gap-2 text-[11px]">
+        <div className="flex-1 h-2 rounded bg-stone-200 overflow-hidden">
+          <div className="h-full rounded" style={{ width: `${pct}%`, background: OLIVE }} />
+        </div>
+        <span className="w-20 shrink-0 text-right font-mono text-stone-700">
+          {fmt(p.you)} {ITEM_ICONS[goal.item]}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function AnswerCard({ r }) {
+  const o = OUTCOME[r.result] || OUTCOME.draw;
+  const goal = GOALS[r.goal];
+  const t = (ticks) => (ticks > TICK_CAP ? "did not finish" : `${fmt(ticks)} ticks`);
+  return (
+    <div className="rounded-lg border border-stone-200 bg-white p-2 space-y-1.5 text-xs">
+      <div className="flex items-center justify-between gap-2">
+        <span className={`font-bold ${o.cls}`}>
+          {o.title} <span className="font-normal text-stone-500">vs {r.author.name}</span>
+        </span>
+        <span className={`font-mono font-bold tabular-nums ${r.you.delta > 0 ? "text-lime-700" : r.you.delta < 0 ? "text-red-600" : "text-stone-500"}`} title="ELO change (K = 32)">
+          {signed(r.you.delta)} → {fmt(r.you.elo)}
+        </span>
+      </div>
+      <div className="grid grid-cols-2 gap-1.5 text-[11px]">
+        <div className="rounded bg-stone-50 border border-stone-200 px-2 py-1">
+          <div className="text-[10px] uppercase tracking-wider text-stone-400">You</div>
+          <div className="font-mono">
+            {t(r.you.ticks)} · {fmt(r.you.ops)} ops
+          </div>
+        </div>
+        <div className="rounded bg-stone-50 border border-stone-200 px-2 py-1">
+          <div className="text-[10px] uppercase tracking-wider text-stone-400 truncate">{r.author.name}</div>
+          <div className="font-mono">
+            {t(r.author.ticks)} · {fmt(r.author.ops)} ops
+          </div>
+        </div>
+      </div>
+      <p className="text-[10px] text-stone-400 font-mono">
+        {goal?.label} · seed {r.seed} · {r.author.name} {signed(r.author.delta)} → {fmt(r.author.elo)}
+      </p>
+      {r.authorCode && (
+        <details className="text-[11px] text-stone-500">
+          <summary className="cursor-pointer select-none">{r.author.name}&apos;s code</summary>
+          <pre className="mt-1 max-h-48 overflow-auto rounded bg-stone-900 text-stone-100 p-2 text-[10px] leading-snug">{r.authorCode}</pre>
+        </details>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Props: files, activeId (the main program = the active file, run with its
+ * helper files like ▶), demo, onlineSeq (bumped after an auto-submit),
+ * pushLog(kind, text), onExitDemo().
+ */
+export default function OnlinePanel({ files, activeId, demo, onlineSeq = 0, pushLog = () => {}, onExitDemo, api = onlineApi }) {
+  const [identity, setIdentity] = useState(() => loadIdentity());
+  const [profile, setProfile] = useState(null);
+  const [badIdentity, setBadIdentity] = useState(false);
+  const [offline, setOffline] = useState(false);
+  const [tabId, setTabId] = useState("maze1");
+  const [board, setBoard] = useState(null);
+  const [challenges, setChallenges] = useState(null);
+  const [nameText, setNameText] = useState("");
+  const [busy, setBusy] = useState(null); // "register" | "create" | `accept:<id>`
+  const [progress, setProgress] = useState(null);
+  const [goalId, setGoalId] = useState("hay500");
+  const [answer, setAnswer] = useState(null);
+  const [notice, setNotice] = useState(null);
+  const [error, setError] = useState(null);
+  const [reloadSeq, setReloadSeq] = useState(0);
+  const busyRef = useRef(false);
+
+  const tab = TABS.find((t) => t.id === tabId) || TABS[0];
+  const file = files.find((f) => f.id === activeId) || files[0];
+  const token = identity?.token;
+
+  // Network error → offline banner; API error → message.
+  const handle = useCallback((err) => {
+    if (err?.offline) setOffline(true);
+    else setError(String(err?.message || err));
+  }, []);
+
+  // Load everything the window shows (on open, Retry, tab change, auto-submit).
+  // All state updates happen after the awaits (never synchronously in the effect).
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const [lb, list, me] = await Promise.all([
+          api.leaderboard(tab.category, tab.level),
+          api.listChallenges(),
+          token
+            ? api.me(token).catch((err) => {
+                if (err?.status === 401) return null; // unknown token (e.g. the server's DB was reset)
+                throw err;
+              })
+            : Promise.resolve(undefined),
+        ]);
+        if (!alive) return;
+        setOffline(false);
+        setBoard(lb);
+        setChallenges(list.challenges || []);
+        if (me !== undefined) {
+          setProfile(me);
+          setBadIdentity(me === null);
+        }
+      } catch (err) {
+        if (alive) handle(err);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [api, tab.category, tab.level, token, onlineSeq, reloadSeq, handle]);
+
+  const reload = () => {
+    setError(null);
+    setReloadSeq((n) => n + 1);
+  };
+
+  const run = async (kind, fn) => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    setBusy(kind);
+    setError(null);
+    setNotice(null);
+    try {
+      await fn();
+    } catch (err) {
+      handle(err);
+    } finally {
+      busyRef.current = false;
+      setBusy(null);
+      setProgress(null);
+    }
+  };
+
+  const register = () =>
+    run("register", async () => {
+      if (demo) return;
+      const r = await api.register(nameText);
+      const id = { playerId: r.playerId, name: r.name, token: r.token };
+      saveIdentity(id);
+      setIdentity(id);
+      setProfile({ playerId: r.playerId, name: r.name, elo: r.elo });
+      setBadIdentity(false);
+      setNameText("");
+      pushLog("info", `🌐 Joined online as ${r.name} (ELO ${r.elo})`);
+    });
+
+  const forget = () => {
+    if (!confirm(`Forget the online identity “${identity?.name}” on this browser? Its token cannot be recovered, so you would need a new name.`)) return;
+    clearIdentity();
+    setIdentity(null);
+    setProfile(null);
+    setBadIdentity(false);
+  };
+
+  // The player's main program: the active file with its helper files.
+  const program = () => {
+    const prog = buildProgram(files, file.id);
+    if (!prog.code.trim()) throw new Error(`“${file.name}” is empty — write a program first.`);
+    if (prog.code.length > CODE_MAX) throw new Error(`Your program is too long to upload (${fmt(prog.code.length)} > ${fmt(CODE_MAX)} characters).`);
+    return prog;
+  };
+
+  const create = () =>
+    run("create", async () => {
+      if (demo || !token) return;
+      const prog = program();
+      const goal = GOALS[goalId];
+      const seed = randomSeed();
+      setProgress({ label: `Your run · ${goal.label}`, ticks: 0, you: 0, cap: TICK_CAP, goal: goalId });
+      const solo = await playSolo({
+        code: prog.code,
+        segments: prog.segments,
+        goal: goalId,
+        seed,
+        onProgress: (p) => setProgress({ ...p, label: `Your run · ${goal.label}`, goal: goalId }),
+      });
+      if (!solo.reached) {
+        throw new Error(
+          solo.error
+            ? `Your program failed: ${solo.error}`
+            : `Your program did not reach ${goal.label} within ${fmt(TICK_CAP)} ticks (held ${fmt(solo.amount)}). No challenge was posted.`,
+        );
+      }
+      const c = await api.createChallenge(token, { goal: goalId, seed, code: prog.code, authorTicks: solo.ticks, authorOps: solo.ops });
+      setNotice(`Challenge #${c.id} posted: ${goal.label} in ${fmt(solo.ticks)} ticks · ${fmt(solo.ops)} ops (seed ${seed}).`);
+      pushLog("info", `🌐 Posted a friend challenge: ${goal.label} in ${fmt(solo.ticks)} ticks (${file.name})`);
+      setReloadSeq((n) => n + 1);
+    });
+
+  const accept = (c) =>
+    run(`accept:${c.id}`, async () => {
+      if (demo || !token) return;
+      const prog = program();
+      setAnswer(null);
+      const full = await api.getChallenge(c.id); // still open? (and the author's code for afterwards)
+      if (full.status !== "open") {
+        setReloadSeq((n) => n + 1);
+        throw new Error("Someone answered this challenge first.");
+      }
+      const goal = GOALS[full.goal];
+      if (!goal) throw new Error(`Unknown goal ${full.goal}`);
+      const label = `Racing ${full.authorName} · ${goal.label}`;
+      setProgress({ label, ticks: 0, you: 0, cap: TICK_CAP, goal: full.goal });
+      const solo = await playSolo({
+        code: prog.code,
+        segments: prog.segments,
+        goal: full.goal,
+        seed: full.seed,
+        onProgress: (p) => setProgress({ ...p, label, goal: full.goal }),
+      });
+      const r = await api.answerChallenge(token, c.id, { ticks: solo.ticks, ops: solo.ops, code: prog.code });
+      setAnswer({ ...r, goal: full.goal, seed: full.seed, authorCode: full.code, error: solo.error });
+      setProfile((p) => (p ? { ...p, elo: r.you.elo } : p));
+      const word = { win: "win", loss: "loss", draw: "draw" }[r.result] || r.result;
+      pushLog(
+        "info",
+        `🌐 Friend arena: ${word} vs ${r.author.name} (${goal.label}, ${solo.reached ? `${fmt(solo.ticks)} ticks` : "did not finish"} vs ${fmt(full.authorTicks)}) — ELO ${signed(r.you.delta)} → ${r.you.elo}`,
+      );
+      setReloadSeq((n) => n + 1);
+    });
+
+  if (offline) {
+    return (
+      <div className="p-4 space-y-3 text-sm text-stone-700">
+        <p className="font-semibold">🌐 {OFFLINE_MESSAGE}</p>
+        <p className="text-xs text-stone-500 leading-relaxed">
+          The online server could not be reached. Everything else in the game works as before; your records stay on this device.
+        </p>
+        <button onClick={reload} className={btn} style={{ background: OLIVE }}>
+          ↻ Retry
+        </button>
+      </div>
+    );
+  }
+
+  const locked = demo || !!busy;
+  const elo = profile?.elo;
+
+  return (
+    <div className="p-3 space-y-4 text-sm text-stone-800">
+      {demo && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800 flex items-center justify-between gap-2">
+          <span>Demo farm: you can look around, but joining, submitting and racing are off.</span>
+          {onExitDemo && (
+            <button onClick={onExitDemo} className="shrink-0 font-semibold underline">
+              Back to my farm
+            </button>
+          )}
+        </div>
+      )}
+
+      <Section title="Identity">
+        {identity ? (
+          <div className="flex items-center justify-between rounded-lg border border-stone-200 bg-white px-3 py-2">
+            <div className="min-w-0">
+              <div className="text-[10px] uppercase tracking-wider text-stone-400">Playing as</div>
+              <div className="font-bold truncate">{identity.name}</div>
+            </div>
+            <div className="text-right">
+              <div className="text-[10px] uppercase tracking-wider text-stone-400">ELO</div>
+              <div className="font-mono font-black text-xl tabular-nums leading-tight">{elo === undefined ? "…" : fmt(elo)}</div>
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-center gap-1.5">
+            <input
+              value={nameText}
+              onChange={(e) => setNameText(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && nameText.trim() && !locked && register()}
+              disabled={locked}
+              maxLength={NAME_MAX}
+              placeholder="your name (1–24 characters)"
+              aria-label="Online name"
+              className="flex-1 min-w-0 px-2 py-1 rounded border border-stone-300 bg-white text-xs text-stone-800 disabled:opacity-60"
+            />
+            <button onClick={register} disabled={locked || !nameText.trim()} className={btn} style={{ background: OLIVE }}>
+              {busy === "register" ? "…" : "เข้าร่วม"}
+            </button>
+          </div>
+        )}
+        {badIdentity && (
+          <p className="text-[11px] text-red-600">
+            The server does not know this identity (its data may have been reset).{" "}
+            <button onClick={forget} className="underline font-semibold">
+              Forget it
+            </button>{" "}
+            and join again.
+          </p>
+        )}
+        {identity && !badIdentity && (
+          <p className="text-[10px] text-stone-400 leading-relaxed">
+            New local maze (L1–L3) and dinosaur records are sent automatically. Your token stays on this browser only (not in Save Data).{" "}
+            <button onClick={forget} className="underline hover:text-stone-600" disabled={!!busy}>
+              Forget identity
+            </button>
+          </p>
+        )}
+      </Section>
+
+      <Section
+        title="Leaderboard"
+        right={
+          <button onClick={reload} className="text-[11px] text-stone-400 hover:text-stone-700" title="Refresh">
+            ↻
+          </button>
+        }
+      >
+        <div className="flex gap-1" role="tablist">
+          {TABS.map((t) => (
+            <button
+              key={t.id}
+              role="tab"
+              aria-selected={t.id === tabId}
+              onClick={() => {
+                setBoard(null);
+                setTabId(t.id);
+              }}
+              className={`px-2 py-0.5 rounded text-[11px] font-semibold border ${
+                t.id === tabId ? "bg-stone-800 text-white border-stone-800" : "bg-white text-stone-600 border-stone-300 hover:border-stone-500"
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+        <div className="rounded-lg border border-stone-200 bg-white p-1.5 max-h-56 overflow-y-auto">
+          <Leaderboard tab={tab} board={board && board.category === tab.category && board.level === tab.level ? board : null} meId={identity?.playerId} />
+        </div>
+        <p className="text-[10px] text-stone-400">
+          Maze: fewest ticks, then fewest ops. Dino: biggest single harvest. Best entry per player, top 50.
+        </p>
+      </Section>
+
+      <Section title="Friend Arena">
+        <div className="flex items-end gap-1.5">
+          <label className="flex flex-col gap-0.5 min-w-0 flex-1">
+            <span className="text-[10px] uppercase tracking-wider text-stone-400">Goal</span>
+            <select
+              value={goalId}
+              onChange={(e) => setGoalId(e.target.value)}
+              disabled={locked}
+              className="px-1.5 py-1 rounded border border-stone-300 bg-white text-xs text-stone-800 disabled:opacity-60"
+            >
+              {GOAL_IDS.map((id) => (
+                <option key={id} value={id}>
+                  {GOALS[id].label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button onClick={create} disabled={locked || !identity || badIdentity} className={btn} style={{ background: OLIVE }} title="Run your program on a fresh random seed, then post it as a challenge">
+            {busy === "create" ? "Running…" : "สร้างคำท้า"}
+          </button>
+        </div>
+        <p className="text-[10px] text-stone-400 leading-relaxed">
+          Uses <span className="font-semibold text-stone-500">{file.name}</span> (with its helper files, like ▶) on the fixed 8×8 arena farm. Fewer ticks to the
+          goal wins, then fewer ops. ELO K = 32.{!identity && " Join above to race."}
+        </p>
+
+        {progress && <SoloProgress p={progress} goal={GOALS[progress.goal] || GOALS[goalId]} />}
+        {error && <p className="text-xs text-red-600 break-words">{error}</p>}
+        {notice && <p className="text-xs text-lime-700 break-words">{notice}</p>}
+        {answer && <AnswerCard r={answer} />}
+
+        <div className="space-y-1">
+          {challenges === null ? (
+            <p className="text-center text-stone-400 text-xs py-2">Loading…</p>
+          ) : challenges.length === 0 ? (
+            <p className="text-center text-stone-400 text-xs py-2">No open challenges. Post one!</p>
+          ) : (
+            challenges.map((c) => {
+              const own = c.authorId === identity?.playerId;
+              return (
+                <div key={c.id} className="flex items-center gap-2 text-[11px] rounded bg-white border border-stone-200 px-2 py-1">
+                  <span className="flex-1 min-w-0 truncate text-stone-700">
+                    <span className="font-semibold">{c.authorName}</span>
+                    <span className="text-stone-400"> ({c.authorElo})</span> · {GOALS[c.goal]?.label ?? c.goal}
+                  </span>
+                  <span className="font-mono tabular-nums text-stone-500" title={`${fmt(c.authorOps)} ops · seed ${c.seed}`}>
+                    {fmt(c.authorTicks)}t
+                  </span>
+                  <button
+                    onClick={() => accept(c)}
+                    disabled={locked || !identity || own || badIdentity}
+                    className="px-2 py-0.5 rounded text-[11px] font-semibold text-white bg-amber-700 hover:brightness-110 disabled:opacity-40"
+                    title={own ? "Your own challenge" : "Race your current program on this seed"}
+                  >
+                    {busy === `accept:${c.id}` ? "…" : own ? "yours" : "ท้าแข่ง"}
+                  </button>
+                </div>
+              );
+            })
+          )}
+        </div>
+      </Section>
+    </div>
+  );
+}

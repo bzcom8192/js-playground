@@ -25,6 +25,7 @@ import DocsPanel from "./DocsPanel.jsx";
 import RecordsPanel from "./RecordsPanel.jsx";
 import ContractsPanel from "./ContractsPanel.jsx";
 import ArenaPanel from "./ArenaPanel.jsx";
+import OnlinePanel from "./OnlinePanel.jsx";
 import { isDeliverable } from "./contracts.js";
 import { programSize } from "./records.js";
 import LogPanel from "./LogPanel.jsx";
@@ -101,7 +102,7 @@ function BigButton({ title, onClick, children, active }) {
       title={title}
       aria-label={title}
       onClick={onClick}
-      className={`relative w-11 h-11 md:w-12 md:h-12 flex items-center justify-center rounded-lg text-white shadow-[0_3px_8px_rgba(20,40,60,.35),inset_0_1px_0_rgba(255,255,255,.25)] hover:brightness-115 active:brightness-95 transition-[filter] ${
+      className={`relative w-10 h-10 min-[400px]:w-11 min-[400px]:h-11 md:w-12 md:h-12 flex items-center justify-center rounded-lg text-white shadow-[0_3px_8px_rgba(20,40,60,.35),inset_0_1px_0_rgba(255,255,255,.25)] hover:brightness-115 active:brightness-95 transition-[filter] ${
         active ? "ring-2 ring-white/70" : ""
       }`}
       style={{ background: OLIVE }}
@@ -606,7 +607,7 @@ export default function FarmerPage() {
   });
 
   const openFiles = files.filter((f) => windows[f.id]?.open);
-  // On mobile, show windows in a stable order (files first, then Info, Unlocks, Records, Contracts, Arena).
+  // On mobile, show windows in a stable order (files first, then Info, Unlocks, Records, Contracts, Arena, Online).
   const codeWindows = openFiles.map((f) => (
     <CodeWindow
       key={f.id}
@@ -752,6 +753,14 @@ export default function FarmerPage() {
     </FloatingWindow>
   );
 
+  const onlineWindow = windows.online?.open && (
+    <FloatingWindow key="online" title="Online" rect={windows.online} {...windowProps("online")} bodyClass="bg-white/95 flex flex-col" mobileBodyClass="h-[32rem]">
+      <div className="flex-1 overflow-y-auto min-h-0 bg-stone-50/90">
+        <OnlinePanel files={files} activeId={activeFile.id} demo={demo} onlineSeq={engine.onlineSeq} pushLog={pushLog} onExitDemo={exitDemo} />
+      </div>
+    </FloatingWindow>
+  );
+
   return (
     <div
       className={`farmer-bg relative w-full min-h-screen md:h-screen md:overflow-hidden text-gray-200 font-sans flex flex-col md:block ${
@@ -760,12 +769,12 @@ export default function FarmerPage() {
     >
       <ShortcutsModal open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} sections={SHORTCUT_SECTIONS} />
 
-      {/* Top bar: inventory (left) + six buttons (right). Floats on the background. */}
+      {/* Top bar: inventory (left) + seven buttons (right). Floats on the background. */}
       <div className="relative z-[60] flex items-start justify-between gap-3 px-3 pt-3 md:px-6 md:pt-5 md:absolute md:inset-x-0 md:top-0 pointer-events-none">
         <div className="pointer-events-auto min-w-0">
           <Inventory items={game.items} />
         </div>
-        <div className="pointer-events-auto relative flex gap-2 md:gap-3 shrink-0">
+        <div className="pointer-events-auto relative flex gap-1.5 min-[400px]:gap-2 md:gap-3 shrink-0">
           <BigButton title="Files: new / reopen / delete" onClick={() => setMenuOpen((o) => !o)} active={menuOpen}>
             <svg viewBox="0 0 24 24" width="24" height="24" stroke="currentColor" strokeWidth="3.2" strokeLinecap="round" aria-hidden="true">
               <path d="M12 4 V20 M4 12 H20" />
@@ -806,6 +815,11 @@ export default function FarmerPage() {
           <BigButton title="Arena: race your program against a bot (ELO rating)" onClick={() => toggleWindow("arena")} active={windows.arena?.open}>
             <span className="text-[22px] leading-none" aria-hidden="true">
               ⚔️
+            </span>
+          </BigButton>
+          <BigButton title="Online: shared leaderboard + friend arena" onClick={() => toggleWindow("online")} active={windows.online?.open}>
+            <span className="text-[22px] leading-none" aria-hidden="true">
+              🌐
             </span>
           </BigButton>
           {menuOpen && (
@@ -849,6 +863,7 @@ export default function FarmerPage() {
           {recordsWindow}
           {contractsWindow}
           {arenaWindow}
+          {onlineWindow}
         </>
       ) : (
         <div className="flex flex-col gap-3 p-3">
@@ -858,6 +873,7 @@ export default function FarmerPage() {
           {recordsWindow}
           {contractsWindow}
           {arenaWindow}
+          {onlineWindow}
           <div className="flex justify-center gap-4 text-xs text-white/80 py-2">
             <a href={ROUTES.playground} className="hover:text-white">
               ← Playground
