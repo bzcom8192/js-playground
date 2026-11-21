@@ -82,6 +82,7 @@ const MAZES = [
   ["Treasure 💰", "Sits on the path tile farthest from your start. measure() returns its direction from you: the axis with the larger distance wins (ties → East/West); null when you are on it."],
   ["Gold 🪙", "harvest() on the treasure → Gold = farm tiles (size²) × Mazes level. The maze disappears and the farm is empty Grassland again."],
   ["Meanwhile", "plant, till, swap and trade fail inside a maze. clear() (or Expand) removes the maze without a reward. Try example 7 (a wall follower)."],
+  ["Seed & records 🏆", "Every maze comes from a seed (printed in Output: Maze seed: …). Same seed + farm size + start tile → the same maze. Solving a maze spawned in the same run records its ticks and ops (every API call = 1 op); see the 🏆 Records window, where you can also replay a seed."],
 ];
 
 const DINOSAURS = [

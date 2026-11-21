@@ -22,6 +22,8 @@ import FloatingWindow, { SquareButton } from "./FloatingWindow.jsx";
 import { Glyph, OLIVE, ORANGE } from "./farmerUi.jsx";
 import UnlocksPanel from "./UnlocksPanel.jsx";
 import DocsPanel from "./DocsPanel.jsx";
+import RecordsPanel from "./RecordsPanel.jsx";
+import { programSize } from "./records.js";
 import LogPanel from "./LogPanel.jsx";
 
 const MonacoEditor = lazy(() => import("../components/MonacoEditor"));
@@ -104,6 +106,14 @@ const GridIcon = (
     <rect x="9" y="2.5" width="6" height="6" rx="1" />
     <rect x="3" y="14.5" width="6" height="6" rx="1" />
     <rect x="15" y="14.5" width="6" height="6" rx="1" />
+  </svg>
+);
+
+const TrophyIcon = (
+  <svg viewBox="0 0 24 24" width="25" height="25" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinejoin="round" strokeLinecap="round" aria-hidden="true">
+    <path d="M7 3.5 H17 V9 A5 5 0 0 1 7 9 Z" />
+    <path d="M7 5.5 H4 V7 A3.5 3.5 0 0 0 7.6 10.5 M17 5.5 H20 V7 A3.5 3.5 0 0 1 16.4 10.5" />
+    <path d="M12 14 V18 M8 20.5 H16" />
   </svg>
 );
 
@@ -440,7 +450,11 @@ export default function FarmerPage() {
         }
       }
       setRunningFileId(id);
-      run(prog.code, { label: prog.mainFile.name, mapLine: (line) => mapLine(prog.segments, line) });
+      run(prog.code, {
+        label: prog.mainFile.name,
+        mapLine: (line) => mapLine(prog.segments, line),
+        program: programSize(prog.mainFile.code),
+      });
     },
     [files, run, reportError, exitDemo, fm],
   );
@@ -573,7 +587,7 @@ export default function FarmerPage() {
   });
 
   const openFiles = files.filter((f) => windows[f.id]?.open);
-  // On mobile, show windows in a stable order (files first, then Info, Unlocks).
+  // On mobile, show windows in a stable order (files first, then Info, Unlocks, Records).
   const codeWindows = openFiles.map((f) => (
     <CodeWindow
       key={f.id}
@@ -679,6 +693,14 @@ export default function FarmerPage() {
     </FloatingWindow>
   );
 
+  const recordsWindow = windows.records?.open && (
+    <FloatingWindow key="records" title="Records" rect={windows.records} {...windowProps("records")} bodyClass="bg-white/95 flex flex-col" mobileBodyClass="h-[28rem]">
+      <div className="flex-1 overflow-y-auto min-h-0 bg-stone-50/90">
+        <RecordsPanel game={game} stats={view.stats} onSetSeed={engine.setPendingSeed} />
+      </div>
+    </FloatingWindow>
+  );
+
   return (
     <div
       className={`farmer-bg relative w-full min-h-screen md:h-screen md:overflow-hidden text-gray-200 font-sans flex flex-col md:block ${
@@ -687,7 +709,7 @@ export default function FarmerPage() {
     >
       <ShortcutsModal open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} sections={SHORTCUT_SECTIONS} />
 
-      {/* Top bar: inventory (left) + three buttons (right). Floats on the background. */}
+      {/* Top bar: inventory (left) + four buttons (right). Floats on the background. */}
       <div className="relative z-[60] flex items-start justify-between gap-3 px-3 pt-3 md:px-6 md:pt-5 md:absolute md:inset-x-0 md:top-0 pointer-events-none">
         <div className="pointer-events-auto min-w-0">
           <Inventory items={game.items} />
@@ -712,6 +734,9 @@ export default function FarmerPage() {
                 {affordable}
               </span>
             )}
+          </BigButton>
+          <BigButton title="Records: best mazes, attempt histograms, replay seed" onClick={() => toggleWindow("records")} active={windows.records?.open}>
+            {TrophyIcon}
           </BigButton>
           {menuOpen && (
             <FilesMenu
@@ -751,12 +776,14 @@ export default function FarmerPage() {
           {codeWindows}
           {infoWindow}
           {unlocksWindow}
+          {recordsWindow}
         </>
       ) : (
         <div className="flex flex-col gap-3 p-3">
           {codeWindows}
           {infoWindow}
           {unlocksWindow}
+          {recordsWindow}
           <div className="flex justify-center gap-4 text-xs text-white/80 py-2">
             <a href={ROUTES.playground} className="hover:text-white">
               ← Playground

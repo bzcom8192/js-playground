@@ -63,6 +63,8 @@ export function createDemoGame() {
   });
   s.drone.x = 4;
   s.drone.y = 4;
+  // Demo farms never write personal records (records.js checks this flag).
+  s.demo = true;
   return s;
 }
 

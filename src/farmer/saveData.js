@@ -2,6 +2,9 @@
 // "Game data" = the world save (`farmer_save_v1`) + the code files
 // (`farmer_files_v1`). Window layout (`farmer_ui_v1`) is per-machine UI
 // state and is deliberately NOT exported.
+// Personal records (v3) live inside the world save (`save.records`), so they
+// travel with an export automatically; files exported before records existed
+// simply have no `records` field and import with empty records.
 export const EXPORT_FORMAT = "js-farmer-save";
 export const EXPORT_VERSION = 1;
 

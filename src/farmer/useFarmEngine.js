@@ -50,7 +50,7 @@ export default function useFarmEngine() {
   const [errorSeq, setErrorSeq] = useState(0);
   const [view, setView] = useState(() => ({
     game: initial.game,
-    stats: { running: false, ticks: 0, actions: 0, elapsed: 0, lastMeasure: null },
+    stats: { running: false, ticks: 0, actions: 0, elapsed: 0, lastMeasure: null, runTicks: 0, ops: 0, lines: 0, chars: 0 },
     frame: 0,
   }));
 
@@ -175,16 +175,17 @@ export default function useFarmEngine() {
     return true;
   }, [pushLog]);
 
-  /** run(code, { label, mapLine }) — label is shown in the log ("▶ Run crops"). */
+  /** run(code, { label, mapLine, program }) — label is shown in the log ("▶ Run crops");
+   *  program = { lines, chars } of the main file (run metrics / records). */
   const run = useCallback(
-    (code, { label, mapLine } = {}) => {
+    (code, { label, mapLine, program } = {}) => {
       const rt = runtimeRef.current;
       if (!rt) return;
       exitDemo();
       pausedRef.current = false;
       setPausedState(false);
       pushLog("info", label ? `▶ Run ${label}` : "▶ Run");
-      rt.run(code, { mapLine });
+      rt.run(code, { mapLine, program });
     },
     [pushLog, exitDemo],
   );
@@ -220,6 +221,17 @@ export default function useFarmEngine() {
       save();
     },
     [save],
+  );
+
+  /** Records window: the seed the next maze uses (null = random). Saved at once. */
+  const setPendingSeed = useCallback(
+    (seed) => {
+      exitDemo();
+      gameRef.current.pendingSeed = seed;
+      dirtyRef.current = true;
+      save();
+    },
+    [exitDemo, save],
   );
 
   const clearFarm = useCallback(() => {
@@ -290,6 +302,7 @@ export default function useFarmEngine() {
     isRunning,
     importSave,
     clearFarm,
+    setPendingSeed,
     buy,
     resetSave,
     saveNow: save,

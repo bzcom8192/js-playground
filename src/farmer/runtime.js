@@ -11,6 +11,21 @@
 // steps them round-robin and none can starve the others or the UI.
 // Pause/Stop act on the whole session; an error stops only the drone that
 // threw it (the session reports "error" once every drone has finished).
+//
+// Run metrics (v3): a run (Run press → Stop / program end / error) counts
+//  - ops: every call of a farmer API function, across ALL drones combined.
+//    The rule is simply "if the runtime hands it to the program, it counts":
+//    every action, every sense (also the free ones like num_items, get_pos_x,
+//    get_time), print / quick_print and the console.* aliases — 1 op per call,
+//    counted on entry, whatever the call then returns (also locked / failed
+//    calls). Constants (Entities, North, …) are not calls, and the loop guards
+//    the transform injects (__loopGuard etc.) are not player calls.
+//  - ticks: the run clock in ticks = the longest drone timeline. Each drone's
+//    timeline is its own tick count (get_tick_count) plus the spawner's clock
+//    when it was spawned, so with one drone it is exactly drone 0's ticks.
+//  - program size of the main file (non-empty lines, characters).
+// Maze records use the counters at the maze spawn vs at the treasure harvest
+// (both inside the same run; see worldEvent).
 
 import { transform } from "./transform.js";
 import {
@@ -25,6 +40,7 @@ import {
   Unlocks,
 } from "./constants.js";
 import * as W from "./world.js";
+import * as R from "./records.js";
 
 export const STOP = Symbol("farmer-stop");
 
@@ -104,6 +120,8 @@ export function createRuntime(opts) {
     now = defaultNow,
     yieldFn = defaultYield,
     rng = Math.random,
+    // Wall clock for record timestamps.
+    wallClock = Date.now,
   } = opts;
 
   let current = null; // the current session
@@ -111,12 +129,15 @@ export function createRuntime(opts) {
 
   const log = (kind, text) => onLog({ kind, text });
 
-  function makeSession(body, mapLine) {
+  function makeSession(body, mapLine, program) {
     let resolveDone;
     const donePromise = new Promise((r) => (resolveDone = r));
     return {
       body, // transformed program source, compiled once per drone
       mapLine,
+      program, // { lines, chars } of the main file
+      ops: 0, // farmer API calls, all drones combined
+      maze: null, // { ref, ticks, ops } — counters when this run spawned the current maze
       ctxs: [],
       stopped: false,
       finished: false,
@@ -164,13 +185,15 @@ export function createRuntime(opts) {
 
   // drone: the world drone object this instance moves (null = drone 0, i.e.
   // whatever `state.drone` is, exactly as before Megafarm).
-  function makeCtx(session, drone) {
+  // t0: the run clock (ticks) at which this drone started (its spawner's clock).
+  function makeCtx(session, drone, t0 = 0) {
     let resolveStop;
     const stopPromise = new Promise((r) => (resolveStop = r));
     const ctx = {
       session,
       index: session.ctxs.length,
       drone,
+      t0,
       status: "running",
       stopped: false,
       thrown: false,
@@ -189,6 +212,50 @@ export function createRuntime(opts) {
     };
     session.ctxs.push(ctx);
     return ctx;
+  }
+
+  // The run clock in ticks: the longest drone timeline (see the header).
+  const runTicks = (session) => session.ctxs.reduce((m, c) => Math.max(m, c.t0 + c.ticks), 0);
+
+  // A score-relevant world event during one of this run's actions.
+  function worldEvent(ctx, s, ev) {
+    const session = ctx.session;
+    if (ev.type === "mazeSpawn") {
+      session.maze = { ref: ev.maze, ticks: runTicks(session), ops: session.ops };
+      log("info", `Maze seed: ${ev.seed}${ev.replay ? " (replay)" : ""}`);
+      return;
+    }
+    if (ev.type === "mazeSolve") {
+      const snap = session.maze && session.maze.ref === ev.maze ? session.maze : null;
+      session.maze = null;
+      const seed = ev.maze?.seed;
+      if (!snap || seed === null || seed === undefined) {
+        log("info", "🏁 Maze solved — not timed (it was spawned before this run)");
+        return;
+      }
+      const attempt = {
+        level: ev.level,
+        seed,
+        size: ev.size,
+        sx: ev.maze.start?.x ?? 0,
+        sy: ev.maze.start?.y ?? 0,
+        ticks: Math.round(runTicks(session) - snap.ticks),
+        ops: session.ops - snap.ops,
+        lines: session.program.lines,
+        chars: session.program.chars,
+        at: wallClock(),
+      };
+      const r = R.addMazeAttempt(s, attempt);
+      const fmt = (n) => n.toLocaleString("en-US");
+      let msg = `🏁 Maze solved in ${fmt(attempt.ticks)} ticks · ${fmt(attempt.ops)} ops`;
+      if (r.best) msg += ` — new best for Mazes level ${ev.level}!`;
+      log("info", msg);
+      return;
+    }
+    if (ev.type === "dinoHarvest") {
+      const r = R.addDinoHarvest(s, { bone: ev.bone, level: ev.level, cut: ev.cut, at: wallClock() });
+      if (r.best) log("info", `🦴 New best dinosaur harvest: ${ev.bone.toLocaleString("en-US")} Bone (${ev.cut} cut)`);
+    }
   }
 
   // "Drone 2: " in front of errors from spawned drones (drone 0 logs as before).
@@ -275,7 +342,9 @@ export function createRuntime(opts) {
         ctx.busy = true;
         try {
           const s = state();
-          const res = report(name, asDrone(s, () => fn(s, ...args)));
+          const [raw, events] = W.withEvents(() => asDrone(s, () => fn(s, ...args)));
+          const res = report(name, raw);
+          for (const ev of events) worldEvent(ctx, s, ev);
           ctx.ticks += ticks;
           ctx.actions++;
           ctx.guardsSinceAction = 0;
@@ -362,7 +431,7 @@ export function createRuntime(opts) {
           return { ok: false, msg: "only works inside a running program" };
         }
         const res = W.spawnDrone(s);
-        if (res.ok) startDrone(session, res.drone);
+        if (res.ok) startDrone(session, res.drone, ctx.t0 + ctx.ticks);
         return res;
       }),
 
@@ -476,6 +545,18 @@ export function createRuntime(opts) {
         }
       },
     };
+
+    // Ops: every function the program can call counts (see the header) —
+    // all of the API above except the transform's __loop* helpers.
+    const counted = (fn) =>
+      function (...args) {
+        if (!session.finished) session.ops++;
+        return fn.apply(this, args);
+      };
+    for (const name of Object.keys(api)) {
+      if (typeof api[name] === "function" && !name.startsWith("__")) api[name] = counted(api[name]);
+    }
+    api.console = Object.fromEntries(Object.entries(api.console).map(([k, f]) => [k, counted(f)]));
     return api;
   }
 
@@ -518,8 +599,8 @@ export function createRuntime(opts) {
 
   // spawn_drone(): the new drone starts on the next microtask, outside the
   // spawning action (so none of its code runs inside the caller's call).
-  function startDrone(session, drone) {
-    const ctx = makeCtx(session, drone);
+  function startDrone(session, drone, t0) {
+    const ctx = makeCtx(session, drone, t0);
     Promise.resolve().then(() => {
       if (session.stopped || session.finished) return finish(ctx, "stopped");
       launch(ctx, compile(session.body, ctx));
@@ -529,8 +610,9 @@ export function createRuntime(opts) {
   /**
    * run(code, { mapLine }) — mapLine(line) → { name, line, main } maps a line of
    * the combined multi-file program back to its file (see program.js).
+   * program: { lines, chars } of the main file (default: measured from `code`).
    */
-  function run(code, { mapLine } = {}) {
+  function run(code, { mapLine, program } = {}) {
     stop(true);
     setPaused(false);
     // A new Run starts with one drone: idle helpers (from the last run or a
@@ -543,7 +625,7 @@ export function createRuntime(opts) {
     } catch (err) {
       compileError = err;
     }
-    const session = makeSession(body, mapLine);
+    const session = makeSession(body, mapLine, program ?? R.programSize(code));
     current = session;
     const ctx = makeCtx(session, null);
     let compiled;
@@ -579,12 +661,20 @@ export function createRuntime(opts) {
     finishSession(session, "stopped", null, silent);
   }
 
-  // Drone 0's numbers (the info strip follows drone 0) + how many drones run.
+  // Drone 0's numbers (the info strip follows drone 0) + how many drones run,
+  // plus the run metrics. Read-only snapshot; the UI samples it.
   function stats() {
     const session = current;
-    if (!session) return { running: false, ticks: 0, actions: 0, elapsed: 0, lastMeasure: null, drones: 0 };
+    if (!session) {
+      return { running: false, ticks: 0, actions: 0, elapsed: 0, lastMeasure: null, drones: 0, runTicks: 0, ops: 0, lines: 0, chars: 0 };
+    }
     const ctx = session.ctxs[0];
     return {
+      // Run metrics (all drones): run clock in ticks, API calls, main file size.
+      runTicks: Math.round(runTicks(session)),
+      ops: session.ops,
+      lines: session.program.lines,
+      chars: session.program.chars,
       running: !session.finished,
       ticks: ctx.ticks,
       actions: ctx.actions,
