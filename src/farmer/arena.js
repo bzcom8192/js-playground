@@ -48,9 +48,10 @@ export const TICK_MS = 100; // world growth step (virtual ms), as on the page
 
 /**
  * The fixed arena unlock set: everything up to Megafarm at level 1, the farm
- * at 8×8 — except Speed (level 0: buying it is part of the race) and Mazes /
+ * at 8×8 — except Speed (level 0: buying it is part of the race), Mazes /
  * Dinosaurs (locked: maze and dinosaur goals are out of scope, and with them
- * the only fresh-world Gold source is gone). Bots may still buy upgrades with
+ * the only fresh-world Gold source is gone) and Rice (locked: rice goals are
+ * out of scope, and Rice → Gold would bring a Gold source back). Bots may still buy upgrades with
  * unlock() like on a normal farm.
  */
 export const ARENA_UNLOCKS = Object.freeze({
@@ -65,6 +66,7 @@ export const ARENA_UNLOCKS = Object.freeze({
   Pumpkins: 1,
   Sunflowers: 1,
   Fertilizer: 1,
+  Rice: 0, // v3 phase 5: no rice in the arena (no rice goal; see RESULT13.md)
   Cactus: 1,
   Mazes: 0,
   Dinosaurs: 0,

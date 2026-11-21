@@ -17,6 +17,7 @@ type UnlockType = keyof typeof Unlocks;
 /**
  * Entity types that can be on a tile. Hedge / Treasure only appear in a maze;
  * every tile of the dinosaur's body is a Dinosaur; Apples spawn while it lives.
+ * Dead_Pumpkin / Dead_Rice are spoiled crops: harvest() just clears them.
  */
 declare const Entities: {
 ${names(Entities)}
@@ -57,8 +58,11 @@ declare const West: "West";
 declare function harvest(): boolean;
 /**
  * Plant an entity under the drone. Needs the Plant unlock plus the entity's own
- * unlock; Carrots/Pumpkins/Sunflowers/Cactus need Soil. Seed cost is paid
+ * unlock; Carrots/Pumpkins/Sunflowers/Cactus/Rice need Soil. Seed cost is paid
  * automatically (see get_cost). Planting over Grass replaces it.
+ * Entities.Rice (Rice unlock, 1 Carrot) also needs the tile's water ≥ 0.5.
+ * Growing rice stops on a tile with water < 0.2 and withers into Dead_Rice
+ * after more than 200 dry world ticks in a row (20 s). Ripe: 3 Rice (5 at L2).
  * Entities.Dinosaur (Dinosaurs unlock, 10 Gold) hatches a length-1 dinosaur
  * that roams by itself and grows by eating apples. One per farm. 200 ticks.
  */
@@ -89,7 +93,11 @@ declare function swap(direction: Direction): boolean;
  * dinosaur and its apples disappear with the old farm).
  */
 declare function use_item(item: ItemType, n?: number): boolean;
-/** Buy items: Fertilizer costs 1 Pumpkin, Water costs 1 Carrot. Fails inside a maze. 200 ticks. */
+/**
+ * Trade n times. Buy: Items.Fertilizer costs 1 Pumpkin, Items.Water costs 1
+ * Carrot. Sell: Items.Rice pays 2 Gold per Rice (Rice unlock).
+ * Fails inside a maze. 200 ticks.
+ */
 declare function trade(item: ItemType, n?: number): boolean;
 /** Buy the next level of an unlock, if affordable. 200 ticks. */
 declare function unlock(unlock: UnlockType): boolean;
@@ -124,8 +132,8 @@ declare function get_world_size(): number;
 declare function num_items(item: ItemType): number;
 /**
  * Cost of the next level of an unlock, or the seed cost of an entity, e.g.
- * { Wood: 1, Hay: 1 }. null if maxed / free. Shared names (Cactus, Grass)
- * resolve to the unlock.
+ * { Wood: 1, Hay: 1 }. null if maxed / free. Shared names (Cactus, Grass,
+ * Rice) resolve to the unlock.
  */
 declare function get_cost(thing: UnlockType | EntityType): Partial<Record<ItemType, number>> | null;
 /** Current level of an unlock (0 = locked). Entities map to their unlock. */

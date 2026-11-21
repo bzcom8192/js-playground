@@ -359,4 +359,45 @@ while (true) {
 }
 `,
   },
+  {
+    id: "rice",
+    name: "10. Rice Paddy",
+    needs: ["Rice", "Watering", "Senses"],
+    code: `// Rice Paddy — needs: Rice, Watering, Senses (Rice needs Carrots for till()).
+// Rice lives in water: plant() needs the tile's water ≥ 0.5, and growing
+// rice stops below 0.2 and withers after 20 s dry. So every pass tops each
+// paddy up to 0.5 (buying Water for Carrots when the tank is low), plants,
+// harvests ripe rice (3 each, 5 at Rice level 2) and sells it: 1 Rice → 2 Gold.
+const n = get_world_size();
+
+function wet_paddy() {
+  const need = Math.ceil((0.5 - get_water()) / 0.25);
+  if (need <= 0) return true;
+  if (num_items(Items.Water) < need) trade(Items.Water, need);
+  return use_item(Items.Water, need);
+}
+
+while (true) {
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < n; j++) {
+      const e = get_entity_type();
+      if (e === Entities.Dead_Rice || (e === Entities.Rice && can_harvest())) {
+        harvest();
+      }
+      if (get_ground_type() !== Grounds.Soil) till();
+      if (get_entity_type() === Entities.Rice) {
+        if (get_water() < 0.25) wet_paddy(); // keep growing rice off the 0.2 line
+      } else if (wet_paddy()) {
+        plant(Entities.Rice);
+      }
+      move(North);
+    }
+    move(East);
+  }
+  const rice = num_items(Items.Rice);
+  if (rice > 0) trade(Items.Rice, rice);
+  print("Sold", rice, "Rice. Gold:", num_items(Items.Gold));
+}
+`,
+  },
 ];

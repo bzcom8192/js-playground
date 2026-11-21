@@ -50,6 +50,8 @@ export const CONTRACT_ITEMS = {
   Wood: { tier: 0, needs: null, perTile: 3, reward: "Gold", value: 0.03 },
   Carrot: { tier: 1, needs: "Carrots", perTile: 2, reward: "Gold", value: 0.1 },
   Pumpkin: { tier: 2, needs: "Pumpkins", perTile: 2, reward: "Gold", value: 0.25 },
+  // v3 phase 5: Rice sits between Pumpkin and Cactus (tier 2.5: budget ×3.5).
+  Rice: { tier: 2.5, needs: "Rice", perTile: 2, reward: "Gold", value: 0.375 },
   Cactus: { tier: 3, needs: "Cactus", perTile: 2, reward: "Gold", value: 0.5 },
   Gold: { tier: 4, needs: "Mazes", perTile: 1, reward: "Bone", value: 0.5 },
   Bone: { tier: 5, needs: "Dinosaurs", perTile: 1, reward: "Bone", value: 1 },

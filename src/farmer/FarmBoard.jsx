@@ -241,6 +241,30 @@ function Crop({ type, p, t, z, dinoPart, dinoDir }) {
           <E size={t * 0.62} style={at(t, 0.19, 0.6)}>🌻</E>
         </Plant>
       );
+    case "Rice":
+    case "Dead_Rice": {
+      // A paddy clump of 🌾: green-gold while growing, gold when ripe;
+      // the withered variant is a grey-brown, slumped clump.
+      const dead = type === "Dead_Rice";
+      const tint = dead
+        ? "grayscale(.75) sepia(.55) brightness(.8)"
+        : p >= 1
+          ? "hue-rotate(18deg) saturate(1.2)"
+          : "hue-rotate(55deg) saturate(1.1)";
+      return (
+        <Plant t={t} scale={dead ? 1 : grow} z={z} bottom={0.1}>
+          <div
+            className={`absolute inset-0 ${dead ? "" : "farmer-sway"}`}
+            style={{ filter: tint, ...(dead ? { transform: "rotate(14deg) scaleY(.7)", transformOrigin: "50% 100%" } : null) }}
+            title={dead ? "Dead rice" : "Rice"}
+          >
+            <E size={t * 0.56} style={at(t, 0.08, 0.06, { transform: "rotate(-10deg)" })}>🌾</E>
+            <E size={t * 0.62} style={at(t, 0.3, 0.02)}>🌾</E>
+            <E size={t * 0.56} style={at(t, 0.5, 0.06, { transform: "rotate(10deg) scaleX(-1)" })}>🌾</E>
+          </div>
+        </Plant>
+      );
+    }
     case "Cactus":
       return (
         <Plant t={t} scale={grow} z={z}>

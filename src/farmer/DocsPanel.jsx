@@ -6,12 +6,12 @@ const API = [
     title: "Actions — take time (200 ticks), no await needed",
     items: [
       ["harvest()", "Harvest the tile. Ripe → yield; unripe → destroyed (unripe grass is left alone). On the dinosaur: cuts off that segment and its tail → Bone."],
-      ["plant(entity)", "Plant Entities.X (Plant unlock + its own unlock). Seed cost is paid automatically. Entities.Dinosaur hatches the dinosaur."],
+      ["plant(entity)", "Plant Entities.X (Plant unlock + its own unlock). Seed cost is paid automatically. Entities.Rice needs Soil with water ≥ 0.5. Entities.Dinosaur hatches the dinosaur."],
       ["move(dir)", "North / East / South / West. Wraps around the edges. Hedges block it (returns false)."],
       ["till()", "Grassland ⇄ Soil, removes the entity. Needs Carrots. Not on the dinosaur / an apple."],
       ["swap(dir)", "Swap entity with neighbour (no wrap). Needs Cactus. Not with the dinosaur / an apple."],
       ["use_item(item, n=1)", "Items.Water: +0.25 water. Items.Fertilizer: −2 s growth (on a grown Bush with Mazes: spawns a maze)."],
-      ["trade(item, n=1)", "Fertilizer = 1 Pumpkin, Water = 1 Carrot."],
+      ["trade(item, n=1)", "Buy: Fertilizer = 1 Pumpkin, Water = 1 Carrot. Sell: Items.Rice → 2 Gold per Rice."],
       ["unlock(Unlocks.X)", "Buy the next level from code."],
       ["clear()", "Reset farm to empty grassland (no maze, no dinosaur), this drone to (0,0)."],
       ["do_a_flip()", "600 ticks of pure style."],
@@ -30,7 +30,7 @@ const API = [
       ["get_water() 🔒", "Water level 0…1 here."],
       ["get_world_size()", "Farm side length."],
       ["num_items(item)", "Inventory count."],
-      ["get_cost(thing)", "Unlock cost or seed cost, e.g. {Wood: 1, Hay: 1}. Cactus/Grass → unlock."],
+      ["get_cost(thing)", "Unlock cost or seed cost, e.g. {Wood: 1, Hay: 1}. Cactus/Grass/Rice → unlock."],
       ["num_unlocked(thing)", "Unlock level (entities map to their unlock)."],
       ["can_move(dir)", "Always true in an open field; false into a Hedge or over a maze's edge."],
       ["get_time() / get_tick_count()", "Seconds since Run (one clock for all drones) / this drone's ticks."],
@@ -45,11 +45,11 @@ const API = [
   {
     title: "Constants",
     items: [
-      ["Entities", "Grass, Bush, Tree, Carrot, Pumpkin, Sunflower, Cactus, Dead_Pumpkin, Hedge, Treasure, Dinosaur, Apple"],
-      ["Items", "Hay, Wood, Carrot, Pumpkin, Power, Cactus, Fertilizer, Water, Gold, Bone"],
+      ["Entities", "Grass, Bush, Tree, Carrot, Pumpkin, Sunflower, Cactus, Dead_Pumpkin, Hedge, Treasure, Dinosaur, Apple, Rice, Dead_Rice"],
+      ["Items", "Hay, Wood, Carrot, Pumpkin, Power, Cactus, Rice, Fertilizer, Water, Gold, Bone"],
       ["Grounds", "Grassland, Soil"],
       ["Weather", "Plain strings: \"Sunny\", \"Rain\", \"Storm\", \"Drought\" (what get_weather() returns)."],
-      ["Unlocks", "Speed, Expand, Plant, Senses, Grass, Carrots, Trees, Watering, Pumpkins, Sunflowers, Fertilizer, Cactus, Mazes, Dinosaurs, Megafarm"],
+      ["Unlocks", "Speed, Expand, Plant, Senses, Grass, Carrots, Trees, Watering, Pumpkins, Sunflowers, Fertilizer, Rice, Cactus, Mazes, Dinosaurs, Megafarm"],
       ["North East South West", "Directions (plain strings)."],
     ],
   },
@@ -86,6 +86,10 @@ const RULES = [
     "Cactus 🌵",
     "2 s, Soil, seed 1 Pumpkin, size 0–9. Harvesting a ripe cactus harvests EVERY cactus. n = ripe cacti. If every pair of neighbouring ripe cacti is sorted (West ≤ East and South ≤ North) you get n², otherwise n. Unripe cacti are lost. × Cactus level.",
   ],
+  [
+    "Rice 🌾",
+    "9 s (6 s at Rice level 2), Soil, seed 1 Carrot. A paddy crop: plant() fails unless the tile's water is ≥ 0.5. While growing it needs water ≥ 0.2: on a drier tile it stops growing, and after more than 200 dry world ticks in a row (20 s) it withers into Dead_Rice (harvest just clears it). → 3 Rice per plant (5 at level 2). Rain keeps paddies wet; Drought dries them 3× faster. trade(Items.Rice) sells 1 Rice for 2 Gold.",
+  ],
   ["Water 💧", "Growth speed × (1 + 4 × water). Water evaporates (−0.02/s). Tank: +1 every 10 s ÷ Watering level, cap 5 + 5 × level."],
   ["Fertilizer 🧪", "Skips 2 s of growth on the plant under the drone."],
   ["Speed ⏩", "×2 drone speed per level (on top of the speed selector)."],
@@ -111,14 +115,14 @@ const DINOSAURS = [
 
 const CONTRACTS = [
   ["Daily", "Every day (local midnight) brings 3 delivery orders from the day's seed: the same for every player with the same unlocks and farm size. Open them with the 📜 button."],
-  ["Pool", "Only items you can already produce: Hay and Wood always, Carrot / Pumpkin / Cactus with their unlock, Gold with Mazes, Bone with Dinosaurs. Amounts grow with your farm."],
+  ["Pool", "Only items you can already produce: Hay and Wood always, Carrot / Pumpkin / Rice / Cactus with their unlock, Gold with Mazes, Bone with Dinosaurs. Amounts grow with your farm."],
   ["Reward", "≈ amount × item value × 1.5, paid in Gold (Bone for Gold and Bone contracts). Deliver with the button or deliver_contract(id); totals show in 🏆 Records."],
   ["Deadline", "Each contract has a tick budget on the farm clock, which runs only while your programs run (the same ticks as get_tick_count). Past it, or at the next day, an unfinished contract expires."],
 ];
 
 const ARENA = [
   ["Match", "The ⚔️ window races one of your files against a bot. Each side gets its own fresh 8×8 farm from the same seed and runs headless on one shared virtual clock, so a match takes seconds, not minutes."],
-  ["Arena farm", "Everything up to Megafarm unlocked at level 1 (8 drones possible), Speed 0, no Mazes or Dinosaurs, no contracts, empty inventory. unlock() works as usual."],
+  ["Arena farm", "Everything up to Megafarm unlocked at level 1 (8 drones possible), Speed 0, no Mazes, Dinosaurs or Rice, no contracts, empty inventory. unlock() works as usual."],
   ["Goals", "First to hold 500 Hay, 800 Wood or 300 Pumpkin wins. At 200,000 ticks (1 tick = 1 ms of game time, an action is 200) the bigger amount wins; equal is a draw."],
   ["Rules", "An error loses at once. A loop that never acts is throttled and runs into the tick cap. Same seed + same programs → the same result: Math.random() is seeded too."],
   ["Bots", "Rookie 800, Pro 1200, Ace 1600: plain programs (their code is in the window). Your rating starts at 1000; standard ELO, K = 32. The last 20 matches are kept in your save."],

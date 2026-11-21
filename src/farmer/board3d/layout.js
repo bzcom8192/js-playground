@@ -32,7 +32,7 @@ const clamp01 = (v) => Math.max(0, Math.min(1, v));
 
 /**
  * Growth → model scale [sx, sy, sz] for an entity type at displayed progress p.
- * Wheat shoots up (strong y scale); everything else grows uniformly from 30 %.
+ * Wheat and rice shoot up (strong y scale); everything else grows uniformly from 30 %.
  */
 export function growthScale(type, p) {
   const q = clamp01(p);
@@ -40,7 +40,12 @@ export function growthScale(type, p) {
     const s = 0.55 + 0.45 * q;
     return [s, 0.18 + 0.82 * q, s];
   }
-  if (type === "Dead_Pumpkin") return [1, 1, 1];
+  if (type === "Rice") {
+    // Rice shoots up out of the paddy like wheat, from slimmer seedlings.
+    const s = 0.6 + 0.4 * q;
+    return [s, 0.22 + 0.78 * q, s];
+  }
+  if (type === "Dead_Pumpkin" || type === "Dead_Rice") return [1, 1, 1];
   const s = 0.3 + 0.7 * q;
   return [s, s, s];
 }

@@ -5,7 +5,7 @@
 // too fast to read. The strip instead shows a plain snapshot of these fields,
 // re-sampled every STRIP_REFRESH_MS (see useSampled.js). Display-only: the
 // engine still runs at full speed.
-import { ENTITY_INFO } from "./constants.js";
+import { ENTITY_INFO, RICE_WITHER_TICKS } from "./constants.js";
 import * as W from "./world.js";
 import { WEATHER_TICKS_PER_SEC, weatherLabel } from "./weather.js";
 
@@ -19,6 +19,8 @@ export function stripFields(game, stats, status, paused) {
     ? `${ENTITY_INFO[e.type]?.icon ?? ""} ${e.type.replace("_", " ")}${e.progress < 1 ? ` ${Math.floor(e.progress * 100)}%` : ""}${dinoPart(game)} / ${tile.ground}`
     : tile.ground;
   if (game.maze) what += ` · ${mazeNeighbours(game)}`;
+  // Growing rice on a dry tile: how long it has been dry (it withers past the limit).
+  if (e?.type === "Rice" && e.progress < 1 && e.dry > 0) what += ` · dry ${Math.floor(e.dry)}/${RICE_WITHER_TICKS}`;
   const fields = {
     x: game.drone.x,
     y: game.drone.y,

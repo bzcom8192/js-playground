@@ -14,6 +14,8 @@ export const Entities = Object.freeze({
   Treasure: "Treasure",
   Dinosaur: "Dinosaur",
   Apple: "Apple",
+  Rice: "Rice",
+  Dead_Rice: "Dead_Rice",
 });
 
 export const Items = Object.freeze({
@@ -27,6 +29,7 @@ export const Items = Object.freeze({
   Water: "Water",
   Gold: "Gold",
   Bone: "Bone",
+  Rice: "Rice",
 });
 
 export const Grounds = Object.freeze({
@@ -50,6 +53,7 @@ export const Unlocks = Object.freeze({
   Mazes: "Mazes",
   Dinosaurs: "Dinosaurs",
   Megafarm: "Megafarm",
+  Rice: "Rice",
 });
 
 // Directions are plain strings; dx/dy follow "x grows East, y grows North".
@@ -74,6 +78,7 @@ export const ITEM_ORDER = [
   "Pumpkin",
   "Power",
   "Cactus",
+  "Rice",
   "Fertilizer",
   "Water",
   "Gold",
@@ -91,6 +96,7 @@ export const ITEM_ICONS = {
   Water: "💧",
   Gold: "🪙",
   Bone: "🦴",
+  Rice: "🌾",
 };
 
 // Per-entity rules. growTime is in seconds at water level 0.
@@ -143,6 +149,16 @@ export const ENTITY_INFO = {
   // Apples only spawn by themselves while a dinosaur is alive (cost: null).
   Dinosaur: { icon: "🦖", growTime: 0, unlock: "Dinosaurs", soil: false, cost: { Gold: 10 } },
   Apple: { icon: "🍎", growTime: 0, unlock: "Dinosaurs", soil: false, cost: null },
+  // Rice (v3 phase 5): a paddy crop. Soil with water ≥ RICE_PLANT_WATER to
+  // plant; withers into Dead_Rice when kept dry (see the RICE_* knobs below).
+  Rice: {
+    icon: "🌾",
+    growTime: 9, // 1.5× the Carrot's 6 s
+    unlock: "Rice",
+    soil: true,
+    cost: { Carrot: 1 },
+  },
+  Dead_Rice: { icon: "🌾", growTime: 0, unlock: null, soil: true, cost: null },
 };
 
 // World sizes per Expand level (TFWR-like progression, max 12×12).
@@ -157,6 +173,15 @@ export const DEAD_PUMPKIN_CHANCE = 0.2;
 export const WATER_BASE_INTERVAL = 10; // s per Water item at Watering level 1
 export const DINO_STEP_SECONDS = 0.3; // game seconds per dinosaur step (3 world ticks of 100 ms)
 export const APPLE_SPAWN_SECONDS = 1.5; // game seconds between apple spawns while a dinosaur lives
+// Rice (v3 phase 5). Ticks here are world ticks (0.1 s of farm time, the same
+// tick the weather counts — see weather.js), so 200 ticks = 20 s.
+export const RICE_PLANT_WATER = 0.5; // plant(Rice) needs tile water ≥ this
+export const RICE_DRY_WATER = 0.2; // a growing rice tile below this is "dry" (and stops growing)
+export const RICE_WITHER_TICKS = 200; // dry for MORE than this many consecutive ticks → Dead_Rice
+export const RICE_TICKS_PER_SEC = 10; // world ticks per second (= weather.js WEATHER_TICKS_PER_SEC)
+export const RICE_YIELD = [0, 3, 5]; // Rice per harvested plant, by Rice level (L1 3, L2 5)
+export const RICE_L2_GROWTH = 1.5; // Rice L2 grows 1.5× faster (9 s → 6 s)
+export const RICE_GOLD = 2; // trade(Items.Rice): 1 Rice → 2 Gold
 /** Max apples on the farm at once: one per 16 tiles, at least 1 (12×12 → 9). */
 export const appleCap = (size) => Math.max(1, Math.floor((size * size) / 16));
 
@@ -286,6 +311,15 @@ export const UNLOCKS = [
     cost: () => ({ Pumpkin: 100 }),
   },
   {
+    id: "Rice",
+    name: "Rice",
+    icon: "🌾",
+    desc: "Unlocks Rice (Soil with water ≥ 0.5, seed: 1 Carrot): 3 Rice per plant, 5 at level 2 (and 1.5× faster growth). Kept dry (water < 0.2) for 20 s it withers. trade(Items.Rice) sells 1 Rice for 2 Gold.",
+    requires: "Pumpkins",
+    maxLevel: 2,
+    cost: (l) => (l === 0 ? { Pumpkin: 1500, Carrot: 500 } : { Pumpkin: 3000, Gold: 150 }),
+  },
+  {
     id: "Cactus",
     name: "Cactus",
     icon: "🌵",
@@ -353,4 +387,5 @@ export const ENTITY_UNLOCK = {
   Treasure: "Mazes",
   Dinosaur: "Dinosaurs",
   Apple: "Dinosaurs",
+  Rice: "Rice",
 };

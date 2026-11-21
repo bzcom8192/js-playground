@@ -1,6 +1,6 @@
 // Low-poly farm models built only from three.js primitives.
 //
-// Every static model (wheat patch, bush, tree, carrots, pumpkin, sunflower,
+// Every static model (wheat patch, rice paddy, bush, tree, carrots, pumpkin, sunflower,
 // cactus, maze hedge, treasure chest, apple, dinosaur segment) is ONE merged, vertex-coloured geometry drawn with a shared
 // flat-shaded material, so a model costs one draw call. Geometries are cached
 // per variant and shared by every tile that shows that model; the kit owns
@@ -240,6 +240,41 @@ function wheatGeometry(seed) {
     ear.translate(0, h + 0.08, 0);
     const es = 0.92 + r() * 0.08;
     parts.push(part(ear, new THREE.Color(es, es, es), m));
+  }
+  return merge(parts);
+}
+
+// Rice (v3 phase 5): a paddy plant = 3×3 hills of thin stalks, each with a
+// drooping grain panicle. Far fewer stalks than a wheat patch, set in
+// clumps, so a paddy reads as rice planted in hills over the tile's water.
+// Living rice is tinted green → gold by growth like wheat (per-instance
+// material); `dead` is a grey-brown, slumped variant on the flat material.
+const RICE_HILLS = 3;
+const RICE_STALKS = 6; // per hill
+function riceGeometry(seed, dead = false) {
+  const r = rng(seed);
+  const parts = [];
+  for (let hx = 0; hx < RICE_HILLS; hx++) {
+    for (let hz = 0; hz < RICE_HILLS; hz++) {
+      const cx = ((hx + 0.5) / RICE_HILLS - 0.5) * 0.74 + (r() - 0.5) * 0.06;
+      const cz = ((hz + 0.5) / RICE_HILLS - 0.5) * 0.74 + (r() - 0.5) * 0.06;
+      for (let i = 0; i < RICE_STALKS; i++) {
+        const a = (i / RICE_STALKS) * Math.PI * 2 + r() * 0.6;
+        const lean = (dead ? 0.55 : 0.16) + r() * (dead ? 0.35 : 0.14);
+        const h = (dead ? 0.26 : 0.4) + r() * 0.14;
+        const m = M(cx + Math.cos(a) * 0.025, 0, cz + Math.sin(a) * 0.025, Math.sin(a) * lean, 0, -Math.cos(a) * lean);
+        const stalk = new THREE.CylinderGeometry(0.006, 0.01, h, 3, 1, true);
+        stalk.translate(0, h / 2, 0);
+        const sc = dead ? ["#8a7a62", "#7a6a55"][i % 2] : ["#c7dc8a", "#b4d07a"][i % 2];
+        parts.push(part(stalk, sc, m));
+        // A drooping panicle: a slim spindle bent out over the stalk's tip.
+        const head = new THREE.OctahedronGeometry(0.022);
+        head.scale(0.8, 3.2, 0.8);
+        head.rotateZ(dead ? 1.2 : 0.75);
+        head.translate(-0.03, h + 0.02, 0);
+        parts.push(part(head, dead ? "#9a8668" : "#f4e7a8", m));
+      }
+    }
   }
   return merge(parts);
 }
@@ -648,6 +683,15 @@ export function createModelKit() {
         obj.userData.wheatMaterial = mat;
         break;
       }
+      case "Rice": {
+        const mat = wheatBase.clone();
+        obj = meshOf(geo(`rice${v}`, () => riceGeometry(701 + v)), mat);
+        obj.userData.wheatMaterial = mat;
+        break;
+      }
+      case "Dead_Rice":
+        obj = meshOf(geo(`riceDead${v}`, () => riceGeometry(751 + v, true)), flat);
+        break;
       case "Bush":
         obj = meshOf(geo(`bush${v}${grown}`, () => bushGeometry(201 + v, grown)), flat);
         break;

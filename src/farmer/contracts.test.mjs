@@ -107,7 +107,7 @@ test("pool respects unlocks: Hay/Wood always, each other item only with its unlo
     [{ Cactus: 1 }, ["Hay", "Wood", "Cactus"]],
     [{ Mazes: 1 }, ["Hay", "Wood", "Gold"]],
     [{ Dinosaurs: 1 }, ["Hay", "Wood", "Bone"]],
-    [ALL, ["Hay", "Wood", "Carrot", "Pumpkin", "Cactus", "Gold", "Bone"]],
+    [ALL, ["Hay", "Wood", "Carrot", "Pumpkin", "Rice", "Cactus", "Gold", "Bone"]], // Rice: v3 phase 5
   ];
   for (const [unlocks, pool] of cases) {
     const s = farm(6, unlocks);

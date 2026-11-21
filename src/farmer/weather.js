@@ -56,8 +56,8 @@ export const DROUGHT_WET_WATER = 0.5; // …unless the tile's water is ≥ 0.5
 export const STORM_GROWTH = 1.5;
 export const STORM_STRIKES = 3; // lightning moments per storm segment
 export const STORM_MAX_TILES = 3; // each strikes 1…3 crop tiles
-/** Entities lightning can destroy (planted crops; grass, maze, dinosaur are spared). */
-export const STRIKABLE = new Set(["Bush", "Tree", "Carrot", "Pumpkin", "Sunflower", "Cactus"]);
+/** Entities lightning can destroy (planted crops incl. Rice; grass, dead crops, maze, dinosaur are spared). */
+export const STRIKABLE = new Set(["Bush", "Tree", "Carrot", "Pumpkin", "Sunflower", "Cactus", "Rice"]);
 
 // Demo farm: a fixed seed (the demo is never saved). Segment 0 of it is Rain.
 export const DEMO_WEATHER_SEED = 12;

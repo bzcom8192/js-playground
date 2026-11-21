@@ -279,8 +279,8 @@ export default function ArenaPanel({ game, files, activeId, demo, onRecord, onEx
           </button>
         </div>
         <p className="text-[10px] text-stone-400 leading-relaxed">
-          {bot.desc} Both farms are fresh 8×8 fields from the same seed with the arena unlocks (everything up to Megafarm; Speed 0; no Mazes or
-          Dinosaurs). First to hold {goal.label} wins; after {fmt(TICK_CAP)} ticks the bigger amount wins. An error loses. Your file runs with its
+          {bot.desc} Both farms are fresh 8×8 fields from the same seed with the arena unlocks (everything up to Megafarm; Speed 0; no Mazes,
+          Dinosaurs or Rice). First to hold {goal.label} wins; after {fmt(TICK_CAP)} ticks the bigger amount wins. An error loses. Your file runs with its
           helper files, like ▶. <code>get_arena_goal()</code> tells your program the goal.
         </p>
         <details className="text-[11px] text-stone-500">

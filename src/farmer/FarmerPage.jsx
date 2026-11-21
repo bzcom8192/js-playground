@@ -41,8 +41,11 @@ const SHORTCUT_SECTIONS = [
 const GLOBALS_CACHE = new Map();
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 
-// Inventory order from the reference: Hay, Wood, Carrot, Pumpkin, Power, Cactus, Water, Fertilizer, Gold, Bone.
-const INVENTORY = ["Hay", "Wood", "Carrot", "Pumpkin", "Power", "Cactus", "Water", "Fertilizer", "Gold", "Bone"];
+// Inventory order from the reference: Hay, Wood, Carrot, Pumpkin, Power, Cactus, Water, Fertilizer, Gold, Bone
+// (+ Rice after Cactus, v3 phase 5).
+const INVENTORY = ["Hay", "Wood", "Carrot", "Pumpkin", "Power", "Cactus", "Rice", "Water", "Fertilizer", "Gold", "Bone"];
+// Rice shares Hay's 🌾 icon; a green-gold tint tells the two slots apart.
+const ITEM_TINT = { Rice: "hue-rotate(38deg) saturate(1.25)" };
 
 const STATUS_LABEL = {
   idle: ["bg-white/50", "Idle"],
@@ -76,7 +79,10 @@ function Inventory({ items }) {
           title={`${k}: ${(items[k] || 0).toLocaleString("en-US")}`}
           className={`flex flex-col items-center shrink-0 select-none ${items[k] > 0 ? "" : "opacity-55"}`}
         >
-          <span className="text-[26px] sm:text-[30px] leading-none drop-shadow-[0_3px_2px_rgba(20,40,60,.35)]">
+          <span
+            className="text-[26px] sm:text-[30px] leading-none drop-shadow-[0_3px_2px_rgba(20,40,60,.35)]"
+            style={ITEM_TINT[k] ? { filter: ITEM_TINT[k] } : undefined}
+          >
             {ITEM_ICONS[k]}
           </span>
           <span className="farmer-count mt-1 text-[13px] sm:text-[15px] font-extrabold text-white leading-none tabular-nums">

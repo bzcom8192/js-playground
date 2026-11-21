@@ -13,6 +13,13 @@ import {
   FERTILIZER_SECONDS,
   GRASS_REGROW_DELAY,
   ITEM_ORDER,
+  RICE_DRY_WATER,
+  RICE_GOLD,
+  RICE_L2_GROWTH,
+  RICE_PLANT_WATER,
+  RICE_TICKS_PER_SEC,
+  RICE_WITHER_TICKS,
+  RICE_YIELD,
   UNLOCKS,
   UNLOCK_BY_ID,
   WATER_BASE_INTERVAL,
@@ -65,6 +72,7 @@ export function makeEntity(type, rng = Math.random, progress = 0) {
   // Petals / size are rolled at planting time (readable with measure()).
   if (type === "Sunflower") e.petals = 7 + Math.floor(rng() * 9); // 7..15
   if (type === "Cactus") e.size = Math.floor(rng() * 10); // 0..9
+  if (type === "Rice") e.dry = 0; // consecutive dry world ticks (see simulate)
   return e;
 }
 
@@ -182,6 +190,7 @@ export function effectiveGrowTime(state, x, y) {
   const e = tileAt(state, x, y).entity;
   if (!e) return 0;
   const base = ENTITY_INFO[e.type]?.growTime ?? 1;
+  if (e.type === "Rice") return level(state, "Rice") >= 2 ? base / RICE_L2_GROWTH : base;
   if (e.type !== "Tree") return base;
   let adj = 0;
   for (const n of orthoNeighbors(state, x, y)) {
@@ -196,6 +205,12 @@ function mature(tile, rng) {
   if (e.type === "Pumpkin" && rng() < DEAD_PUMPKIN_CHANCE) {
     tile.entity = { type: "Dead_Pumpkin", progress: 1 };
   }
+  if (e.type === "Rice") delete e.dry; // ripe rice no longer needs water
+}
+
+/** Rice that stayed dry too long: like Dead_Pumpkin, harvest() just clears it. */
+function witherRice(tile) {
+  tile.entity = { type: "Dead_Rice", progress: 1 };
 }
 
 // ---------- real-time simulation ----------
@@ -275,7 +290,16 @@ function simulate(state, dt, rng, fx) {
     for (let x = 0; x < n; x++) {
       const tile = tileAt(state, x, y);
       const e = tile.entity;
-      if (e && e.progress < 1) {
+      // Growing rice (v3 phase 5) needs its paddy wet: on a dry tile
+      // (water < RICE_DRY_WATER at the start of the step) it doesn't grow and
+      // counts dry world ticks; more than RICE_WITHER_TICKS in a row and it
+      // withers. Any wet step resets the count. Same water model as every
+      // crop — rain / drought reach it through tile.water, nothing special.
+      if (e && e.type === "Rice" && e.progress < 1 && tile.water < RICE_DRY_WATER) {
+        e.dry = (e.dry || 0) + dt * RICE_TICKS_PER_SEC;
+        if (e.dry > RICE_WITHER_TICKS + 1e-9) witherRice(tile);
+      } else if (e && e.progress < 1) {
+        if (e.type === "Rice") e.dry = 0;
         let rate = 1 + 4 * tile.water;
         if (fx !== WX.NO_WEATHER) rate *= fx.growth * (tile.water >= WX.DROUGHT_WET_WATER ? 1 : fx.dryGrowth);
         const gt = effectiveGrowTime(state, x, y) || 1;
@@ -439,6 +463,10 @@ export function harvest(state) {
       add(state, "Power", power * Math.max(1, level(state, "Sunflowers")));
       break;
     }
+    case "Rice":
+      // A single-tile crop: no groups, no giants.
+      add(state, "Rice", RICE_YIELD[Math.min(RICE_YIELD.length - 1, Math.max(1, level(state, "Rice")))]);
+      break;
     case "Cactus": {
       let grown = 0;
       for (const t of state.tiles) {
@@ -449,7 +477,7 @@ export function harvest(state) {
       for (const t of state.tiles) if (t.entity?.type === "Cactus") removeEntity(t);
       break;
     }
-    default: // Dead_Pumpkin and anything else: just cleared
+    default: // Dead_Pumpkin, Dead_Rice and anything else: just cleared
       break;
   }
   if (tile.entity === e) removeEntity(tile);
@@ -470,6 +498,9 @@ export function plant(state, type, rng = Math.random) {
   }
   if (type === "Dinosaur" && state.dino) return fail("only one dinosaur per farm — harvest the old one first");
   if (info.soil && tile.ground !== "Soil") return fail(`${type} needs Soil — till() first`);
+  if (type === "Rice" && !(tile.water >= RICE_PLANT_WATER)) {
+    return fail(`Rice needs a wet paddy: water ≥ ${RICE_PLANT_WATER} (this tile has ${tile.water.toFixed(2)}) — use_item(Items.Water) or wait for rain`);
+  }
   if (!canAfford(state, info.cost)) {
     return fail(`Not enough items for ${type} seed (${costText(info.cost)})`);
   }
@@ -545,21 +576,26 @@ export function useItem(state, item, n = 1, rng = Math.random) {
   return fail(`Can't use ${String(item)}`);
 }
 
+// trade(item, n): pay `cost` × n, get `gives` × n. Fertilizer and Water are
+// bought (you get the item); Rice is sold (you pay the Rice, get Gold).
 export const TRADES = {
-  Fertilizer: { cost: { Pumpkin: 1 }, unlock: "Fertilizer" },
-  Water: { cost: { Carrot: 1 }, unlock: "Watering" },
+  Fertilizer: { cost: { Pumpkin: 1 }, gives: { Fertilizer: 1 }, unlock: "Fertilizer" },
+  Water: { cost: { Carrot: 1 }, gives: { Water: 1 }, unlock: "Watering" },
+  Rice: { cost: { Rice: 1 }, gives: { Gold: RICE_GOLD }, unlock: "Rice" },
 };
+
+const times = (bag, n) => Object.fromEntries(Object.entries(bag).map(([k, v]) => [k, v * n]));
 
 export function trade(state, item, n = 1) {
   n = Math.max(1, Math.floor(n));
-  const t = TRADES[item];
-  if (!t) return fail(`Can't trade for ${String(item)} (only Fertilizer, Water)`);
+  const t = Object.hasOwn(TRADES, item) ? TRADES[item] : null;
+  if (!t) return fail(`Can't trade ${String(item)} (only ${Object.keys(TRADES).join(", ")})`);
   if (!isUnlocked(state, t.unlock)) return fail(`${item} is locked`, t.unlock);
   if (state.maze) return fail(MAZE_BLOCKED);
-  const cost = Object.fromEntries(Object.entries(t.cost).map(([k, v]) => [k, v * n]));
+  const cost = times(t.cost, n);
   if (!canAfford(state, cost)) return fail(`Not enough items (${costText(cost)})`);
   pay(state, cost);
-  add(state, item, n);
+  for (const [k, v] of Object.entries(times(t.gives, n))) add(state, k, v);
   return ok;
 }
 
@@ -770,6 +806,7 @@ export function deserialize(data) {
       tile.water = Math.max(0, Math.min(1, Number(t?.w) || 0));
       if (t?.e && ENTITY_INFO[t.e.type]) {
         tile.entity = { ...t.e, progress: Math.max(0, Math.min(1, Number(t.e.progress) || 0)) };
+        if (tile.entity.type === "Rice") restoreRice(tile.entity);
       }
       return tile;
     });
@@ -785,6 +822,14 @@ export function deserialize(data) {
   state.records = sanitizeRecords(data.records);
   state.pendingSeed = parseSeed(data.pendingSeed);
   return state;
+}
+
+// A saved growing rice plant keeps its dry-tick count (clamped; junk → 0).
+// Ripe rice has none. Saves from before Rice simply have no rice tiles.
+function restoreRice(e) {
+  const d = Number(e.dry);
+  if (e.progress >= 1) delete e.dry;
+  else e.dry = Number.isFinite(d) && d >= 0 ? Math.min(d, RICE_WITHER_TICKS) : 0;
 }
 
 // The save's weather section. A save written before weather has no

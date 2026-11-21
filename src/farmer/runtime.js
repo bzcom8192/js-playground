@@ -517,7 +517,7 @@ export function createRuntime(opts) {
       get_cost: sense(
         "get_cost",
         (s, thing) => {
-          // Names shared by an unlock and an entity (Cactus, Grass) resolve to the unlock.
+          // Names shared by an unlock and an entity (Cactus, Grass, Rice) resolve to the unlock.
           if (UNLOCK_BY_ID[thing]) {
             const c = W.unlockCost(s, thing);
             return c ? { ...c } : null;

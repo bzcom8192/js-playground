@@ -61,6 +61,7 @@ export function createDemoGame() {
     Fertilizer: 155,
     Gold: 1440,
     Bone: 625,
+    Rice: 480,
   });
   s.drone.x = 4;
   s.drone.y = 4;
