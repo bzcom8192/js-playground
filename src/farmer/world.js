@@ -25,6 +25,7 @@ import {
 import { generateSeededMaze, parseSeed, randomSeed, treasureDirection } from "./maze.js";
 import { emptyRecords, sanitizeRecords } from "./records.js";
 import { farmClock, sanitizeContracts } from "./contracts.js";
+import { emptyArena, sanitizeArena } from "./arenaRating.js";
 
 const ok = { ok: true };
 
@@ -98,6 +99,8 @@ export function createGame() {
     // until contracts.ensureContracts generates them).
     clock: 0,
     contracts: null,
+    // v3 phase 3: the arena rating + last matches (see arenaRating.js).
+    arena: emptyArena(),
   };
   // TFWR start: a single grassland tile with grass on it.
   state.tiles[0].entity = makeEntity("Grass", Math.random, 1);
@@ -446,7 +449,7 @@ export function useItem(state, item, n = 1, rng = Math.random) {
     state.items.Fertilizer -= n;
     const gt = effectiveGrowTime(state, state.drone.x, state.drone.y) || 1;
     e.progress += (FERTILIZER_SECONDS * n) / gt;
-    if (e.progress >= 1) mature(tile, Math.random);
+    if (e.progress >= 1) mature(tile, rng);
     return ok;
   }
   return fail(`Can't use ${String(item)}`);
@@ -630,6 +633,8 @@ export function serialize(state) {
     // only for show and never persisted (the demo is never saved anyway).
     clock: Math.floor(farmClock(state)),
     contracts: state.demo ? null : sanitizeContracts(state.contracts),
+    // v3 phase 3: arena rating + match history (own section, not in records).
+    arena: state.demo ? null : sanitizeArena(state.arena),
     // progress (0..1) is stored directly, so growth survives a reload.
     tiles: state.tiles.map((t) => ({
       g: t.ground === "Soil" ? "S" : "G",
@@ -647,6 +652,7 @@ export function deserialize(data) {
   base.records = sanitizeRecords(data.records);
   base.clock = Math.floor(farmClock(data));
   base.contracts = sanitizeContracts(data.contracts);
+  base.arena = sanitizeArena(data.arena);
   const size = Number(data.size);
   if (!WORLD_SIZES.includes(size)) return base;
   if (!Array.isArray(data.tiles) || data.tiles.length !== size * size) return base;

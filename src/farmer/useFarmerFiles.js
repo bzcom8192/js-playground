@@ -1,6 +1,6 @@
 // Code files + floating-window layout for the Farmer page.
 //  farmer_files_v1 : { v: 1, nextId, files: [{ id, name, code }] }
-//  farmer_ui_v1    : { v: 1, zTop, active, windows: { [fileId | "info" | "unlocks" | "records" | "contracts"]: { x, y, w, h, z, minimized, open } } }
+//  farmer_ui_v1    : { v: 1, zTop, active, windows: { [fileId | "info" | "unlocks" | "records" | "contracts" | "arena"]: { x, y, w, h, z, minimized, open } } }
 //  farmer_code     : kept as a mirror of the FIRST file (the migrated/seeded
 //                    "crops" file), for backward compatibility.
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -87,6 +87,7 @@ export function defaultRect(key, files, vp = viewport()) {
   else if (key === "unlocks") r = { x: vw * 0.36, y: vh * 0.1, w: Math.min(440, vw * 0.34), h: vh * 0.76, open: false };
   else if (key === "records") r = { x: vw * 0.4, y: vh * 0.12, w: Math.min(420, vw * 0.32), h: vh * 0.7, open: false };
   else if (key === "contracts") r = { x: vw * 0.44, y: vh * 0.14, w: Math.min(400, vw * 0.3), h: vh * 0.56, open: false };
+  else if (key === "arena") r = { x: vw * 0.48, y: vh * 0.12, w: Math.min(420, vw * 0.32), h: vh * 0.72, open: false };
   else if (String(key) === String(first)) r = { x: vw * 0.52, y: vh * 0.18, w: vw * 0.46, h: vh * 0.62, open: true };
   else if (String(key) === String(second)) r = { x: vw * 0.62, y: vh * 0.78, w: vw * 0.26, h: vh * 0.2, open: true };
   else {
@@ -105,7 +106,7 @@ function loadUi(files) {
   }
   const saved = data && data.v === 1 && data.windows && typeof data.windows === "object" ? data.windows : {};
   const windows = {};
-  for (const key of [...files.map((f) => String(f.id)), "info", "unlocks", "records", "contracts"]) {
+  for (const key of [...files.map((f) => String(f.id)), "info", "unlocks", "records", "contracts", "arena"]) {
     const s = saved[key];
     if (s && [s.x, s.y, s.w, s.h].every(Number.isFinite)) {
       windows[key] = {

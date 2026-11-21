@@ -181,6 +181,15 @@ declare function get_contracts(): Contract[];
  */
 declare function deliver_contract(id: string): boolean;
 
+// ---------- arena ----------
+
+/**
+ * Arena (⚔️): the goal of the match this program is running in, e.g.
+ * { item: "Hay", amount: 500 } — first to hold that many wins. null outside
+ * the arena (on your own farm). Free, 1 tick.
+ */
+declare function get_arena_goal(): { item: ItemType; amount: number } | null;
+
 // ---------- output ----------
 
 /** Print to the log panel. */
@@ -228,6 +237,7 @@ export const FARMER_GLOBALS = Object.fromEntries(
     "max_drones",
     "get_contracts",
     "deliver_contract",
+    "get_arena_goal",
     "print",
     "quick_print",
   ].map((n) => [n, "readonly"]),

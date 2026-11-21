@@ -35,6 +35,7 @@ const API = [
       ["can_move(dir)", "Always true in an open field; false into a Hedge or over a maze's edge."],
       ["get_time() / get_tick_count()", "Seconds since Run (one clock for all drones) / this drone's ticks."],
       ["get_contracts()", "Today's contracts: [{ id, item, amount, reward, rewardItem, ticksLeft, status }]."],
+      ["get_arena_goal()", "In an arena match: its goal { item, amount }, e.g. { item: \"Hay\", amount: 500 }. null on your own farm."],
       ["num_drones() / max_drones()", "Drones on the farm / the cap (farm size with Megafarm, else 1)."],
       ["print(...) / quick_print(...)", "Write to the Log (console.log works too)."],
     ],
@@ -100,6 +101,14 @@ const CONTRACTS = [
   ["Pool", "Only items you can already produce: Hay and Wood always, Carrot / Pumpkin / Cactus with their unlock, Gold with Mazes, Bone with Dinosaurs. Amounts grow with your farm."],
   ["Reward", "≈ amount × item value × 1.5, paid in Gold (Bone for Gold and Bone contracts). Deliver with the button or deliver_contract(id); totals show in 🏆 Records."],
   ["Deadline", "Each contract has a tick budget on the farm clock, which runs only while your programs run (the same ticks as get_tick_count). Past it, or at the next day, an unfinished contract expires."],
+];
+
+const ARENA = [
+  ["Match", "The ⚔️ window races one of your files against a bot. Each side gets its own fresh 8×8 farm from the same seed and runs headless on one shared virtual clock, so a match takes seconds, not minutes."],
+  ["Arena farm", "Everything up to Megafarm unlocked at level 1 (8 drones possible), Speed 0, no Mazes or Dinosaurs, no contracts, empty inventory. unlock() works as usual."],
+  ["Goals", "First to hold 500 Hay, 800 Wood or 300 Pumpkin wins. At 200,000 ticks (1 tick = 1 ms of game time, an action is 200) the bigger amount wins; equal is a draw."],
+  ["Rules", "An error loses at once. A loop that never acts is throttled and runs into the tick cap. Same seed + same programs → the same result: Math.random() is seeded too."],
+  ["Bots", "Rookie 800, Pro 1200, Ace 1600: plain programs (their code is in the window). Your rating starts at 1000; standard ELO, K = 32. The last 20 matches are kept in your save."],
 ];
 
 const MEGAFARM = [
@@ -224,6 +233,18 @@ export default function DocsPanel({ game, onLoadExample, targetName = "the edito
         <h3 className="text-[11px] uppercase tracking-wider font-semibold text-gray-500 mb-1.5">Contracts 📜</h3>
         <dl className="space-y-1">
           {CONTRACTS.map(([name, desc]) => (
+            <div key={name} className="grid grid-cols-[minmax(0,6.5rem)_1fr] gap-2">
+              <dt className="text-gray-200">{name}</dt>
+              <dd className="text-gray-400">{desc}</dd>
+            </div>
+          ))}
+        </dl>
+      </section>
+
+      <section>
+        <h3 className="text-[11px] uppercase tracking-wider font-semibold text-gray-500 mb-1.5">Arena ⚔️</h3>
+        <dl className="space-y-1">
+          {ARENA.map(([name, desc]) => (
             <div key={name} className="grid grid-cols-[minmax(0,6.5rem)_1fr] gap-2">
               <dt className="text-gray-200">{name}</dt>
               <dd className="text-gray-400">{desc}</dd>

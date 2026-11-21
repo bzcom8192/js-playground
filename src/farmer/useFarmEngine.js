@@ -5,6 +5,7 @@ import * as W from "./world.js";
 import { createRuntime } from "./runtime.js";
 import { createDemoGame, isDemoHash } from "./demo.js";
 import * as C from "./contracts.js";
+import { BOTS, GOALS, deltaText, recordMatch } from "./arena.js";
 
 export const SAVE_KEY = "farmer_save_v1";
 const FRAME_MS = 33; // UI refresh (~30 fps)
@@ -269,6 +270,26 @@ export default function useFarmEngine() {
     [exitDemo, checkDay, pushLog, save],
   );
 
+  /** Arena window: apply a finished match to the rating + history and save.
+   *  The match itself ran on throwaway worlds (arena.js); this is the only
+   *  write to the player's state. No rating on the demo farm. */
+  const recordArenaMatch = useCallback(
+    (match) => {
+      if (demoRef.current) return null;
+      const res = recordMatch(gameRef.current, match);
+      const label = { win: "win", draw: "draw", loss: "loss" }[match.result];
+      pushLog(
+        "info",
+        `⚔️ Arena: ${label} vs ${BOTS[match.bot].name} (${GOALS[match.goal].label}, ${match.ticks.toLocaleString("en-US")} ticks) ` +
+          `— rating ${deltaText(res.delta)} → ${res.rating}`,
+      );
+      dirtyRef.current = true;
+      save();
+      return res;
+    },
+    [pushLog, save],
+  );
+
   const clearFarm = useCallback(() => {
     exitDemo();
     W.clearFarm(gameRef.current);
@@ -339,6 +360,7 @@ export default function useFarmEngine() {
     clearFarm,
     setPendingSeed,
     deliverContract,
+    recordArenaMatch,
     buy,
     resetSave,
     saveNow: save,

@@ -64,6 +64,14 @@ export const SLICE_MS = 50;
 
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 
+// A frozen copy of Math whose random() is `random` (arena determinism).
+function seededMath(random) {
+  const m = {};
+  for (const k of Object.getOwnPropertyNames(Math)) m[k] = Math[k];
+  m.random = () => random();
+  return Object.freeze(m);
+}
+
 function defaultYield() {
   if (typeof globalThis.setImmediate === "function") return new Promise((r) => globalThis.setImmediate(r));
   if (typeof MessageChannel === "function") {
@@ -131,6 +139,13 @@ export function createRuntime(opts) {
     wallClock = Date.now,
     // Today's local date "YYYY-MM-DD" (which daily contracts are current).
     today = () => C.localDate(new Date(wallClock())),
+    // Arena (v3 phase 3): the match goal { item, amount } that get_arena_goal()
+    // returns. An arena run has no daily contracts (get_contracts() is [] and
+    // deliver_contract() fails), so its Gold/Bone can't depend on the date.
+    arenaGoal = null,
+    // Arena: a seeded replacement for Math.random inside the program (the
+    // program gets its own frozen `Math` whose random() is this function).
+    mathRandom = null,
   } = opts;
 
   let current = null; // the current session
@@ -454,6 +469,7 @@ export function createRuntime(opts) {
       ),
       // Contracts: deliver today's contract `id` from the shared inventory.
       deliver_contract: action("deliver_contract", (s, id) => {
+        if (arenaGoal) return { ok: false, msg: "there are no contracts in the arena" };
         contractsToday(s);
         const res = C.deliverContract(s, id);
         if (res.ok) log("info", C.deliveredText(res.contract));
@@ -523,11 +539,14 @@ export function createRuntime(opts) {
       get_contracts: sense(
         "get_contracts",
         (s) => {
+          if (arenaGoal) return [];
           contractsToday(s);
           return C.contractSnapshot(s);
         },
         false,
       ),
+      // Arena: this match's goal { item, amount }; null outside the arena.
+      get_arena_goal: sense("get_arena_goal", () => (arenaGoal ? { item: arenaGoal.item, amount: arenaGoal.amount } : null), false),
 
       // output
       print,
@@ -600,6 +619,7 @@ export function createRuntime(opts) {
       if (typeof api[name] === "function" && !name.startsWith("__")) api[name] = counted(api[name]);
     }
     api.console = Object.fromEntries(Object.entries(api.console).map(([k, f]) => [k, counted(f)]));
+    if (mathRandom) api.Math = seededMath(mathRandom);
     return api;
   }
 
