@@ -6,13 +6,20 @@
 
 import {
   APPLE_SPAWN_SECONDS,
+  BUSH_YIELD,
+  CACTUS_FACTOR,
+  CARROT_YIELD,
   DEAD_PUMPKIN_CHANCE,
   DINO_STEP_SECONDS,
   DIR_DELTA,
   ENTITY_INFO,
+  FERTILIZER_PRICE,
   FERTILIZER_SECONDS,
   GRASS_REGROW_DELAY,
+  HAY_YIELD,
   ITEM_ORDER,
+  MAZE_GOLD_PER_TILE,
+  PUMPKIN_FACTOR,
   RICE_DRY_WATER,
   RICE_GOLD,
   RICE_L2_GROWTH,
@@ -20,14 +27,21 @@ import {
   RICE_TICKS_PER_SEC,
   RICE_WITHER_TICKS,
   RICE_YIELD,
+  SUNFLOWER_BONUS,
+  SUNFLOWER_MIN,
+  SUNFLOWER_POWER,
+  TREE_YIELD,
   UNLOCKS,
   UNLOCK_BY_ID,
   WATER_BASE_INTERVAL,
   WATER_DECAY_PER_SEC,
   WATER_PER_USE,
+  WATER_PRICE,
   WORLD_SIZES,
   appleCap,
+  byLevel,
   maxDrones,
+  priceText,
 } from "./constants.js";
 import { generateSeededMaze, mulberry32At, parseSeed, randomSeed, treasureDirection } from "./maze.js";
 import { emptyRecords, sanitizeRecords } from "./records.js";
@@ -388,7 +402,7 @@ export function pumpkinGroup(state, x, y) {
 
 // Pumpkin rule: harvesting a grown pumpkin clears its whole connected group of
 // grown pumpkins. If the group is a solid k×k square the yield is k³,
-// otherwise it is the number of pumpkins in the group. × Pumpkins level.
+// otherwise it is the number of pumpkins in the group. × the level's factor.
 export function pumpkinYield(group) {
   if (!group.length) return 0;
   const xs = group.map((p) => p.x);
@@ -404,7 +418,7 @@ export function pumpkinYield(group) {
 //  n = number of fully grown cacti. The farm is "sorted" when, for every pair
 //  of orthogonally adjacent grown cacti (no wrap), size(West) ≤ size(East)
 //  and size(South) ≤ size(North). Sorted → n² Cactus, otherwise → n.
-//  Ungrown cacti are destroyed without yield. × Cactus level.
+//  Ungrown cacti are destroyed without yield. × the level's factor.
 export function cactusSorted(state) {
   const n = state.size;
   const sizeAt = (x, y) => {
@@ -446,20 +460,20 @@ export function harvest(state) {
   }
   switch (e.type) {
     case "Grass":
-      add(state, "Hay", 1 + level(state, "Grass"));
+      add(state, "Hay", byLevel(HAY_YIELD, level(state, "Grass")));
       break;
     case "Bush":
-      add(state, "Wood", Math.max(1, level(state, "Trees")));
+      add(state, "Wood", byLevel(BUSH_YIELD, level(state, "Trees")));
       break;
     case "Tree":
-      add(state, "Wood", 5 * Math.max(1, level(state, "Trees")));
+      add(state, "Wood", byLevel(TREE_YIELD, level(state, "Trees")));
       break;
     case "Carrot":
-      add(state, "Carrot", Math.max(1, level(state, "Carrots")));
+      add(state, "Carrot", byLevel(CARROT_YIELD, level(state, "Carrots")));
       break;
     case "Pumpkin": {
       const group = pumpkinGroup(state, x, y);
-      add(state, "Pumpkin", pumpkinYield(group) * Math.max(1, level(state, "Pumpkins")));
+      add(state, "Pumpkin", pumpkinYield(group) * byLevel(PUMPKIN_FACTOR, level(state, "Pumpkins")));
       for (const p of group) removeEntity(tileAt(state, p.x, p.y));
       break;
     }
@@ -467,9 +481,9 @@ export function harvest(state) {
       const flowers = state.tiles
         .map((t) => t.entity)
         .filter((f) => f && f.type === "Sunflower");
-      let power = Math.floor(Math.sqrt(flowers.length));
+      let power = SUNFLOWER_POWER * Math.floor(Math.sqrt(flowers.length));
       const maxPetals = Math.max(...flowers.map((f) => f.petals || 0));
-      if (flowers.length >= 10 && e.petals === maxPetals) power *= 8;
+      if (flowers.length >= SUNFLOWER_MIN && e.petals === maxPetals) power *= SUNFLOWER_BONUS;
       add(state, "Power", power * Math.max(1, level(state, "Sunflowers")));
       break;
     }
@@ -483,7 +497,7 @@ export function harvest(state) {
         if (t.entity?.type === "Cactus" && isGrown(t.entity)) grown++;
       }
       const amount = cactusSorted(state) ? grown * grown : grown;
-      add(state, "Cactus", amount * Math.max(1, level(state, "Cactus")));
+      add(state, "Cactus", amount * byLevel(CACTUS_FACTOR, level(state, "Cactus")));
       for (const t of state.tiles) if (t.entity?.type === "Cactus") removeEntity(t);
       break;
     }
@@ -589,8 +603,8 @@ export function useItem(state, item, n = 1, rng = Math.random) {
 // trade(item, n): pay `cost` × n, get `gives` × n. Fertilizer and Water are
 // bought (you get the item); Rice is sold (you pay the Rice, get Gold).
 export const TRADES = {
-  Fertilizer: { cost: { Pumpkin: 1 }, gives: { Fertilizer: 1 }, unlock: "Fertilizer" },
-  Water: { cost: { Carrot: 1 }, gives: { Water: 1 }, unlock: "Watering" },
+  Fertilizer: { cost: FERTILIZER_PRICE, gives: { Fertilizer: 1 }, unlock: "Fertilizer" },
+  Water: { cost: WATER_PRICE, gives: { Water: 1 }, unlock: "Watering" },
   Rice: { cost: { Rice: 1 }, gives: { Gold: RICE_GOLD }, unlock: "Rice" },
 };
 
@@ -644,11 +658,7 @@ export function buyUnlock(state, id) {
   return ok;
 }
 
-export function costText(cost) {
-  return Object.entries(cost || {})
-    .map(([k, v]) => `${v} ${k}`)
-    .join(" + ");
-}
+export const costText = (cost) => priceText(cost || {});
 
 // ---------- senses ----------
 
@@ -880,8 +890,8 @@ function restoreDrones(state, list) {
 
 const MAZE_BLOCKED = "not possible inside a maze — harvest the treasure (or clear()) first";
 
-/** Mazes level → Gold per treasure: farm tiles (size²) × level. */
-export const mazeGold = (state) => state.size * state.size * Math.max(1, level(state, "Mazes"));
+/** Mazes level → Gold per treasure: farm tiles (size²) × the level's Gold per tile. */
+export const mazeGold = (state) => state.size * state.size * byLevel(MAZE_GOLD_PER_TILE, level(state, "Mazes"));
 
 /**
  * Turn the whole farm into a perfect hedge maze around the drone's tile.

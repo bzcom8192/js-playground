@@ -85,9 +85,9 @@ test("Dinosaurs is a real unlock after Mazes; no future unlocks remain; new cons
   assert.equal(ids.indexOf("Dinosaurs"), ids.indexOf("Mazes") + 1);
   assert.equal(UNLOCK_BY_ID.Dinosaurs.requires, "Mazes");
   assert.equal(UNLOCK_BY_ID.Dinosaurs.maxLevel, 3);
-  assert.deepEqual(UNLOCK_BY_ID.Dinosaurs.cost(0), { Gold: 600, Cactus: 6000 });
-  assert.deepEqual(UNLOCK_BY_ID.Dinosaurs.cost(1), { Gold: 1800, Bone: 1000 });
-  assert.deepEqual(UNLOCK_BY_ID.Dinosaurs.cost(2), { Gold: 5400, Bone: 3000 });
+  assert.deepEqual(UNLOCK_BY_ID.Dinosaurs.cost(0), { Gold: 1100, Cactus: 7000 });
+  assert.deepEqual(UNLOCK_BY_ID.Dinosaurs.cost(1), { Gold: 2600, Bone: 650 });
+  assert.deepEqual(UNLOCK_BY_ID.Dinosaurs.cost(2), { Gold: 7500, Bone: 2400 });
   assert.deepEqual(
     FUTURE_UNLOCKS.map((u) => u.id),
     [], // Megafarm became a real unlock in v2 phase 3 (BRIEF8)
@@ -118,11 +118,11 @@ test("Dinosaurs is a real unlock after Mazes; no future unlocks remain; new cons
 
 // ---------- spawn ----------
 
-test("plant(Dinosaur): empty/grass tile only, pays 10 Gold, length 1, one per farm", () => {
+test("plant(Dinosaur): empty/grass tile only, pays 24 Gold, length 1, one per farm", () => {
   const s = dinoGame(4);
   W.tick(s, 1); // grass everywhere
   assert.equal(W.droneTile(s).entity.type, "Grass");
-  s.items.Gold = 25;
+  s.items.Gold = 39;
   assert.equal(W.plant(s, "Dinosaur").ok, true, "over grass");
   assert.equal(s.items.Gold, 15);
   assert.deepEqual(s.dino.body, [{ x: 0, y: 0 }]);
@@ -143,10 +143,10 @@ test("plant(Dinosaur): empty/grass tile only, pays 10 Gold, length 1, one per fa
   W.plant(t, "Bush");
   assert.match(W.plant(t, "Dinosaur").msg, /already has Bush/);
   W.moveDrone(t, "North");
-  t.items.Gold = 9;
+  t.items.Gold = 23;
   assert.match(W.plant(t, "Dinosaur").msg, /Not enough/);
   assert.equal(t.dino, null);
-  t.items.Gold = 10;
+  t.items.Gold = 24;
   assert.equal(W.plant(t, "Dinosaur").ok, true, "on an empty tile");
   assert.equal(t.items.Gold, 0);
   // Runtime: get_cost / num_unlocked know the dinosaur.
@@ -154,7 +154,7 @@ test("plant(Dinosaur): empty/grass tile only, pays 10 Gold, length 1, one per fa
   const rt = createRuntime({ getState: () => t, onLog: (e) => logs.push(e), sleep: () => Promise.resolve(), yieldFn: () => Promise.resolve() });
   return rt
     .run("print(get_cost(Entities.Dinosaur).Gold, num_unlocked(Entities.Dinosaur), get_entity_type(), can_harvest());")
-    .then(() => assert.equal(logs[0].text, "10 1 Dinosaur true"));
+    .then(() => assert.equal(logs[0].text, "24 1 Dinosaur true"));
 });
 
 // ---------- movement ----------
@@ -348,7 +348,7 @@ test("harvest pays (segments cut off)² × level Bone and shortens / removes the
   // Head of a 5-long dinosaur at Dinosaurs level 2: 5² × 2 = 50.
   const t = dinoGame(4);
   W.clearFarm(t);
-  t.items.Bone = 1000; // level 2 costs 1,800 Gold + 1,000 Bone
+  t.items.Bone = 650; // level 2 costs 2,600 Gold + 650 Bone
   assert.equal(W.buyUnlock(t, "Dinosaurs").ok, true);
   assert.equal(t.unlocks.Dinosaurs, 2);
   assert.equal(t.items.Bone, 0);
@@ -584,7 +584,7 @@ test("dinosaur example runs end-to-end on the demo farm", async () => {
   assert.equal(bones.at(-1), s.items.Bone);
   assert.ok(hatched >= 3, `dinosaurs hatched: ${hatched}`);
   assert.ok(maxLen >= 3, `the dinosaur grew to ${maxLen}`);
-  assert.equal(s.items.Gold, gold - 10 * hatched);
+  assert.equal(s.items.Gold, gold - 24 * hatched);
   assert.ok(!logs.some((l) => l.kind === "error"), JSON.stringify(logs.filter((l) => l.kind === "error")));
 });
 

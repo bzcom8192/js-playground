@@ -1,6 +1,34 @@
-import { UNLOCK_BY_ID } from "./constants.js";
+import {
+  BUSH_YIELD,
+  CACTUS_FACTOR,
+  CARROT_YIELD,
+  DEAD_PUMPKIN_CHANCE,
+  ENTITY_INFO,
+  FERTILIZER_PRICE,
+  FERTILIZER_SECONDS,
+  HAY_YIELD,
+  MAZE_GOLD_PER_TILE,
+  PUMPKIN_FACTOR,
+  RICE_GOLD,
+  RICE_L2_GROWTH,
+  RICE_YIELD,
+  SUNFLOWER_BONUS,
+  SUNFLOWER_MIN,
+  SUNFLOWER_POWER,
+  TREE_YIELD,
+  UNLOCK_BY_ID,
+  WATER_BASE_INTERVAL,
+  WATER_PRICE,
+  priceText,
+  yieldText,
+} from "./constants.js";
+import { BONUS_FACTOR } from "./contracts.js";
 import { EXAMPLES } from "./examples.js";
 import * as W from "./world.js";
+
+// The numbers below come from the game's own tables, so the Guide can't go stale.
+const grow = (type) => `${ENTITY_INFO[type].growTime} s`;
+const seed = (type) => `seed ${priceText(ENTITY_INFO[type].cost)}`;
 
 const API = [
   {
@@ -11,8 +39,8 @@ const API = [
       ["move(dir)", "North, East, South or West. Over one edge and in at the other. A Hedge stops the bot (false)."],
       ["till()", "Grassland ⇄ Soil; clears the tile. Needs the Plough Blade. Not on the dinosaur or an apple."],
       ["swap(dir)", "Trade places with the neighbour's plant, never over the edge. Needs the Cactus Bench. Not with the dinosaur or an apple."],
-      ["use_item(item, n=1)", "Water: +0.25 water. Fertilizer: 2 s of growth, or a labyrinth when used on a full-grown Bush with Hedge Labyrinth."],
-      ["trade(item, n=1)", "The market sells Fertilizer (1 Pumpkin) and Water (1 Carrot), and pays 2 Gold per Rice."],
+      ["use_item(item, n=1)", `Water: +0.25 water. Fertilizer: ${FERTILIZER_SECONDS} s of growth, or a labyrinth when used on a full-grown Bush with Hedge Labyrinth.`],
+      ["trade(item, n=1)", `The market sells Fertilizer (${priceText(FERTILIZER_PRICE)}) and Water (${priceText(WATER_PRICE)}), and pays ${RICE_GOLD} Gold per Rice.`],
       ["unlock(Unlocks.X)", "Buy the next level of an upgrade from code."],
       ["clear()", "Bare grassland everywhere, no labyrinth, no dinosaur; this bot goes to (0, 0)."],
       ["spin_in_place()", "One turn on the spot. 600 ticks: good for waiting."],
@@ -31,7 +59,7 @@ const API = [
       ["get_water() 🔒", "How wet the tile is, 0…1."],
       ["get_world_size()", "Tiles along one side of the farm."],
       ["num_items(item)", "How much of it is in the store room."],
-      ["get_cost(thing)", "Price of an upgrade or a seed, e.g. {Wood: 1, Hay: 1}. Cactus, Grass and Rice mean the upgrade."],
+      ["get_cost(thing)", "Price of an upgrade or a seed, e.g. {Wood: 1, Hay: 2}. Cactus, Grass and Rice mean the upgrade."],
       ["num_unlocked(thing)", "Level of an upgrade; for a plant, of the upgrade it belongs to."],
       ["can_move(dir)", "false into a Hedge or over a labyrinth's outer edge, otherwise true."],
       ["get_time() / get_tick_count()", "Seconds since Run, the same for every bot / ticks this bot has used."],
@@ -66,29 +94,29 @@ const WEATHER = [
 ];
 
 const RULES = [
-  ["Grass 🌱", "1 s. Comes back by itself on bare Grassland. 1 Hay × (Meadow Mix level + 1)."],
-  ["Bush 🌿", "4 s on any ground. 1 Wood × Woodlot level."],
-  ["Tree 🌳", "7 s, doubled for each tree directly beside it, so leave gaps. 5 Wood × Woodlot level."],
-  ["Carrot 🥕", "6 s on Soil, seed 1 Wood + 1 Hay. 1 Carrot × Plough Blade level."],
+  ["Grass 🌱", `${grow("Grass")}. Comes back by itself on bare Grassland. ${HAY_YIELD.join(" / ")} Hay at Meadow Mix level 0–5.`],
+  ["Bush 🌿", `${grow("Bush")} on any ground. ${yieldText(BUSH_YIELD)} Wood at Woodlot level 1–5 (${BUSH_YIELD[0]} without it).`],
+  ["Tree 🌳", `${grow("Tree")}, doubled for each tree directly beside it, so leave gaps. ${yieldText(TREE_YIELD)} Wood at Woodlot level 1–5.`],
+  ["Carrot 🥕", `${grow("Carrot")} on Soil, ${seed("Carrot")}. ${yieldText(CARROT_YIELD)} Carrots at Plough Blade level 1–5.`],
   [
     "Pumpkin 🎃",
-    "3 s on Soil, seed 1 Carrot. One in five spoils (Dead_Pumpkin; harvest() clears it). Cutting a ripe one takes every ripe pumpkin connected to it: k³ when they form a full k×k block, otherwise one each. × Pumpkin Patch level.",
+    `${grow("Pumpkin")} on Soil, ${seed("Pumpkin")}. ${Math.round(DEAD_PUMPKIN_CHANCE * 100)} in 100 spoil (Dead_Pumpkin; harvest() clears it). Cutting a ripe one takes every ripe pumpkin connected to it: k³ when they form a full k×k block, otherwise one each. × ${yieldText(PUMPKIN_FACTOR)} at Pumpkin Patch level 1–5.`,
   ],
   [
     "Sunflower 🌻",
-    "5 s on Soil, seed 1 Carrot. Power = ⌊√(sunflowers on the farm)⌋, ×8 when there are at least 10 and no other has more petals than this one.",
+    `${grow("Sunflower")} on Soil, ${seed("Sunflower")}. Power = ${SUNFLOWER_POWER} × ⌊√(sunflowers on the farm)⌋, ×${SUNFLOWER_BONUS} when there are at least ${SUNFLOWER_MIN} and no other has more petals than this one.`,
   ],
   ["Power ⚡", "As long as there is some, every action burns 1 Power and takes half the time."],
   [
     "Cactus 🌵",
-    "2 s on Soil, seed 1 Pumpkin, size 0–9. Cutting one ripe cactus takes the whole bench; unripe ones are lost. With n ripe: n² when no neighbour is out of order (West ≤ East, South ≤ North), else n. × Cactus Bench level.",
+    `${grow("Cactus")} on Soil, ${seed("Cactus")}, size 0–9. Cutting one ripe cactus takes the whole bench; unripe ones are lost. With n ripe: n² when no neighbour is out of order (West ≤ East, South ≤ North), else n. × ${yieldText(CACTUS_FACTOR)} at Cactus Bench level 1–3.`,
   ],
   [
     "Rice 🌾",
-    "9 s (6 s at level 2) on Soil, seed 1 Carrot. Needs water ≥ 0.5 to plant and ≥ 0.2 to grow; more than 200 dry world ticks in a row (20 s) and it is Dead_Rice, which harvest() only clears. 3 Rice a plant, 5 at level 2, and trade(Items.Rice) pays 2 Gold each.",
+    `${grow("Rice")} (${ENTITY_INFO.Rice.growTime / RICE_L2_GROWTH} s at level 2) on Soil, ${seed("Rice")}. Needs water ≥ 0.5 to plant and ≥ 0.2 to grow; more than 200 dry world ticks in a row (20 s) and it is Dead_Rice, which harvest() only clears. ${RICE_YIELD[1]} Rice a plant, ${RICE_YIELD[2]} at level 2, and trade(Items.Rice) pays ${RICE_GOLD} Gold each.`,
   ],
-  ["Water 💧", "Growth × (1 + 4 × water). Tiles lose 0.02 a second. The barrel gains 1 every 10 s ÷ level and holds 5 + 5 × level."],
-  ["Fertilizer 🧪", "2 s of growth for the plant under the bot."],
+  ["Water 💧", `Growth × (1 + 4 × water). Tiles lose 0.02 a second. The barrel gains 1 every ${WATER_BASE_INTERVAL} s ÷ level and holds 5 + 5 × level.`],
+  ["Fertilizer 🧪", `${FERTILIZER_SECONDS} s of growth for the plant under the bot.`],
   ["Overclock ⏩", "Each level doubles the bots' pace."],
   ["New Acres 🗺️", "1→2→3→4→5→6→7→8→10→12 tiles a side. The farm is levelled each time."],
 ];
@@ -97,13 +125,13 @@ const MAZES = [
   ["Growing one", "Use Fertilizer on a full-grown Bush (Hedge Labyrinth built). The whole farm turns into hedges; the Fertilizer is spent only if that works."],
   ["Layout", "Every path tile can be reached, and there is one way between any two. Hedges 🟩 and the farm's edge are solid, so no driving round the back. The bot begins where it stood."],
   ["Treasure 💰", "On the path tile farthest from your start. measure() names the direction to it: the longer axis, East/West on a tie, null once you are there."],
-  ["Gold 🪙", "harvest() on it pays farm tiles × level. The hedges go and bare Grassland is left."],
+  ["Gold 🪙", `harvest() on it pays ${yieldText(MAZE_GOLD_PER_TILE)} Gold per farm tile at level 1–3. The hedges go and bare Grassland is left.`],
   ["Until then", "plant, till, swap and trade are closed. clear() or New Acres ends the labyrinth unpaid. Example 7 finds the way by touch."],
   ["Seeds 🏆", "The Output tab prints each labyrinth's seed. Same seed, farm size and start tile: same hedges. One that you grow and solve in a single run enters the Almanac with ticks and ops (every API call is 1 op), where a seed can also be set for the next one. Online, a best sends your program to a hidden maze that is the same for everyone and new every week, timed from the start of the program."],
 ];
 
 const DINOSAURS = [
-  ["The egg", "plant(Entities.Dinosaur) on an empty or grass tile for 10 Gold (Dinosaur Egg built). One tile long, one per farm."],
+  ["The egg", `plant(Entities.Dinosaur) on an empty or grass tile for ${priceText(ENTITY_INFO.Dinosaur.cost)} (Dinosaur Egg built). One tile long, one per farm.`],
   ["Wandering", "Every 0.3 s of game time the head picks a free tile next door: bare ground, grass (it is trampled) or an apple. Not its own body, a hedge, a crop or the edge. Hemmed in, it waits. Bots straddle it."],
   ["Apples 🍎", "While it lives, one appears every 1.5 s on a free tile, up to one per 16 tiles (at least 1). Each one eaten adds a tile. Bots can't gather them or work their tile."],
   ["Bone 🦴", "Cutting a segment takes everything behind it as well: (segments)² × level. The head means all of it, the tail tip means 1. When nothing is left, so are the apples, and you can set another egg."],
@@ -114,7 +142,7 @@ const DINOSAURS = [
 const CONTRACTS = [
   ["Every day", "Three orders at local midnight, drawn from the date: players with the same upgrades and farm size get the same three."],
   ["What", "Only things you can make: Hay and Wood; Carrot, Pumpkin, Rice and Cactus once unlocked; Gold with the labyrinth; Bone with the egg. The amounts follow your farm's size."],
-  ["Reward", "About 1.5 × what the goods are worth, in Gold (orders for Gold or Bone pay Bone). Deliver with the button or deliver_contract(id). The Almanac keeps the total."],
+  ["Reward", `About ${BONUS_FACTOR} × what the goods are worth, in Gold (orders for Gold or Bone pay Bone). Deliver with the button or deliver_contract(id). The Almanac keeps the total.`],
   ["Deadline", "Counted in ticks your programs use, the same as get_tick_count(). When they or the day run out, so does the order."],
 ];
 

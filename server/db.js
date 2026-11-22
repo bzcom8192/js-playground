@@ -5,7 +5,7 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
-import { CHALLENGE_LIST_LIMIT, CHALLENGE_TTL_MS, ELO_START, HISTORY_LIMIT, LEADERBOARD_LIMIT } from "../src/farmer/onlineRules.js";
+import { CHALLENGE_LIST_LIMIT, CHALLENGE_TTL_MS, ELO_START, HISTORY_LIMIT, LEADERBOARD_LIMIT, RULES_VERSION } from "../src/farmer/onlineRules.js";
 
 async function openRaw(file) {
   try {
@@ -60,7 +60,8 @@ CREATE TABLE IF NOT EXISTS challenges (
   author_ops INTEGER NOT NULL,
   status TEXT NOT NULL DEFAULT 'open',
   created_at INTEGER NOT NULL,
-  verified INTEGER NOT NULL DEFAULT 0
+  verified INTEGER NOT NULL DEFAULT 0,
+  rules INTEGER
 );
 CREATE INDEX IF NOT EXISTS challenges_open ON challenges(status, id);
 CREATE INDEX IF NOT EXISTS challenges_author ON challenges(author_id, id);
@@ -88,9 +89,10 @@ CREATE INDEX IF NOT EXISTS challenge_results_player ON challenge_results(player_
 // other categories.
 // v5 cleanup (BRIEF21): period (the Bangkok ISO week whose hidden maze a maze
 // entry ran on). Null = a legacy maze entry, or another category.
+// rules (RULES_VERSION when the challenge was posted). Null = before BRIEF21.
 const ADDED_COLUMNS = {
   scores: ["verified INTEGER NOT NULL DEFAULT 0", "size INTEGER", "sx INTEGER", "sy INTEGER", "code TEXT", "race_date TEXT", "period TEXT"],
-  challenges: ["verified INTEGER NOT NULL DEFAULT 0"],
+  challenges: ["verified INTEGER NOT NULL DEFAULT 0", "rules INTEGER"],
   challenge_results: ["verified INTEGER NOT NULL DEFAULT 0", "author_elo_delta INTEGER"],
 };
 
@@ -169,7 +171,7 @@ export async function openDb(file, { now = Date.now } = {}) {
     insertSetting: db.prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING"),
     setting: db.prepare("SELECT value FROM settings WHERE key = ?"),
     insertChallenge: db.prepare(
-      "INSERT INTO challenges (author_id, goal, seed, code, author_ticks, author_ops, status, created_at, verified) VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?)",
+      "INSERT INTO challenges (author_id, goal, seed, code, author_ticks, author_ops, status, created_at, verified, rules) VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)",
     ),
     openChallenges: db.prepare(`
       SELECT c.id, c.author_id, p.name AS author_name, p.elo AS author_elo, c.goal, c.seed, c.author_ticks, c.author_ops, c.created_at, c.verified
@@ -181,7 +183,7 @@ export async function openDb(file, { now = Date.now } = {}) {
     resultFor: db.prepare(`
       SELECT r.player_id, p.name, r.ticks, r.ops, r.outcome, r.elo_delta, r.author_elo_delta, r.created_at, r.verified
       FROM challenge_results r JOIN players p ON p.id = r.player_id WHERE r.challenge_id = ?`),
-    closeChallenge: db.prepare("UPDATE challenges SET status = 'closed' WHERE id = ? AND status = 'open'"),
+    closeChallenge: db.prepare("UPDATE challenges SET status = 'closed', author_ticks = ?, author_ops = ? WHERE id = ? AND status = 'open'"),
     insertResult: db.prepare(
       "INSERT INTO challenge_results (challenge_id, player_id, ticks, ops, code, outcome, elo_delta, author_elo_delta, created_at, verified) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     ),
@@ -276,7 +278,7 @@ export async function openDb(file, { now = Date.now } = {}) {
     dailyEntry: (date, playerId) => q.dailyEntry.get(date, playerId) ?? null,
 
     addChallenge(authorId, c) {
-      const r = q.insertChallenge.run(authorId, c.goal, c.seed, c.code, c.authorTicks, c.authorOps, now(), c.verified ? 1 : 0);
+      const r = q.insertChallenge.run(authorId, c.goal, c.seed, c.code, c.authorTicks, c.authorOps, now(), c.verified ? 1 : 0, RULES_VERSION);
       return Number(r.lastInsertRowid);
     },
     openChallenges: () => q.openChallenges.all(expiryCutoff()),
@@ -290,18 +292,20 @@ export async function openDb(file, { now = Date.now } = {}) {
      * Close challenge `id` with a result, atomically: the open check, the
      * result row, the status flip and both players' ELO in one transaction.
      * decide(challengeRow, authorRow, challengerRow) → { outcome, deltaChallenger, deltaAuthor }.
+     * authorRun: the author's { ticks, ops } if they were measured again (RULES_VERSION).
      * → { ok, ... } | { ok: false, code: "missing" | "closed" | "expired" }
      */
-    closeChallenge(id, playerId, result, decide) {
+    closeChallenge(id, playerId, result, decide, authorRun = null) {
       return tx(() => {
-        const c = readChallenge(id);
+        let c = readChallenge(id);
         if (!c) return { ok: false, code: "missing" };
         if (c.status === "expired") return { ok: false, code: "expired" };
         if (c.status !== "open") return { ok: false, code: "closed" };
+        if (authorRun) c = { ...c, author_ticks: authorRun.ticks, author_ops: authorRun.ops };
         const author = q.playerById.get(c.author_id);
         const challenger = q.playerById.get(playerId);
         const d = decide(c, author, challenger);
-        if (q.closeChallenge.run(id).changes !== 1) return { ok: false, code: "closed" };
+        if (q.closeChallenge.run(c.author_ticks, c.author_ops, id).changes !== 1) return { ok: false, code: "closed" };
         q.insertResult.run(id, playerId, result.ticks, result.ops, result.code, d.outcome, d.deltaChallenger, d.deltaAuthor, now(), result.verified ? 1 : 0);
         q.setElo.run(author.elo + d.deltaAuthor, author.id);
         q.setElo.run(challenger.elo + d.deltaChallenger, challenger.id);

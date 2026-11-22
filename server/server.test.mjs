@@ -23,7 +23,7 @@ import { createRateLimiter } from "./app.js";
 import { hashToken, openDb } from "./db.js";
 import { mazeBenchmark, mazeSeed } from "./mazeBenchmark.js";
 import { createVerifier } from "./verifier.js";
-import { CHALLENGE_TTL_MS, DINO_BENCHMARK, DINO_MAX_BONE, DNF_TICKS, HISTORY_LIMIT, eloUpdate } from "../src/farmer/onlineRules.js";
+import { CHALLENGE_TTL_MS, DINO_BENCHMARK, DINO_MAX_BONE, DNF_TICKS, HISTORY_LIMIT, RULES_VERSION, eloUpdate } from "../src/farmer/onlineRules.js";
 import { BOT_CODE } from "../src/farmer/arenaBots.js";
 import { TICK_CAP, runSolo } from "../src/farmer/arena.js";
 import { verifyDaily, verifyDino, verifyMaze } from "../src/farmer/verify.js";
@@ -1057,6 +1057,28 @@ test("challenge expiry: an 8-day-old challenge is unlisted, rejects results (410
     });
     assert.deepEqual(await history(b), [], "only the author sees it");
   }));
+
+test("a challenge posted under older game numbers: the author is measured again, and that is what counts", async () => {
+  const author = await register("Old-Numbers");
+  const rival = await register("New-Numbers");
+  const open = async (stored) => {
+    // The stub measures 50,000 ticks for this code; the row says what the old numbers gave.
+    const c = await makeChallenge(author, { ticks: 50_000, ops: 300 });
+    stub.db.raw.prepare("UPDATE challenges SET rules = ?, author_ticks = ? WHERE id = ?").run(stored, 30_000, c.id);
+    return c.id;
+  };
+  const answerIt = (id) => call("POST", `/api/challenges/${id}/results`, { body: answer(40_000, 200), token: rival.token });
+  const older = await answerIt(await open(null));
+  assert.equal(older.status, 201, older.text);
+  assert.deepEqual([older.json.result, older.json.author.ticks], ["win", 50_000], "40,000 beats 50,000 by today's numbers");
+  const event = (await call("GET", "/api/players/me/history", { token: author.token })).json.events[0];
+  assert.deepEqual([event.outcome, event.myTicks, event.opponentTicks], ["lose", 50_000, 40_000], "stored too");
+  // One posted under the current numbers is not replayed: its stored ticks count.
+  const current = await answerIt(await open(RULES_VERSION));
+  assert.deepEqual([current.json.result, current.json.author.ticks], ["loss", 30_000]);
+  const fresh = await makeChallenge(author);
+  assert.equal(stub.db.raw.prepare("SELECT rules FROM challenges WHERE id = ?").get(fresh.id).rules, RULES_VERSION);
+});
 
 test("challenge expiry: an answered challenge stays closed (409), never expired", () =>
   withClock("expiry2", async ({ at, clock, post, history }) => {

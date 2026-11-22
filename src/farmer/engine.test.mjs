@@ -179,8 +179,8 @@ test("unlock() from code buys upgrades", async () => {
   const s = W.createGame();
   s.items.Hay = 100;
   const r = await simulate(s, "print(unlock(Unlocks.Plant), num_unlocked(Unlocks.Plant), get_cost(Entities.Carrot));", 5);
-  assert.equal(r.logs[0].text, 'true 1 {"Wood":1,"Hay":1}');
-  assert.equal(s.items.Hay, 90);
+  assert.equal(r.logs[0].text, 'true 1 {"Wood":1,"Hay":2}');
+  assert.equal(s.items.Hay, 84);
 });
 
 test("all examples are lint-clean (no ESLint errors) with the farmer globals", () => {

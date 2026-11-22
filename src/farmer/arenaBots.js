@@ -69,8 +69,8 @@ const PRO = `// Pro — a structured ensure_* farmer (one bot).
 const n = get_world_size();
 const goal = get_arena_goal() || { item: Items.Hay, amount: 500 };
 const SPEED_MAX = goal.item === Items.Hay ? 2 : 3;
-const HAY_NEED = 150; // carrot seeds for the pumpkin field
-const WOOD_NEED = 150;
+const HAY_NEED = 180; // carrot seeds for the pumpkin field
+const WOOD_NEED = 100;
 
 function buy_speed() {
   while (num_unlocked(Unlocks.Speed) < SPEED_MAX) {
@@ -123,9 +123,9 @@ function tend_pumpkin() {
     e = null;
   }
   if (e === null) {
-    if (num_items(Items.Carrot) >= 1) {
+    if (num_items(Items.Carrot) >= 2) {
       plant(Entities.Pumpkin);
-    } else if (num_items(Items.Hay) < 1) {
+    } else if (num_items(Items.Hay) < 2) {
       plant(Entities.Grass);
     } else if (num_items(Items.Wood) < 1) {
       plant(Entities.Bush);
@@ -214,8 +214,8 @@ const n = get_world_size();
 const goal = get_arena_goal() || { item: Items.Hay, amount: 500 };
 const leader = num_bots() === 1;
 const SPEED_MAX = goal.item === Items.Hay ? 2 : 3;
-const HAY_NEED = 150;
-const WOOD_NEED = 150;
+const HAY_NEED = 180;
+const WOOD_NEED = 100;
 let phase = 0;
 let hay_mark = 0;
 
@@ -280,9 +280,9 @@ function tend_pumpkin() {
     e = null;
   }
   if (e === null) {
-    if (num_items(Items.Carrot) >= 1) {
+    if (num_items(Items.Carrot) >= 2) {
       plant(Entities.Pumpkin);
-    } else if (num_items(Items.Hay) < 1) {
+    } else if (num_items(Items.Hay) < 2) {
       plant(Entities.Grass);
     } else if (num_items(Items.Wood) < 1) {
       plant(Entities.Bush);

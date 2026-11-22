@@ -282,7 +282,7 @@ test("measure(): treasure direction in a maze (dominant axis), unchanged outside
 
 // ---------- goal & interactions ----------
 
-test("harvesting the treasure pays Gold (size² × level) and restores grassland", () => {
+test("harvesting the treasure pays Gold (size² × the level's 2 / 3 / 5) and restores grassland", () => {
   const s = mazeGame(4); // 5×5
   spawn(s, 9);
   for (let i = 0; i < 50; i++) W.tick(s, 0.1);
@@ -298,8 +298,8 @@ test("harvesting the treasure pays Gold (size² × level) and restores grassland
   s.drone.y = s.maze.treasure.y;
   const pos = [s.drone.x, s.drone.y];
   assert.equal(W.harvest(s), true);
-  assert.equal(s.items.Gold, gold + 25);
-  assert.equal(W.mazeGold(s), 25);
+  assert.equal(s.items.Gold, gold + 50);
+  assert.equal(W.mazeGold(s), 50);
   assert.equal(s.maze, null);
   assert.deepEqual([s.drone.x, s.drone.y], pos);
   assert.ok(s.tiles.every((t) => t.entity === null && t.ground === "Grassland"));
@@ -307,7 +307,7 @@ test("harvesting the treasure pays Gold (size² × level) and restores grassland
   for (let i = 0; i < 10; i++) W.tick(s, 0.1);
   assert.ok(s.tiles.every((t) => t.entity?.type === "Grass"));
 
-  // Level 2 doubles it.
+  // Level 2: 3 Gold per tile.
   const l2 = mazeGame(4);
   assert.equal(W.buyUnlock(l2, "Mazes").ok, true);
   spawn(l2, 9);
@@ -315,7 +315,7 @@ test("harvesting the treasure pays Gold (size² × level) and restores grassland
   l2.drone.y = l2.maze.treasure.y;
   const g2 = l2.items.Gold;
   W.harvest(l2);
-  assert.equal(l2.items.Gold, g2 + 50);
+  assert.equal(l2.items.Gold, g2 + 75);
 });
 
 test("plant / till / swap / trade fail cleanly inside a maze", () => {
@@ -369,7 +369,7 @@ test("save/load round-trip keeps an active maze exactly", () => {
   copy.drone.y = copy.maze.treasure.y;
   const g = copy.items.Gold;
   assert.equal(W.harvest(copy), true);
-  assert.equal(copy.items.Gold, g + 64);
+  assert.equal(copy.items.Gold, g + 128);
 });
 
 test("old saves (no maze / Gold / Mazes fields) load fine; a broken maze is dropped", () => {
@@ -443,8 +443,8 @@ test("Maze Runner example spawns and solves mazes end-to-end", async () => {
   await new Promise((r) => setImmediate(r));
   const golds = logs.filter((l) => l.text.startsWith("Gold:"));
   assert.ok(golds.length >= 2, JSON.stringify(logs.slice(-5)));
-  assert.equal(golds[0].text, "Gold: 36");
-  assert.equal(golds[1].text, "Gold: 72");
+  assert.equal(golds[0].text, "Gold: 72");
+  assert.equal(golds[1].text, "Gold: 144");
   assert.ok(mazes >= 2, `mazes spawned: ${mazes}`);
   assert.ok(!logs.some((l) => l.kind === "error"), JSON.stringify(logs.filter((l) => l.kind === "error")));
 });

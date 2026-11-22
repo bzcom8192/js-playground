@@ -8,7 +8,7 @@ import { createRuntime } from "./runtime.js";
 import { ACTIONS } from "./transform.js";
 import { EXAMPLES } from "./examples.js";
 import { FARMER_GLOBALS, FARMER_LIB } from "./farmerLib.js";
-import { FUTURE_UNLOCKS, UNLOCKS, UNLOCK_BY_ID, Unlocks, WORLD_SIZES, maxDrones } from "./constants.js";
+import { BUSH_YIELD, FUTURE_UNLOCKS, UNLOCKS, UNLOCK_BY_ID, Unlocks, WORLD_SIZES, maxDrones } from "./constants.js";
 import { stripFields } from "./statusStrip.js";
 import { FarmScene } from "./board3d/FarmScene.js";
 import { DRONE_BAND_0, DRONE_BANDS, droneBand } from "./droneBands.js";
@@ -127,7 +127,7 @@ test("Megafarm is a real unlock after Dinosaurs; no future unlocks; API declared
   const u = UNLOCK_BY_ID.Megafarm;
   assert.equal(u.requires, "Dinosaurs");
   assert.equal(u.maxLevel, 1);
-  assert.deepEqual(u.cost(0), { Bone: 2000, Gold: 1500 });
+  assert.deepEqual(u.cost(0), { Bone: 1400, Gold: 2400 });
   assert.equal(Unlocks.Megafarm, "Megafarm");
   assert.deepEqual(FUTURE_UNLOCKS, []);
   for (const n of ["spawn_bot", "spin_in_place", "spawn_drone", "do_a_flip"]) assert.ok(ACTIONS.includes(n), `${n} is auto-awaited`);
@@ -139,8 +139,8 @@ test("Megafarm is a real unlock after Dinosaurs; no future unlocks; API declared
 
   // Buying it: needs Dinosaurs, then Bone + Gold.
   const s = W.createGame();
-  s.items.Bone = 2000;
-  s.items.Gold = 1500;
+  s.items.Bone = 1400;
+  s.items.Gold = 2400;
   assert.equal(W.buyUnlock(s, "Megafarm").locked, "Dinosaurs");
   s.unlocks.Dinosaurs = 1;
   assert.equal(W.buyUnlock(s, "Megafarm").ok, true);
@@ -347,7 +347,7 @@ print("got", got);
   const got = h.prints().map((l) => Number(l.split(" ")[1]));
   assert.equal(got.length, 4);
   assert.equal(got.reduce((a, b) => a + b, 0), 16, "16 bushes, 16 successful harvests in total");
-  assert.equal(s.items.Wood, 16, "each bush credited exactly once");
+  assert.equal(s.items.Wood, 16 * BUSH_YIELD[0], "each bush credited exactly once");
   assert.ok(s.tiles.every((t) => !t.entity));
 });
 
@@ -502,7 +502,7 @@ print(me, get_pos_x(), get_pos_y(), measure());
 
   // Dinosaur: a helper harvesting the head credits the Bone once.
   const g = mega(5, { Dinosaurs: 1 });
-  g.items.Gold = 10;
+  g.items.Gold = 24;
   const h3 = harness(g, { seed: 5 });
   h3.run(`
 const me = num_drones() === 1 ? 0 : 1;

@@ -109,8 +109,8 @@ test("Rice is a real 2-level unlock after Pumpkins; constants, icons and TS decl
   assert.ok(u, "Rice is in UNLOCKS");
   assert.equal(u.requires, "Pumpkins");
   assert.equal(u.maxLevel, 2);
-  assert.deepEqual(u.cost(0), { Pumpkin: 1500, Carrot: 500 });
-  assert.deepEqual(u.cost(1), { Pumpkin: 3000, Gold: 150 });
+  assert.deepEqual(u.cost(0), { Pumpkin: 1800, Carrot: 800 });
+  assert.deepEqual(u.cost(1), { Pumpkin: 4200, Gold: 260 });
   assert.deepEqual(FUTURE_UNLOCKS, []);
   const ids = UNLOCKS.map((x) => x.id);
   assert.ok(ids.indexOf("Rice") > ids.indexOf("Pumpkins"));
@@ -143,16 +143,16 @@ test("unlock gating: no rice before L1; L1 needs Pumpkins and pays its cost; L2 
   assert.equal(W.droneTile(s).entity, null);
   assert.equal(s.items.Carrot, 100, "nothing paid");
 
-  s.items.Pumpkin = 4500;
-  s.items.Carrot = 600;
-  s.items.Gold = 150;
+  s.items.Pumpkin = 6000;
+  s.items.Carrot = 900;
+  s.items.Gold = 260;
   assert.equal(W.buyUnlock(s, "Rice").locked, "Pumpkins", "needs Pumpkins first");
   s.unlocks.Pumpkins = 1;
   assert.equal(W.buyUnlock(s, "Rice").ok, true);
-  assert.equal(s.items.Pumpkin, 3000);
+  assert.equal(s.items.Pumpkin, 4200);
   assert.equal(s.items.Carrot, 100);
   assert.equal(W.plant(s, "Rice").ok, true, "L1 can plant rice");
-  assert.equal(s.items.Carrot, 99, "seed: 1 Carrot");
+  assert.equal(s.items.Carrot, 97, "seed: 3 Carrots");
   assert.equal(W.buyUnlock(s, "Rice").ok, true);
   assert.equal(s.items.Pumpkin, 0);
   assert.equal(s.items.Gold, 0);
@@ -190,7 +190,7 @@ test("plant(Rice) fails on dry soil and on Grassland, succeeds on a wet paddy (w
     assert.equal(e.progress, 0);
     assert.equal(e.dry, 0);
   }
-  assert.equal(s.items.Carrot, 97);
+  assert.equal(s.items.Carrot, 91);
   // Over Grass works like every crop; over a crop it doesn't.
   const t = paddy(s, 0.6);
   t.entity = W.makeEntity("Grass");
@@ -295,11 +295,11 @@ test("dead rice harvest gives nothing and clears the tile", () => {
 
 // ---------- yield & growth ----------
 
-test("yield: 3 Rice per ripe plant at L1, 5 at L2 — a single-tile crop (neighbours don't merge)", () => {
-  assert.deepEqual(RICE_YIELD.slice(1), [3, 5]);
+test("yield: 4 Rice per ripe plant at L1, 7 at L2 — a single-tile crop (neighbours don't merge)", () => {
+  assert.deepEqual(RICE_YIELD.slice(1), [4, 7]);
   for (const [lvl, per] of [
-    [1, 3],
-    [2, 5],
+    [1, 4],
+    [2, 7],
   ]) {
     const s = riceFarm(3, lvl);
     // A full 3×3 paddy, all ripe.
@@ -317,7 +317,7 @@ test("yield: 3 Rice per ripe plant at L1, 5 at L2 — a single-tile crop (neighb
   }
 });
 
-test("growth time: ~1.5× carrot at the same water; L2 grows 1.5× faster (9 s → 6 s)", () => {
+test("growth time: ~1.5× carrot at the same water; L2 grows 1.6× faster (12 s → 7.5 s)", () => {
   const s = riceFarm(3, 1);
   W.tileAt(s, 0, 0).ground = "Soil";
   W.tileAt(s, 1, 0).ground = "Soil";
@@ -328,8 +328,8 @@ test("growth time: ~1.5× carrot at the same water; L2 grows 1.5× faster (9 s �
   s.items.Wood = 10;
   s.items.Hay = 10;
   assert.equal(W.plant(s, "Carrot").ok, true);
-  assert.equal(W.effectiveGrowTime(s, 0, 0), 9);
-  assert.equal(W.effectiveGrowTime(s, 1, 0), 6);
+  assert.equal(W.effectiveGrowTime(s, 0, 0), 12);
+  assert.equal(W.effectiveGrowTime(s, 1, 0), 8);
   const rice = W.tileAt(s, 0, 0);
   const carrot = W.tileAt(s, 1, 0);
   let tr = null;
@@ -341,18 +341,18 @@ test("growth time: ~1.5× carrot at the same water; L2 grows 1.5× faster (9 s �
     if (tr === null && W.isGrown(rice.entity)) tr = i / 10;
     if (tc === null && W.isGrown(carrot.entity)) tc = i / 10;
   }
-  // rate at water 0.5 = 1 + 4 × 0.5 = 3 → carrot 2 s, rice 3 s.
-  assert.ok(Math.abs(tc - 2) <= 0.11, `carrot ${tc}`);
-  assert.ok(Math.abs(tr - 3) <= 0.11, `rice ${tr}`);
+  // rate at water 0.5 = 1 + 4 × 0.5 = 3 → carrot 2.67 s, rice 4 s.
+  assert.ok(Math.abs(tc - 8 / 3) <= 0.11, `carrot ${tc}`);
+  assert.ok(Math.abs(tr - 4) <= 0.11, `rice ${tr}`);
   assert.ok(Math.abs(tr / tc - 1.5) < 0.1, `ratio ${tr / tc}`);
 
   const s2 = riceFarm(3, 2);
   assert.equal(W.plant(s2, "Rice").ok, false, "(dry grass tile)");
   const t2 = paddy(s2, 0.5);
   assert.equal(W.plant(s2, "Rice").ok, true);
-  assert.equal(W.effectiveGrowTime(s2, 0, 0), 6);
+  assert.equal(W.effectiveGrowTime(s2, 0, 0), 7.5);
   const l2 = secondsToRipe(s2, t2, 0.5);
-  assert.ok(Math.abs(l2 - 2) <= 0.11, `L2 rice ${l2}`);
+  assert.ok(Math.abs(l2 - 2.5) <= 0.11, `L2 rice ${l2}`);
   // Fertilizer works on rice like any growing crop.
   const s3 = riceFarm(3, 1);
   s3.unlocks.Fertilizer = 1;
@@ -365,9 +365,9 @@ test("growth time: ~1.5× carrot at the same water; L2 grows 1.5× faster (9 s �
 
 // ---------- economy ----------
 
-test("trade(Items.Rice): 1 Rice → 2 Gold, n at a time; gated by the Rice unlock; old trades unchanged", () => {
-  assert.equal(RICE_GOLD, 2);
-  assert.deepEqual(W.TRADES.Rice, { cost: { Rice: 1 }, gives: { Gold: 2 }, unlock: "Rice" });
+test("trade(Items.Rice): 1 Rice → 1 Gold, n at a time; gated by the Rice unlock; Fertilizer and Water are bought", () => {
+  assert.equal(RICE_GOLD, 1);
+  assert.deepEqual(W.TRADES.Rice, { cost: { Rice: 1 }, gives: { Gold: 1 }, unlock: "Rice" });
   const locked = farm(3);
   locked.items.Rice = 10;
   const r0 = W.trade(locked, "Rice");
@@ -379,18 +379,18 @@ test("trade(Items.Rice): 1 Rice → 2 Gold, n at a time; gated by the Rice unloc
   s.items.Rice = 10;
   assert.equal(W.trade(s, "Rice").ok, true);
   assert.equal(s.items.Rice, 9);
-  assert.equal(s.items.Gold, 2);
+  assert.equal(s.items.Gold, 1);
   assert.equal(W.trade(s, "Rice", 4).ok, true);
   assert.equal(s.items.Rice, 5);
-  assert.equal(s.items.Gold, 10);
+  assert.equal(s.items.Gold, 5);
   const short = W.trade(s, "Rice", 6);
   assert.equal(short.ok, false);
   assert.match(short.msg, /6 Rice/);
   assert.equal(s.items.Rice, 5);
-  assert.equal(s.items.Gold, 10);
+  assert.equal(s.items.Gold, 5);
   // Fertilizer / Water are still bought with Pumpkin / Carrot.
   Object.assign(s.unlocks, { Fertilizer: 1, Watering: 1 });
-  s.items.Pumpkin = 3;
+  s.items.Pumpkin = 9;
   assert.equal(W.trade(s, "Fertilizer", 3).ok, true);
   assert.equal(s.items.Fertilizer, 3);
   assert.equal(s.items.Pumpkin, 0);
@@ -410,9 +410,9 @@ test("contracts: Rice joins the pool only with the Rice unlock, tier between Pum
   assert.deepEqual(C.contractPool(withRice), ["Hay", "Wood", "Carrot", "Pumpkin", "Rice", "Cactus"]);
   const info = C.CONTRACT_ITEMS.Rice;
   assert.ok(info.tier > C.CONTRACT_ITEMS.Pumpkin.tier && info.tier < C.CONTRACT_ITEMS.Cactus.tier);
-  // v4 phase 2: a rice contract pays 1.5 Gold per Rice (selling pays 2 → the
-  // bonus contract is now worth delivering instead of a 0.56 Gold/unit loss).
+  // A rice contract pays 1.5 Gold per Rice: delivering beats selling.
   assert.equal(info.value * C.BONUS_FACTOR, 1.5);
+  assert.ok(info.value * C.BONUS_FACTOR > RICE_GOLD);
   assert.equal(C.contractReward("Rice", 100), 150);
   assert.equal(info.reward, "Gold");
   assert.equal(info.needs, "Rice");
@@ -590,7 +590,7 @@ test("rice example: tills, waters, plants, harvests and sells rice for Gold, no 
   const sold = logs.find((l) => /^Market day: [1-9]/.test(l.text));
   assert.ok(sold, JSON.stringify(logs.slice(-6)));
   const n = Number(sold.text.split(" ")[2]);
-  assert.equal(n % 3, 0, "3 Rice per plant at L1");
-  assert.ok(s.items.Gold >= 2 * n, `gold ${s.items.Gold}`);
+  assert.equal(n % 4, 0, "4 Rice per plant at L1");
+  assert.ok(s.items.Gold >= n, `gold ${s.items.Gold}`);
   assert.ok(s.tiles.every((t) => t.ground === "Soil"), "the field became a paddy");
 });

@@ -70,7 +70,7 @@ test("same date → the identical contract set on two separate farms (and after 
   assert.ok(sets.size >= 20, `only ${sets.size} distinct sets in 30 days`);
 });
 
-test("shape: ids, distinct items, reward ≈ amount × value × 1.5, deadline = clock + budget", () => {
+test("shape: ids, distinct items, reward ≈ amount × value × 2, deadline = clock + budget", () => {
   const s = farm(12, ALL);
   s.clock = 123_456;
   for (const d of days(40)) {
@@ -81,7 +81,7 @@ test("shape: ids, distinct items, reward ≈ amount × value × 1.5, deadline = 
       const info = C.CONTRACT_ITEMS[c.item];
       assert.equal(c.status, "active");
       assert.equal(c.rewardItem, info.reward);
-      assert.equal(c.reward, Math.max(1, Math.round(c.amount * info.value * 1.5)));
+      assert.equal(c.reward, Math.max(1, Math.round(c.amount * info.value * 2)));
       const per = info.perTile * 144;
       assert.ok(c.amount >= per * 0.75 * 0.9 && c.amount <= per * 1.25 * 1.1, `${c.item} ${c.amount}`);
       const budget = c.deadlineTick - s.clock;

@@ -80,7 +80,7 @@ while (true) {
     name: "4. Root cellar",
     needs: ["Carrots", "Senses"],
     code: `// Root cellar — needs: Plough Blade (Carrots), Sensor Mast (Senses).
-// One carrot seed takes 1 Wood + 1 Hay from the store room: stock up first.
+// One carrot seed takes 1 Wood + 2 Hay from the store room: stock up first.
 function tend_tile() {
   if (get_ground_type() !== Grounds.Soil) {
     till();
@@ -275,7 +275,7 @@ while (true) {
     name: "8. Apple trail",
     needs: ["Dinosaurs", "Plant", "Senses"],
     code: `// Apple trail — needs: Dinosaur Egg (Dinosaurs), Seed Hopper (Plant), Sensor
-// Mast (Senses), and 10 Gold per egg.
+// Mast (Senses), and 24 Gold per egg.
 // An empty field, one egg, half a minute of apples: every apple adds a tile to
 // the animal. Then the bot drives every row and cuts wherever it bumps into
 // it. A cut takes that segment plus the tail behind it and pays the square.
@@ -371,7 +371,7 @@ while (true) {
 // Mast (Senses), and the Plough Blade for till().
 // Flood a tile to 0.5, plant, and keep the young rice clear of the 0.2 line;
 // a dry spell of 20 s would ruin it. A short barrel is topped up with Water
-// bought for Carrots, and each round ends at the market: 2 Gold per Rice.
+// bought for Carrots, and each round ends at the market: 1 Gold per Rice.
 const n = get_world_size();
 
 function wet_paddy() {

@@ -199,24 +199,24 @@ test("Drought: water evaporates 3× faster; dry crops grow at half speed, wet (�
   assert.ok(near(0.8 - d.tiles[0].water, 3 * (0.8 - n.tiles[0].water), 1e-9));
   assert.ok(near(d.tiles[0].water, 0.8 - 3 * WATER_DECAY_PER_SEC, 1e-9));
 
-  // Dry (water 0): half growth. Carrot grow time 6 s.
+  // Dry (water 0): half growth. Carrot grow time 8 s.
   const dry = farm(1, seed);
   W.tick(dry, 0.1);
-  assert.ok(near(dry.tiles[0].entity.progress, (0.1 * 0.5) / 6));
+  assert.ok(near(dry.tiles[0].entity.progress, (0.1 * 0.5) / 8));
   // Wet (water ≥ 0.5 at the step): full rate 1 + 4w.
   const wet = farm(1, seed);
   wet.tiles[0].water = 0.5;
   W.tick(wet, 0.1);
-  assert.ok(near(wet.tiles[0].entity.progress, (0.1 * 3) / 6));
+  assert.ok(near(wet.tiles[0].entity.progress, (0.1 * 3) / 8));
   const almost = farm(1, seed);
   almost.tiles[0].water = 0.49;
   W.tick(almost, 0.1);
-  assert.ok(near(almost.tiles[0].entity.progress, (0.1 * (1 + 4 * 0.49) * 0.5) / 6));
+  assert.ok(near(almost.tiles[0].entity.progress, (0.1 * (1 + 4 * 0.49) * 0.5) / 8));
   // A dry carrot takes twice as long as under the sun.
   const slow = farm(1, seed);
   const fast = farm(1, sun);
-  run(slow, 6.5);
-  run(fast, 6.5);
+  run(slow, 8.5);
+  run(fast, 8.5);
   assert.equal(fast.tiles[0].entity.progress, 1);
   assert.ok(slow.tiles[0].entity.progress < 0.6 && slow.tiles[0].entity.progress > 0.5);
 });
@@ -225,11 +225,11 @@ test("Storm: growth ×1.5", () => {
   const seed = seedWith("Storm");
   const s = farm(1, seed);
   W.tick(s, 0.1);
-  assert.ok(near(s.tiles[0].entity.progress, (0.1 * 1.5) / 6));
+  assert.ok(near(s.tiles[0].entity.progress, (0.1 * 1.5) / 8));
   const w = farm(1, seed);
   w.tiles[0].water = 1;
   W.tick(w, 0.1);
-  assert.ok(near(w.tiles[0].entity.progress, (0.1 * 5 * 1.5) / 6));
+  assert.ok(near(w.tiles[0].entity.progress, (0.1 * 5 * 1.5) / 8));
 });
 
 test("Storm: seeded lightning strikes destroy a few crops at seeded moments (ground stays), logged", () => {

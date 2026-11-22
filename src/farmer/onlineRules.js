@@ -65,6 +65,11 @@ export const DINO_BENCHMARK = Object.freeze({ seed: 4188, size: 12, x: 6, y: 6, 
 export const ARENA_TICK_CAP = TICK_CAP;
 export const DNF_TICKS = SOLO_DNF_TICKS; // = TICK_CAP + 1
 export const ARENA_MAX_OPS = 10_000_000;
+/** Goes up whenever game numbers change what an arena run measures (yields,
+ *  growth times, prices). A challenge keeps the version it was posted under; an
+ *  answer to an older one re-measures its author too, so both runs are played
+ *  by the same numbers. 1: until BRIEF21 (stored as null). 2: its retune. */
+export const RULES_VERSION = 2;
 
 /** Leaderboard categories and their ordering rule (the daily race has its own
  *  board, GET /api/daily). */

@@ -24,12 +24,12 @@ test("new game: 1×1 grassland with ripe grass, drone at (0,0)", () => {
 test("harvesting grass gives Hay and grass regrows", () => {
   const s = W.createGame();
   assert.equal(W.harvest(s), true);
-  assert.equal(s.items.Hay, 1);
+  assert.equal(s.items.Hay, 2);
   assert.equal(s.tiles[0].entity, null);
-  grow(s, 2);
+  grow(s, 2.1);
   assert.equal(W.isGrown(s.tiles[0].entity), true);
   W.harvest(s);
-  assert.equal(s.items.Hay, 2);
+  assert.equal(s.items.Hay, 4);
 });
 
 test("unripe plants are destroyed by harvest (except grass)", () => {
@@ -44,12 +44,12 @@ test("unripe plants are destroyed by harvest (except grass)", () => {
 
 test("plant bush → wood", () => {
   const s = W.createGame();
-  s.items.Hay = 10;
+  s.items.Hay = 16;
   unlockAll(s, "Plant");
   assert.equal(W.plant(s, "Bush").ok, true); // replaces the grass
-  grow(s, 5);
+  grow(s, 6.1);
   W.harvest(s);
-  assert.equal(s.items.Wood, 1);
+  assert.equal(s.items.Wood, 2);
 });
 
 test("locked plant fails with an unlock hint", () => {
@@ -62,7 +62,7 @@ test("locked plant fails with an unlock hint", () => {
 test("till + carrot flow deducts seed cost and needs soil", () => {
   const s = W.createGame();
   s.items.Hay = 100;
-  s.items.Wood = 60;
+  s.items.Wood = 80;
   unlockAll(s, "Plant", "Carrots");
   assert.equal(s.items.Wood, 10);
   assert.equal(W.plant(s, "Carrot").ok, false); // grassland
@@ -70,10 +70,10 @@ test("till + carrot flow deducts seed cost and needs soil", () => {
   assert.equal(s.tiles[0].ground, "Soil");
   assert.equal(W.plant(s, "Carrot").ok, true);
   assert.equal(s.items.Wood, 9);
-  assert.equal(s.items.Hay, 100 - 10 - 1);
-  grow(s, 7);
+  assert.equal(s.items.Hay, 100 - 16 - 2);
+  grow(s, 8.1);
   W.harvest(s);
-  assert.equal(s.items.Carrot, 1);
+  assert.equal(s.items.Carrot, 2);
   W.till(s);
   assert.equal(s.tiles[0].ground, "Grassland");
 });
@@ -88,7 +88,7 @@ test("pumpkin 2×2 square yields 8 and clears the whole group", () => {
     W.till(s);
     assert.equal(W.plant(s, "Pumpkin").ok, true);
   }
-  grow(s, 5);
+  grow(s, 5.1);
   const before = s.items.Pumpkin;
   s.drone.x = 1;
   s.drone.y = 1;
@@ -104,7 +104,7 @@ test("pumpkin non-square group yields its size; dead pumpkins yield nothing", ()
   unlockAll(s, "Plant", "Carrots", "Pumpkins");
   W.till(s);
   W.plant(s, "Pumpkin");
-  for (let i = 0; i < 40; i++) W.tick(s, 0.1, () => 0); // rng 0 → always dies
+  for (let i = 0; i < 55; i++) W.tick(s, 0.1, () => 0); // rng 0 → always dies
   assert.equal(s.tiles[0].entity.type, "Dead_Pumpkin");
   const before = s.items.Pumpkin;
   W.harvest(s);
@@ -116,10 +116,10 @@ test("trees grow 2× slower per adjacent tree", () => {
   const s = rich();
   unlockAll(s, "Plant", "Carrots", "Trees", "Expand", "Expand");
   W.plant(s, "Tree");
-  assert.equal(W.effectiveGrowTime(s, 0, 0), 7);
+  assert.equal(W.effectiveGrowTime(s, 0, 0), 10);
   s.drone.x = 1;
   W.plant(s, "Tree");
-  assert.equal(W.effectiveGrowTime(s, 0, 0), 14);
+  assert.equal(W.effectiveGrowTime(s, 0, 0), 20);
 });
 
 test("cactus: sorted farm yields n², unsorted yields n", () => {
@@ -165,10 +165,10 @@ test("sunflowers give power; measure reads petals", () => {
   W.plant(s, "Sunflower", () => 0.5);
   const petals = W.measure(s);
   assert.ok(petals >= 7 && petals <= 15);
-  grow(s, 6);
+  grow(s, 7.1);
   const before = s.items.Power;
   W.harvest(s);
-  assert.equal(s.items.Power - before, 1);
+  assert.equal(s.items.Power - before, 2);
 });
 
 test("water speeds growth and decays; tank refills over time", () => {
@@ -178,7 +178,7 @@ test("water speeds growth and decays; tank refills over time", () => {
   s.items.Hay = 1000;
   unlockAll(s, "Plant", "Carrots", "Watering");
   s.items.Water = 0;
-  grow(s, 10.5); // +1 Water every 10 s at Watering level 1
+  grow(s, 8.5); // +1 Water every 8 s at Watering level 1
   assert.equal(s.items.Water, 1);
   assert.equal(W.useItem(s, "Water").ok, true);
   assert.equal(s.tiles[0].water, 0.25);
@@ -191,22 +191,22 @@ test("fertilizer via trade skips growth", () => {
   unlockAll(s, "Plant", "Carrots", "Pumpkins", "Fertilizer");
   const p = s.items.Pumpkin;
   assert.equal(W.trade(s, "Fertilizer", 2).ok, true);
-  assert.equal(s.items.Pumpkin, p - 2);
+  assert.equal(s.items.Pumpkin, p - 2 * 3);
   W.harvest(s);
-  W.plant(s, "Bush"); // 4 s
+  W.plant(s, "Bush"); // 6 s
   W.useItem(s, "Fertilizer", 2);
   assert.equal(W.isGrown(s.tiles[0].entity), true);
 });
 
 test("expand increases size and clears the farm", () => {
   const s = W.createGame();
-  s.items.Hay = 30;
+  s.items.Hay = 45;
   assert.equal(W.buyUnlock(s, "Expand").ok, true);
   assert.equal(s.size, 2);
   assert.equal(s.tiles.length, 4);
   assert.ok(s.tiles.every((t) => t.entity === null && t.ground === "Grassland"));
   assert.equal(s.items.Hay, 0);
-  assert.equal(W.buyUnlock(s, "Expand").ok, false); // needs 20 Wood now
+  assert.equal(W.buyUnlock(s, "Expand").ok, false); // needs 36 Wood now
 });
 
 test("unlock prerequisites and max levels", () => {
@@ -214,9 +214,9 @@ test("unlock prerequisites and max levels", () => {
   assert.equal(W.buyUnlock(s, "Carrots").locked, "Plant");
   unlockAll(s, "Plant");
   assert.equal(W.buyUnlock(s, "Plant").ok, false); // maxed
-  assert.equal(W.unlockCost(s, "Speed").Hay, 20);
+  assert.equal(W.unlockCost(s, "Speed").Hay, 24);
   unlockAll(s, "Speed");
-  assert.equal(W.unlockCost(s, "Speed").Hay, 60);
+  assert.equal(W.unlockCost(s, "Speed").Hay, 90);
   assert.equal(W.speedMultiplier(s), 2);
 });
 

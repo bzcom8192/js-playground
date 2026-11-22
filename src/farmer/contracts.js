@@ -31,7 +31,7 @@ import { mulberry32 } from "./maze.js";
 import { canRecord, addContractDone } from "./records.js";
 
 export const CONTRACTS_PER_DAY = 3;
-export const BONUS_FACTOR = 1.5;
+export const BONUS_FACTOR = 2;
 export const MIN_AMOUNT = 5;
 export const BUDGET_BASE = 20_000;
 export const TICKS_PER_UNIT = 400;
@@ -42,7 +42,7 @@ export const REWARD_ITEMS = ["Gold", "Bone"];
  * Contract item table, lowest tier first.
  *  needs:   the unlock that lets you produce it (null = always: Hay / Wood).
  *  perTile: amount per farm tile (before jitter).
- *  reward / value: the reward item and one unit's worth in it (×1.5 bonus).
+ *  reward / value: the reward item and one unit's worth in it (× BONUS_FACTOR).
  * Gold is the contract currency; Gold and Bone contracts (top tiers) pay Bone.
  */
 export const CONTRACT_ITEMS = {
@@ -51,9 +51,9 @@ export const CONTRACT_ITEMS = {
   Carrot: { tier: 1, needs: "Carrots", perTile: 2, reward: "Gold", value: 0.1 },
   Pumpkin: { tier: 2, needs: "Pumpkins", perTile: 2, reward: "Gold", value: 0.25 },
   // v3 phase 5: Rice sits between Pumpkin and Cactus (tier 2.5: budget ×3.5).
-  // v4 phase 2: value 1 → 1.5 Gold per Rice delivered (was 0.375 ≈ 0.56 Gold,
-  // far below the 2 Gold of trade(Items.Rice)); its tier / budget unchanged.
-  Rice: { tier: 2.5, needs: "Rice", perTile: 2, reward: "Gold", value: 1 },
+  // Delivering must beat selling: 0.75 × 2 = 1.5 Gold per Rice, against the
+  // 1 Gold of trade(Items.Rice).
+  Rice: { tier: 2.5, needs: "Rice", perTile: 2, reward: "Gold", value: 0.75 },
   Cactus: { tier: 3, needs: "Cactus", perTile: 2, reward: "Gold", value: 0.5 },
   Gold: { tier: 4, needs: "Mazes", perTile: 1, reward: "Bone", value: 0.5 },
   Bone: { tier: 5, needs: "Dinosaurs", perTile: 1, reward: "Bone", value: 1 },

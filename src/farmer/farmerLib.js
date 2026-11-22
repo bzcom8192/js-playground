@@ -49,7 +49,7 @@ declare const West: "West";
 /**
  * Gather whatever grows on the bot's tile. A ripe plant goes into the store
  * room; an unripe one is lost (young grass is spared).
- * Maze Treasure: pays Gold = farm tiles × Mazes level, then the maze is gone.
+ * Maze Treasure: pays Gold for every farm tile, then the maze is gone.
  * Dinosaur: cuts this segment and all the tail behind it
  * → Bone = (segments cut)² × Dinosaurs level (from the head: all of it).
  * Apples stay where they are (false). Costs 200 ticks.
@@ -60,10 +60,10 @@ declare function harvest(): boolean;
  * Put a plant on the bot's tile. Needs the Plant upgrade and the plant's own.
  * Carrots, Pumpkins, Sunflowers, Cactus and Rice want Soil. The seed is paid
  * for on the spot (see get_cost). Grass on the tile makes room.
- * Entities.Rice (Rice upgrade, 1 Carrot): the tile's water must be ≥ 0.5.
+ * Entities.Rice (Rice upgrade, 3 Carrots): the tile's water must be ≥ 0.5.
  * Below 0.2 it stops growing, and more than 200 dry world ticks in a row
- * (20 s) turn it into Dead_Rice. Ripe: 3 Rice (5 at level 2).
- * Entities.Dinosaur (Dinosaurs upgrade, 10 Gold): a dinosaur one tile long. It
+ * (20 s) turn it into Dead_Rice. Ripe: 4 Rice (7 at level 2).
+ * Entities.Dinosaur (Dinosaurs upgrade, 24 Gold): a dinosaur one tile long. It
  * wanders on its own and gets longer with each apple. One per farm. 200 ticks.
  */
 declare function plant(entity: EntityType): boolean;
@@ -88,14 +88,14 @@ declare function swap(direction: Direction): boolean;
 /**
  * Apply items to the bot's tile.
  * Items.Water: +0.25 water each (growth ×(1 + 4×water)).
- * Items.Fertilizer: 2 s of growth each. On a full-grown Bush, with Mazes, it
+ * Items.Fertilizer: 3 s of growth each. On a full-grown Bush, with Mazes, it
  * grows a hedge maze over the entire farm instead (a dinosaur and its apples
  * vanish with the old field).
  */
 declare function use_item(item: ItemType, n?: number): boolean;
 /**
- * Deal with the market n times. It sells Fertilizer (1 Pumpkin) and Water
- * (1 Carrot), and buys Items.Rice for 2 Gold each (Rice upgrade).
+ * Deal with the market n times. It sells Fertilizer (3 Pumpkins) and Water
+ * (2 Carrots), and buys Items.Rice for 1 Gold each (Rice upgrade).
  * Closed while you are in a maze. 200 ticks.
  */
 declare function trade(item: ItemType, n?: number): boolean;
@@ -132,7 +132,7 @@ declare function get_world_size(): number;
 /** How much of an item is in the store room. */
 declare function num_items(item: ItemType): number;
 /**
- * Price of an upgrade's next level, or of one seed, e.g. { Wood: 1, Hay: 1 }.
+ * Price of an upgrade's next level, or of one seed, e.g. { Wood: 1, Hay: 2 }.
  * null when there is none. Cactus, Grass and Rice mean the upgrade.
  */
 declare function get_cost(thing: UnlockType | EntityType): Partial<Record<ItemType, number>> | null;

@@ -30,6 +30,7 @@ import {
   DINO_BENCHMARK,
   DNF_TICKS,
   MAZE_BENCHMARK,
+  RULES_VERSION,
   eloUpdate,
   outcomeOf,
   raceScore,
@@ -465,11 +466,19 @@ export function createApp({ db, distDir = null, rateLimit = {}, trustProxy = fal
       // the goal is a valid answer (DNF: it loses); an unverifiable run is not.
       const rep = await replay({ kind: "arena", code: v.result.code, goal: c.goal, seed: c.seed });
       const measured = { ticks: rep.reached ? rep.ticks : DNF_TICKS, ops: rep.ops, code: v.result.code, verified: true };
-      const r = db.closeChallenge(c.id, player.id, measured, (ch, author, challenger) => {
+      // Posted under older game numbers: the author's program is measured again,
+      // so that both runs of the race were played by the same ones.
+      let authorRun = null;
+      if (c.rules !== RULES_VERSION) {
+        const a = await replay({ kind: "arena", code: c.code, goal: c.goal, seed: c.seed });
+        authorRun = { ticks: a.reached ? a.ticks : DNF_TICKS, ops: a.ops };
+      }
+      const decide = (ch, author, challenger) => {
         const score = raceScore(measured, { ticks: ch.author_ticks, ops: ch.author_ops });
         const e = eloUpdate(challenger.elo, author.elo, score);
         return { outcome: outcomeOf(score), deltaChallenger: e.deltaA, deltaAuthor: e.deltaB };
-      });
+      };
+      const r = db.closeChallenge(c.id, player.id, measured, decide, authorRun);
       if (!r.ok) throw closedError(r.code); // answered or expired while the replay ran
       return sendJson(res, 201, {
         challengeId: c.id,
@@ -484,7 +493,7 @@ export function createApp({ db, distDir = null, rateLimit = {}, trustProxy = fal
           elo: r.challenger.elo,
           delta: r.challenger.delta,
         },
-        author: { playerId: r.author.id, name: r.author.name, ticks: c.author_ticks, ops: c.author_ops, elo: r.author.elo, delta: r.author.delta },
+        author: { playerId: r.author.id, name: r.author.name, ticks: r.challenge.author_ticks, ops: r.challenge.author_ops, elo: r.author.elo, delta: r.author.delta },
       });
     }
 

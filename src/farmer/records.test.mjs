@@ -226,7 +226,7 @@ test("maze solve in a run writes a record: seed, ticks and ops inside the maze, 
   const { rt, logs } = runtime(s, { rng: mulberry32(9) });
   const program = R.programSize(SOLVER);
   assert.equal(await rt.run(SOLVER, { program }), "done", JSON.stringify(logs.filter((l) => l.kind === "error")));
-  assert.equal(s.items.Gold, 36 * 2);
+  assert.equal(s.items.Gold, 36 * 3);
   const seedLog = logs.find((l) => l.text.startsWith("Maze seed: "));
   assert.ok(seedLog, "the seed is announced in the Log");
   const entry = s.records.mazes["2"];
