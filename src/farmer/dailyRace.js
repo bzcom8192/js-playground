@@ -21,6 +21,19 @@ export const bangkokDate = (ms = Date.now()) => new Date(ms + BANGKOK_OFFSET_MS)
 /** The calendar day before a "YYYY-MM-DD" date. */
 export const previousDate = (date) => new Date(Date.parse(`${date}T00:00:00Z`) - DAY_MS).toISOString().slice(0, 10);
 
+/**
+ * The ISO-8601 week of the Bangkok calendar date at `ms` as "YYYY-Www" (weeks
+ * start on Monday, 00:00 in Bangkok; the year is the one its Thursday is in).
+ * The maze leaderboard's hidden maze changes with it.
+ */
+export function bangkokWeek(ms = Date.now()) {
+  const day = Math.floor((ms + BANGKOK_OFFSET_MS) / DAY_MS); // days since 1970-01-01, a Thursday
+  const thursday = day - ((((day + 3) % 7) + 7) % 7) + 3;
+  const year = new Date(thursday * DAY_MS).getUTCFullYear();
+  const week = Math.floor((thursday - Date.UTC(year, 0, 1) / DAY_MS) / 7) + 1;
+  return `${year}-W${String(week).padStart(2, "0")}`;
+}
+
 /** The race of one date → { date, seed, size, level, sx, sy }. */
 export function dailyCourse(date) {
   if (!isDateString(date)) throw new Error(`bad race date ${String(date)}`);

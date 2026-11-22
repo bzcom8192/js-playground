@@ -70,7 +70,7 @@ function cleanResult(job, r) {
  * createVerifier({ timeoutMs, maxConcurrent, maxQueue, resourceLimits }) →
  *  { verify(job) → Promise<{ ok: true, result, ms } | { ok: false, code, error }>,
  *    close(), stats() }
- *  job: { kind: "arena", code, goal, seed } | { kind: "maze", code, level, seed, size, sx, sy }
+ *  job: { kind: "arena", code, goal, seed } | { kind: "maze", code, level, seed }
  *    | { kind: "dino", code } | { kind: "daily", code, seed }
  *  code: "timeout" | "crash" | "busy" | "closed"
  */

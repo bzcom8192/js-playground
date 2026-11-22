@@ -10,19 +10,26 @@
 // scores and (v5) dino scores and daily race entries are REPLAYED by the verifier (verifier.js: the engine in a
 // worker_thread, tick caps + a wall-clock timeout) and stored with the
 // server-measured ticks / ops; a run the replay can't reproduce is a 422.
+//
+// Maze scores run on the hidden maze of the week (mazeBenchmark.js). Whatever a
+// program can see of it must not come back to its author: the answers carry
+// only the measured numbers, never the seed and never text the program chose
+// (error messages could spell out the walls).
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import { extname, join, normalize, resolve, sep } from "node:path";
+import { mazeBenchmark } from "./mazeBenchmark.js";
 import { createVerifier } from "./verifier.js";
 import { hashToken } from "./db.js";
 import { GOALS } from "../src/farmer/arena.js";
 import { MAZE_VERIFY_TICK_CAP } from "../src/farmer/verify.js";
-import { bangkokDate, dailyCourse, dailyFailText, previousDate } from "../src/farmer/dailyRace.js";
+import { bangkokDate, bangkokWeek, dailyCourse, dailyFailText, previousDate } from "../src/farmer/dailyRace.js";
 import {
   ARENA_TICK_CAP,
   CHALLENGE_TTL_MS,
   DINO_BENCHMARK,
   DNF_TICKS,
+  MAZE_BENCHMARK,
   eloUpdate,
   outcomeOf,
   raceScore,
@@ -207,9 +214,10 @@ function claimOf(ticks, ops) {
  *    without a valid token).
  *  trustProxy: take the client IP from X-Forwarded-For (behind a proxy).
  *  verifier: a createVerifier() (default: a new one with the default limits).
- *  now: the clock of the daily race date (tests).
+ *  secret: what the hidden maze seeds are derived from (default: the DB's own).
+ *  now: the clock of the daily race date and the benchmark week (tests).
  */
-export function createApp({ db, distDir = null, rateLimit = {}, trustProxy = false, verifier = createVerifier(), now = Date.now } = {}) {
+export function createApp({ db, distDir = null, rateLimit = {}, trustProxy = false, verifier = createVerifier(), secret = db.secret(), now = Date.now } = {}) {
   const limiter = createRateLimiter(rateLimit);
   const root = distDir ? resolve(distDir) : null;
 
@@ -243,19 +251,19 @@ export function createApp({ db, distDir = null, rateLimit = {}, trustProxy = fal
   // Replay one job; verifier problems become HTTP errors: 422 (the run could
   // not be verified), 429 (verifier queue full: retry soon — not 503, which
   // the client reads as "server offline"), 503 (shutting down).
-  const replay = async (job) => {
+  // opaque: the job's maze is hidden, so a crash's text (it may be the program's
+  // own) stays here.
+  const replay = async (job, { opaque = false } = {}) => {
     const v = await verifier.verify(job);
     if (v.ok) return v.result;
     if (v.code === "busy") throw Object.assign(new HttpError(429, v.error), { retryAfter: 5 });
     if (v.code === "closed") throw Object.assign(new HttpError(503, v.error), { retryAfter: 5 });
-    throw new HttpError(422, `could not verify the run: ${v.error}`);
+    throw new HttpError(422, `could not verify the run: ${opaque && v.code === "crash" ? "the replay crashed" : v.error}`);
   };
-  const mazeFailText = (r, s) => {
-    if (r.reason === "wrong maze" || r.wrongStart) {
-      const at = r.wrongStart ? ` at (${r.wrongStart.x}, ${r.wrongStart.y})` : "";
-      return `the replay spawned a different maze${at}, not seed ${s.seed} at the recorded start (${s.sx}, ${s.sy})`;
-    }
-    if (r.error) return `the replay failed: ${r.error}`;
+  // Fixed texts only (see the header): no error message, no position.
+  const mazeFailText = (r) => {
+    if (r.reason === "wrong maze" || r.wrongStart) return `the program grew its maze away from the start tile (${MAZE_BENCHMARK.sx}, ${MAZE_BENCHMARK.sy})`;
+    if (r.error) return "the program failed with an error on the benchmark farm";
     if (r.reason === "tick cap" || r.reason === "clock cap") return `the replay did not solve the maze within ${fmt(MAZE_VERIFY_TICK_CAP)} ticks`;
     if (r.reason === "op budget") return "the replay was cut off (too many API calls)";
     return "the replay ended without harvesting the treasure";
@@ -320,12 +328,14 @@ export function createApp({ db, distDir = null, rateLimit = {}, trustProxy = fal
       if (!v.ok) throw new HttpError(400, v.error);
       let rank = 0;
       let prev = null;
+      const maze = v.category === "maze";
       const entries = db.leaderboard(v.category, v.level).map((row, i) => {
-        const key = v.category === "dino" ? `${row.value}` : `${row.ticks}/${row.ops}`;
+        const legacy = maze && row.period === null;
+        const key = maze ? `${row.ticks}/${row.ops}` : `${row.value}`;
         if (key !== prev) rank = i + 1; // ties share a rank (1, 1, 3)
         prev = key;
         return {
-          rank,
+          rank: legacy ? null : rank, // legacy entries follow the ranked ones
           playerId: row.player_id,
           name: row.name,
           ticks: row.ticks,
@@ -337,9 +347,10 @@ export function createApp({ db, distDir = null, rateLimit = {}, trustProxy = fal
           sy: row.sy ?? null,
           createdAt: row.created_at,
           verified: !!row.verified,
+          ...(maze && { period: row.period, legacy }),
         };
       });
-      return sendJson(res, 200, { category: v.category, level: v.level, entries });
+      return sendJson(res, 200, { category: v.category, level: v.level, ...(maze && { period: bangkokWeek(now()) }), entries });
     }
 
     if (path === "/api/daily") {
@@ -388,17 +399,14 @@ export function createApp({ db, distDir = null, rateLimit = {}, trustProxy = fal
         const claimed = Number.isInteger(body.value) && body.value > 0 ? { value: body.value } : null;
         return sendJson(res, 201, { id, ...withoutCode(stored), claimed });
       }
-      const r = await replay({ kind: "maze", code: score.code, level: score.level, seed: score.seed, size: score.size, sx: score.sx, sy: score.sy });
-      if (!r.solved) throw new HttpError(422, `maze score rejected: ${mazeFailText(r, score)}`);
-      const stored = { ...score, ticks: r.ticks, ops: r.ops, verified: true };
+      // The hidden maze of the week the score arrives in. Its seed is neither
+      // stored nor answered (it follows from the secret and the period).
+      const bench = mazeBenchmark(secret, now());
+      const r = await replay({ kind: "maze", code: score.code, level: score.level, seed: bench.seed(score.level) }, { opaque: true });
+      if (!r.solved) throw new HttpError(422, `maze score rejected: ${mazeFailText(r)}`);
+      const stored = { ...score, ticks: r.ticks, ops: r.ops, period: bench.period, verified: true };
       const id = db.addScore(player.id, stored);
-      return sendJson(res, 201, {
-        id,
-        ...withoutCode(stored),
-        claimed: { ticks: score.ticks, ops: score.ops },
-        corrected: score.ticks !== r.ticks || score.ops !== r.ops,
-        replay: r.mode,
-      });
+      return sendJson(res, 201, { id, ...withoutCode(stored), claimed: claimOf(body.ticks, body.ops), replay: r.mode });
     }
 
     if (path === "/api/challenges") {

@@ -5,7 +5,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { dailySeed } from "./contracts.js";
-import { RACE, bangkokDate, dailyCourse, dailyFailText, previousDate } from "./dailyRace.js";
+import { RACE, bangkokDate, bangkokWeek, dailyCourse, dailyFailText, previousDate } from "./dailyRace.js";
 import { playDaily } from "./dailyClient.js";
 import { EXAMPLES } from "./examples.js";
 import { generateSeededMaze, pathDistances } from "./maze.js";
@@ -47,6 +47,19 @@ test("daily race: the date changes at midnight in Bangkok (17:00 UTC)", () => {
   assert.equal(previousDate("2026-11-22"), "2026-11-21");
   assert.equal(previousDate("2027-01-01"), "2026-12-31");
   assert.equal(previousDate("2028-03-01"), "2028-02-29");
+});
+
+test("weeks: ISO-8601, changing on Monday 00:00 in Bangkok", () => {
+  // Monday 2026-11-23, 00:00 in Bangkok = Sunday 17:00 UTC.
+  assert.equal(bangkokWeek(Date.UTC(2026, 10, 22, 16, 59, 59, 999)), "2026-W47");
+  assert.equal(bangkokWeek(Date.UTC(2026, 10, 22, 17)), "2026-W48");
+  assert.equal(bangkokWeek(Date.UTC(2026, 10, 29, 16, 59, 59, 999)), "2026-W48");
+  // The year is the one the week's Thursday is in.
+  const at = (y, m, d) => bangkokWeek(Date.UTC(y, m - 1, d, 5));
+  for (const [date, week] of [
+    [[2026, 1, 1], "2026-W01"], [[2026, 12, 31], "2026-W53"], [[2027, 1, 3], "2026-W53"], [[2027, 1, 4], "2027-W01"],
+    [[2024, 12, 30], "2025-W01"], [[2021, 1, 3], "2020-W53"], [[2023, 1, 1], "2022-W52"], [[1970, 1, 1], "1970-W01"], [[1969, 12, 28], "1969-W52"],
+  ]) assert.equal(at(...date), week, date.join("-"));
 });
 
 test("daily race: one fixed course per date, seeded like the daily contracts", () => {

@@ -11,21 +11,23 @@
 //  - Arena (friend challenges): runSolo() on the fixed arena world + goal for
 //    the challenge seed — exactly what the client ran (same engine, same seed,
 //    seeded Math.random) → { reached, ticks, ops }.
-//  - Maze (leaderboard): the maze is fully determined by (seed, farm size,
-//    start tile). The replay world is a fixed "verification farm" of that
-//    size (everything unlocked at its top level except Mazes = the record's
-//    level; every tile a grown Bush; plenty of every item; no weather) with
-//    the drone on the start tile and the record's seed queued as the next
-//    maze seed (state.pendingSeed, the Records window's replay mechanism).
-//    1. "spawn" mode: the program runs from the top, as it did on the
-//       player's farm. The first maze it spawns uses the queued seed; when it
-//       is spawned on the recorded start tile it IS the recorded maze, and the
-//       runtime times it exactly like on the page (counters at the treasure
-//       harvest minus at the maze spawn).
-//    2. "prespawned" mode (fallback, only if mode 1 never spawned the
-//       recorded maze, e.g. the program's setup depends on the player's own
-//       farm): the maze is generated before Run and timed from the run start.
-//    solved = the recorded maze's treasure was harvested.
+//  - Maze (leaderboard): every program of a board and week runs on the SAME maze,
+//    which only the server knows: MAZE_BENCHMARK (onlineRules.js) fixes the farm
+//    (12×12, everything unlocked at its top level except Mazes = the board's
+//    level; every tile a grown Bush; plenty of every item; no weather) and the
+//    start tile, the server draws the seed (server/mazeBenchmark.js). Nothing
+//    else random depends on that seed: the world rng and the program's
+//    Math.random() have a fixed, public seed of their own, so a program can't
+//    work the maze out from them.
+//    1. "spawn" mode: the program runs from the top, as on the player's farm,
+//       and grows the maze itself on the start tile (the Bush there is ripe).
+//    2. "prespawned" mode (fallback, only if mode 1 never grew the benchmark
+//       maze): the maze stands before the program starts.
+//    In both modes the clock runs from the START OF THE RUN, and growing the
+//    maze brings every bot to the start tile. So nothing can be prepared for
+//    free: no bot parked where the treasure will (or may) be, no bot timeline
+//    run ahead before the clock starts.
+//    solved = the benchmark maze's treasure was harvested.
 //  - Dino (leaderboard, v5 phase 2): the program runs from the top on ONE fixed
 //    benchmark (DINO_BENCHMARK in onlineRules.js: the verification farm under
 //    grass, a pre-planted dinosaur with a fixed seed), so a score is a function
@@ -36,7 +38,8 @@
 //    (dailyRace.js), on the maze farm above, always "prespawned": the maze
 //    stands when the program starts and is timed from the run start. "spawn"
 //    mode is not offered, because a program that grows the maze itself can
-//    first park bots where it knows the treasure will be.
+//    first park bots where it knows the treasure will be. (The seed is public
+//    by design, so here gathering the bots would not be enough.)
 
 import { UNLOCKS, WORLD_SIZES } from "./constants.js";
 import { mulberry32 } from "./maze.js";
@@ -44,7 +47,7 @@ import { createRuntime } from "./runtime.js";
 import * as W from "./world.js";
 import { GOALS, OP_BUDGET, TICK_MS, runSolo } from "./arena.js";
 import { RACE } from "./dailyRace.js";
-import { DINO_BENCHMARK } from "./onlineRules.js";
+import { DINO_BENCHMARK, MAZE_BENCHMARK } from "./onlineRules.js";
 
 /** Wall-clock limit for one verification (enforced by the server's worker). */
 export const VERIFY_TIMEOUT_MS = 10_000;
@@ -113,18 +116,20 @@ function verifyFarm(size, crop, rng) {
 
 /**
  * The maze verification farm (see the header). prespawned: generate the maze
- * now (consuming the queued seed) instead of leaving it to the program.
- * → { state, rng }
+ * now instead of leaving it to the program. hidden: the seed is a secret — the
+ * world's random stream is drawn from `rngSeed` instead, and the maze is the
+ * world's benchmark maze (benchMaze in world.js). → { state, rng }
  */
-export function mazeVerifyWorld({ seed, size, sx, sy, level }, { prespawned = false } = {}) {
+export function mazeVerifyWorld({ seed, size, sx, sy, level, hidden = false, rngSeed = seed }, { prespawned = false } = {}) {
   if (!WORLD_SIZES.includes(size)) throw new Error(`bad farm size ${String(size)}`);
   if (!(sx >= 0 && sy >= 0 && sx < size && sy < size)) throw new Error("start tile is off the farm");
-  const rng = mulberry32((seed ^ 0x5bd1e995) >>> 0);
+  const rng = mulberry32((rngSeed ^ 0x5bd1e995) >>> 0);
   const state = verifyFarm(size, "Bush", rng);
   state.unlocks.Mazes = level;
   state.drone.x = sx;
   state.drone.y = sy;
-  state.pendingSeed = seed >>> 0;
+  if (hidden) state.benchMaze = { seed: seed >>> 0, x: sx, y: sy };
+  else state.pendingSeed = seed >>> 0;
   if (prespawned) W.spawnMaze(state, rng);
   return { state, rng };
 }
@@ -136,7 +141,7 @@ export function mazeVerifyWorld({ seed, size, sx, sy, level }, { prespawned = fa
  * check() → a truthy value ends the run (reason "done", value in `found`).
  * onRecord(ev, stats): a new best on this world, with the run counters then.
  */
-async function runVirtual({ code, state, rng, seed, check, tickCap, clockCap, opBudget, timeExistingMaze = false, onRecord = () => {}, mapLine }) {
+async function runVirtual({ code, state, rng, seed, check, tickCap, clockCap, opBudget, timeMaze = false, onRecord = () => {}, mapLine }) {
   const clock = { t: 0 };
   let timers = [];
   let seq = 0;
@@ -159,7 +164,8 @@ async function runVirtual({ code, state, rng, seed, check, tickCap, clockCap, op
     mathRandom: mulberry32((seed ^ 0x9e3779b9) >>> 0),
     wallClock: () => 0,
     today: () => "2000-01-01",
-    timeExistingMaze,
+    timeExistingMaze: timeMaze,
+    timeFromRunStart: timeMaze,
     onRecord: (ev) => onRecord(ev, rt.stats()),
   });
   rt.run(String(code ?? ""), { mapLine }).then(() => (ended = true));
@@ -218,18 +224,16 @@ async function runVirtual({ code, state, rng, seed, check, tickCap, clockCap, op
   return { reason, found, error, stats: rt.stats() };
 }
 
-const sameStart = (m, sx, sy) => !!m?.start && m.start.x === sx && m.start.y === sy;
-
 async function mazeAttempt(job, prespawned) {
-  const { seed, size, sx, sy, level } = job;
+  const { seed, size, sx, sy, level, rngSeed = seed } = job;
   const { state, rng } = mazeVerifyWorld(job, { prespawned });
   const key = String(level);
-  let spawned = prespawned; // has the recorded maze been spawned?
+  let spawned = prespawned; // has the course's maze been spawned?
   let wrongStart = null;
   const check = () => {
     const m = state.maze;
-    if (!spawned && m && m.seed === seed) {
-      if (sameStart(m, sx, sy)) spawned = true;
+    if (!spawned && m) {
+      if (m.seed === seed && m.start?.x === sx && m.start?.y === sy) spawned = true;
       else {
         wrongStart = { x: m.start.x, y: m.start.y };
         return { mismatch: true };
@@ -237,8 +241,6 @@ async function mazeAttempt(job, prespawned) {
     }
     const a = state.records?.mazes?.[key]?.attempts?.[0];
     if (!a) return null;
-    // The first timed solve of this run is the recorded maze (the queued seed
-    // is used by the first spawn; anything else was caught above).
     if (a.seed === seed && a.size === size && a.sx === sx && a.sy === sy) return { attempt: a };
     return { mismatch: true };
   };
@@ -246,12 +248,12 @@ async function mazeAttempt(job, prespawned) {
     code: job.code,
     state,
     rng,
-    seed,
+    seed: rngSeed,
     check,
     tickCap: MAZE_VERIFY_TICK_CAP,
     clockCap: MAZE_VERIFY_CLOCK_CAP,
     opBudget: MAZE_VERIFY_OP_BUDGET,
-    timeExistingMaze: prespawned,
+    timeMaze: true,
     mapLine: job.mapLine,
   });
   const a = r.found?.attempt;
@@ -269,18 +271,18 @@ async function mazeAttempt(job, prespawned) {
 }
 
 /**
- * verifyMaze({ code, level, seed, size, sx, sy }) → { kind: "maze", mode,
- *   solved, ticks, ops, reason, error, … }. Tries "spawn" mode, then
- *   "prespawned" mode if the program never spawned the recorded maze.
+ * verifyMaze({ code, level, seed }) → { kind: "maze", mode, solved, ticks, ops,
+ *   reason, error, … } on the MAZE_BENCHMARK farm. Tries "spawn" mode, then
+ *   "prespawned" mode if the program never grew the benchmark maze (in which
+ *   case it has not seen any of it either).
  */
-export async function verifyMaze(job) {
-  const j = { code: String(job.code ?? ""), level: job.level, seed: job.seed >>> 0, size: job.size, sx: job.sx, sy: job.sy };
+export async function verifyMaze({ code, level, seed }) {
+  const j = { ...MAZE_BENCHMARK, hidden: true, code: String(code ?? ""), level, seed: seed >>> 0 };
   const first = await mazeAttempt(j, false);
   if (first.solved || first.spawned) return first;
   const second = await mazeAttempt(j, true);
-  if (second.solved) return { ...second, firstTry: first.reason };
   // Report why the program-spawned attempt failed too.
-  return { ...second, firstTry: first.reason, wrongStart: first.wrongStart };
+  return { ...second, firstTry: first.reason, wrongStart: second.solved ? null : first.wrongStart };
 }
 
 // ---------- daily race ----------
@@ -348,7 +350,7 @@ export async function verifyDino({ code }) {
   };
 }
 
-/** Dispatch one job: { kind: "arena", code, goal, seed } | { kind: "maze", code, level, seed, size, sx, sy } | { kind: "dino", code } | { kind: "daily", code, seed }. */
+/** Dispatch one job: { kind: "arena", code, goal, seed } | { kind: "maze", code, level, seed } | { kind: "dino", code } | { kind: "daily", code, seed }. */
 export function runVerification(job) {
   if (job?.kind === "arena") return verifyArena(job);
   if (job?.kind === "maze") return verifyMaze(job);

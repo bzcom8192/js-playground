@@ -99,7 +99,7 @@ const MAZES = [
   ["Treasure 💰", "On the path tile farthest from your start. measure() names the direction to it: the longer axis, East/West on a tie, null once you are there."],
   ["Gold 🪙", "harvest() on it pays farm tiles × level. The hedges go and bare Grassland is left."],
   ["Until then", "plant, till, swap and trade are closed. clear() or New Acres ends the labyrinth unpaid. Example 7 finds the way by touch."],
-  ["Seeds 🏆", "The Output tab prints each labyrinth's seed. Same seed, farm size and start tile: same hedges. One that you grow and solve in a single run enters the Almanac with ticks and ops (every API call is 1 op), where a seed can also be set for the next one."],
+  ["Seeds 🏆", "The Output tab prints each labyrinth's seed. Same seed, farm size and start tile: same hedges. One that you grow and solve in a single run enters the Almanac with ticks and ops (every API call is 1 op), where a seed can also be set for the next one. Online, a best sends your program to a hidden maze that is the same for everyone and new every week, timed from the start of the program."],
 ];
 
 const DINOSAURS = [

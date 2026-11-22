@@ -110,6 +110,9 @@ export function createGame() {
     // this world (the demo farm, the server's benchmark; never saved) or null.
     pendingDinoSeed: null,
     dinoSeed: null,
+    // The server's maze benchmark only (verify.js; never saved): { seed, x, y } —
+    // a maze grown on (x, y) has this seed. null on every other world.
+    benchMaze: null,
     // v3 phase 2: the farm clock in ticks (every run adds its run clock; see
     // contracts.js) and today's daily contracts ({ date, contracts } or null
     // until contracts.ensureContracts generates them).
@@ -885,11 +888,16 @@ export const mazeGold = (state) => state.size * state.size * Math.max(1, level(s
  * The layout comes from a seed: the pending (replay) seed if one is set —
  * it is used once and cleared — otherwise a fresh random 32-bit seed drawn
  * from `rng`. Same seed + farm size + start tile → the same maze.
+ * On the benchmark world (state.benchMaze) only the benchmark's start tile grows
+ * the benchmark maze, and every bot is brought to the spawner, so none can wait
+ * at a likely treasure tile before there is a maze.
  */
 export function spawnMaze(state, rng = Math.random) {
   const { x, y } = state.drone;
-  const pending = parseSeed(state.pendingSeed);
-  const seed = pending ?? randomSeed(rng);
+  const bench = state.benchMaze ?? null;
+  const fixed = bench && bench.x === x && bench.y === y ? parseSeed(bench.seed) : null;
+  const pending = bench ? null : parseSeed(state.pendingSeed);
+  const seed = fixed ?? pending ?? randomSeed(rng);
   state.pendingSeed = null;
   const { walls, treasure } = generateSeededMaze(state.size, x, y, seed);
   state.tiles = walls.map((wall) => {
@@ -901,7 +909,8 @@ export function spawnMaze(state, rng = Math.random) {
   state.maze = { treasure: { ...treasure }, seed, start: { x, y } };
   emit({ type: "mazeSpawn", maze: state.maze, seed, replay: pending !== null, size: state.size, start: { x, y } });
   // Other drones (Megafarm) caught on a hedge join the drone that spawned it.
-  liftDronesOffHedges(state, { x, y });
+  if (bench) for (const d of allDrones(state)) Object.assign(d, { x, y });
+  else liftDronesOffHedges(state, { x, y });
   // Simplest rule that can't corrupt either: a maze replaces the whole farm,
   // so the dinosaur and its apples are gone too (like clear()).
   state.dino = null;

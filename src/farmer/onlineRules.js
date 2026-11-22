@@ -7,8 +7,8 @@
 // the server re-runs the submitted program with this engine (src/farmer/
 // verify.js, in a worker thread with a tick cap and a wall-clock timeout) and
 // stores only what it measured itself — friend-arena challenges and results,
-// and maze scores (which now carry their code + seed + farm size + start
-// tile). v5 phase 2: dino scores too. The dinosaur is seeded now, so a dino
+// and maze scores (the program, on the server's hidden maze of the week: see
+// MAZE_BENCHMARK). v5 phase 2: dino scores too. The dinosaur is seeded now, so a dino
 // score is the program itself, run by the server on one fixed benchmark farm
 // (DINO_BENCHMARK). v5 phase 3: daily race entries are the program itself too,
 // run on the day's course (dailyRace.js). See RESULT15.md / RESULT19.md / RESULT20.md.
@@ -37,9 +37,15 @@ const maxLevel = (id) => UNLOCKS.find((u) => u.id === id)?.maxLevel ?? 0;
 /** Maze levels on the leaderboard: 1 … Mazes max level (3). */
 export const MAZE_LEVELS = Object.freeze(Array.from({ length: maxLevel("Mazes") }, (_, i) => i + 1));
 
-// Sanity caps (far beyond anything a real run reaches, well below "absurd").
-export const MAZE_MAX_TICKS = 100_000_000; // 500,000 actions inside one maze
-export const MAZE_MAX_OPS = 100_000_000;
+/**
+ * The maze leaderboard's benchmark (the farm itself: mazeVerifyWorld in
+ * verify.js). The farm and the start tile are fixed; the maze's seed is NOT
+ * here: the server derives it from its secret, the Bangkok ISO week and the
+ * level (server/mazeBenchmark.js) and never sends it to anyone. `rngSeed` is
+ * public: the program's Math.random() and the world's other randomness.
+ */
+export const MAZE_BENCHMARK = Object.freeze({ size: 12, sx: 0, sy: 0, rngSeed: 2112 });
+
 /** The biggest Bone one harvest can pay: every tile of the largest farm cut at
  *  once, squared, × the top Dinosaurs level (12×12 → 144² × 3 = 62,208). */
 export const DINO_MAX_BONE = (WORLD_SIZES[WORLD_SIZES.length - 1] ** 2) ** 2 * maxLevel("Dinosaurs");
@@ -104,12 +110,10 @@ export function validateBoardQuery(category, level) {
 
 /**
  * Body of POST /api/scores → { ok, score: { category, level, ticks, ops, value, seed, … } }.
- *  maze: level 1–3, ticks ≥ 1, 1 ≤ ops ≤ ticks (every counted call but print /
- *        get_forecast costs at least one tick, see RESULT14.md), caps above.
- *        v4 phase 2: also the replay inputs — seed (required), size (a farm
- *        size), the start tile sx / sy and the program `code` — because the
- *        server replays the run and keeps ITS ticks / ops (the claimed ones
- *        are only sanity-checked). → score also has { size, sx, sy, code }.
+ *  maze: level 1–3; `code` (required) is all that counts besides it: the server
+ *        runs it on its hidden maze of the week (MAZE_BENCHMARK) and stores the
+ *        ticks and ops IT measures. A seed, farm size, start tile, ticks or ops
+ *        in the body are ignored; the seed is never filled in either.
  *  dino: no level; `code` (required) is all that counts: the server runs it on
  *        DINO_BENCHMARK and stores the Bone, ticks and ops IT measures. Claimed
  *        numbers (value, ticks, ops, seed) are accepted but ignored: they come
@@ -128,20 +132,9 @@ export function validateScore(body) {
   const q = validateBoardQuery(body.category, body.level);
   if (!q.ok) return q;
   if (q.category === "maze") {
-    const { ticks, ops, size, sx, sy } = body;
-    const seed = body.seed === undefined || body.seed === null ? null : body.seed;
-    if (seed !== null && !isSeed(seed)) return fail("seed must be a 32-bit unsigned integer");
-    if (!isInt(ticks) || ticks <= 0) return fail("ticks must be a positive integer");
-    if (!isInt(ops) || ops <= 0) return fail("ops must be a positive integer");
-    if (ops > ticks) return fail("ops cannot exceed ticks");
-    if (ticks > MAZE_MAX_TICKS) return fail("ticks is out of range");
-    if (ops > MAZE_MAX_OPS) return fail("ops is out of range");
-    if (body.value !== undefined && body.value !== null) return fail("maze scores have no value");
-    if (seed === null) return fail("maze scores need the maze seed (for the replay)");
-    if (!isInt(size) || !WORLD_SIZES.includes(size)) return fail(`size must be a farm size (${WORLD_SIZES.join(", ")})`);
-    if (!isInt(sx) || !isInt(sy) || sx < 0 || sy < 0 || sx >= size || sy >= size) return fail("sx / sy must be the start tile on the farm");
-    if (!validCode(code)) return fail(`code must be a non-empty string of at most ${CODE_MAX} characters (the program, for the replay)`);
-    return { ok: true, score: { category: "maze", level: q.level, ticks, ops, value: null, seed, size, sx, sy, code } };
+    if (!validCode(code)) return fail(`maze scores need code: a non-empty string of at most ${CODE_MAX} characters (the program, for the benchmark run)`);
+    const { size, sx, sy } = MAZE_BENCHMARK;
+    return { ok: true, score: { category: "maze", level: q.level, ticks: null, ops: null, value: null, seed: null, size, sx, sy, code } };
   }
   if (!validCode(code)) return fail(`dino scores need code: a non-empty string of at most ${CODE_MAX} characters (the program, for the benchmark run)`);
   const { seed, size, x, y } = DINO_BENCHMARK;

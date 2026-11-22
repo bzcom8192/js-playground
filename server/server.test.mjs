@@ -21,15 +21,12 @@ import { DatabaseSync } from "node:sqlite";
 import { startServer } from "./index.js";
 import { createRateLimiter } from "./app.js";
 import { hashToken, openDb } from "./db.js";
+import { mazeBenchmark, mazeSeed } from "./mazeBenchmark.js";
 import { createVerifier } from "./verifier.js";
 import { CHALLENGE_TTL_MS, DINO_BENCHMARK, DINO_MAX_BONE, DNF_TICKS, HISTORY_LIMIT, eloUpdate } from "../src/farmer/onlineRules.js";
-import * as W from "../src/farmer/world.js";
-import { WORLD_SIZES } from "../src/farmer/constants.js";
-import { createRuntime } from "../src/farmer/runtime.js";
-import { mulberry32 } from "../src/farmer/maze.js";
 import { BOT_CODE } from "../src/farmer/arenaBots.js";
 import { TICK_CAP, runSolo } from "../src/farmer/arena.js";
-import { verifyDaily, verifyDino } from "../src/farmer/verify.js";
+import { verifyDaily, verifyDino, verifyMaze } from "../src/farmer/verify.js";
 import { dailyCourse } from "../src/farmer/dailyRace.js";
 
 let dir;
@@ -167,7 +164,7 @@ test("auth rejection: missing, malformed and unknown tokens → 401 JSON", async
 // ---------- scores ----------
 
 /** A maze score body whose stub replay measures exactly `ticks` / `ops`. */
-const mazeScore = (level, ticks, ops) => ({ category: "maze", level, ticks, ops, seed: 7, size: 6, sx: 0, sy: 0, code: stubCode(ticks, ops) });
+const mazeScore = (level, ticks, ops) => ({ category: "maze", level, code: stubCode(ticks, ops) });
 
 test("score sanity rejections", async () => {
   const { token } = await register();
@@ -176,15 +173,14 @@ test("score sanity rejections", async () => {
     { category: "maze", level: 0, ticks: 10, ops: 1 },
     { category: "maze", level: 4, ticks: 10, ops: 1 },
     { category: "maze", ticks: 10, ops: 1 }, // no level
-    { category: "maze", level: 1, ticks: 0, ops: 1 },
-    { category: "maze", level: 1, ticks: -5, ops: 1 },
-    { category: "maze", level: 1, ticks: 1.5, ops: 1 },
-    { category: "maze", level: 1, ticks: "100", ops: 1 },
-    { category: "maze", level: 1, ticks: 100, ops: 0 },
-    { category: "maze", level: 1, ticks: 100, ops: 101 }, // more ops than ticks
-    { category: "maze", level: 1, ticks: 1e12, ops: 1 },
-    { category: "maze", level: 1, ticks: 100, ops: 1, seed: -1 },
-    { category: "maze", level: 1, ticks: 100, ops: 1, seed: 2 ** 32 },
+    { category: "maze", level: 1 }, // no program, no score
+    { category: "maze", level: 1, ticks: 2400, ops: 12, seed: 7, size: 6, sx: 0, sy: 0 },
+    { category: "maze", level: 1, code: "" },
+    { category: "maze", level: 1, code: "   " },
+    { category: "maze", level: 1, code: 42 },
+    { category: "maze", level: 1, code: "x".repeat(100_001) },
+    { category: "maze", level: 4, code: "harvest();" },
+    { category: "maze", code: "harvest();" }, // no level
     { ...dinoScore(10), level: 1 }, // dino has no level
     { category: "dino" }, // v5 phase 2: no program, no score
     { category: "dino", value: 10 },
@@ -201,12 +197,7 @@ test("score sanity rejections", async () => {
   }
   assert.equal((await call("POST", "/api/scores", { body: "{not json", token })).status, 400);
   assert.equal((await call("POST", "/api/scores", { body: [1, 2], token })).status, 400);
-  // v4 phase 2: maze scores also need the replay inputs.
   const good = mazeScore(1, 2400, 12);
-  for (const patch of [{ seed: undefined }, { size: 9 }, { sx: 6 }, { code: "" }, { code: undefined }]) {
-    const r = await call("POST", "/api/scores", { body: { ...good, ...patch }, token });
-    assert.equal(r.status, 400, `${JSON.stringify(patch)} → ${r.status} ${r.text}`);
-  }
   const ok = await call("POST", "/api/scores", { body: good, token });
   assert.equal(ok.status, 201, ok.text);
   assert.equal(ok.json.verified, true);
@@ -244,7 +235,7 @@ test("leaderboard: best entry per player, maze = fewest ticks then ops, dino = m
   );
   assert.equal(lb.json.entries[0].playerId, c.playerId);
   assert.ok(lb.json.entries.every((e) => e.verified === true), "maze rows are replay-verified");
-  assert.deepEqual([lb.json.entries[0].size, lb.json.entries[0].sx, lb.json.entries[0].sy], [6, 0, 0]);
+  assert.deepEqual([lb.json.entries[0].size, lb.json.entries[0].sx, lb.json.entries[0].sy], [12, 0, 0]);
   assert.equal(lb.json.entries[0].code, undefined);
 
   const d = await register("LB-D");
@@ -626,7 +617,6 @@ test("an infinite loop is rejected by the wall-clock timeout without hanging (AP
   }
 });
 
-/** Solve a maze on a small "player farm" the way the page does → its onRecord event. */
 const MAZE_SOLVER = `use_item(Items.Fertilizer);
 const seen = new Set();
 const back = { North: South, South: North, East: West, West: East };
@@ -644,69 +634,215 @@ function dfs() {
 }
 dfs();
 `;
-async function localMazeRecord(code = MAZE_SOLVER, { n = 8, x = 3, y = 1, level = 2 } = {}) {
-  const s = W.createGame();
-  s.unlocks.Expand = WORLD_SIZES.indexOf(n);
-  s.size = n;
-  s.tiles = Array.from({ length: n * n }, W.newTile);
-  Object.assign(s.unlocks, { Senses: 1, Plant: 1, Carrots: 1, Pumpkins: 1, Fertilizer: 1, Mazes: level });
-  s.items.Fertilizer = 1;
-  [s.drone.x, s.drone.y] = [x, y];
-  W.droneTile(s).entity = { type: "Bush", progress: 1 };
-  let t = 0;
-  let ev = null;
-  const rt = createRuntime({
-    getState: () => s,
-    now: () => t,
-    sleep: (ms) => ((t += ms), new Promise((r) => setImmediate(r))),
-    yieldFn: () => new Promise((r) => setImmediate(r)),
-    rng: mulberry32(77),
-    onRecord: (e) => (ev = e),
-  });
-  await rt.run(code);
-  assert.ok(ev, "the local run set a record");
-  return ev;
+
+// ---------- maze: the hidden weekly benchmark (BRIEF21) ----------
+
+const WEEK = "2026-W47";
+const NEXT_WEEK = "2026-W48";
+const MONDAY = Date.UTC(2026, 10, 22, 17); // Monday 2026-11-23, 00:00 in Bangkok
+const SECRET = "a test secret that nobody else has";
+const mazeTruth = (level, period = WEEK, secret = SECRET) => verifyMaze({ code: MAZE_SOLVER, level, seed: mazeSeed(secret, period, level) });
+
+/** A real (or given-verifier) server with a fixed secret and a settable clock. */
+async function withWeek(name, fn, verifier) {
+  const clock = { t: MONDAY - 1000 };
+  const opts = { port: 0, host: "127.0.0.1", dbPath: join(dir, `${name}.db`), distDir: null, secret: SECRET, now: () => clock.t, rateLimit: { max: 10_000, windowMs: 60_000 } };
+  const sub = await startServer({ ...opts, ...(verifier && { verifier }) });
+  try {
+    await fn({ at: sub.url, clock, db: sub.db, post: (p, body) => call("POST", "/api/scores", { body, token: p.token, at: sub.url }) });
+  } finally {
+    await sub.close();
+  }
 }
 
-test("maze: a fake tick count is stored with the server-measured values (✓ verified)", async () => {
-  const p = await registerReal("Maze-Faker");
-  const ev = await localMazeRecord();
-  const a = ev.attempt;
-  const body = { category: "maze", level: a.level, ticks: 1, ops: 1, seed: a.seed, size: a.size, sx: a.sx, sy: a.sy, code: ev.code };
-  const r = await onReal("POST", "/api/scores", { body, token: p.token });
-  assert.equal(r.status, 201, r.text);
-  assert.deepEqual([r.json.ticks, r.json.ops], [a.ticks, a.ops], "the replay's numbers replace the claim");
-  assert.deepEqual(r.json.claimed, { ticks: 1, ops: 1 });
-  assert.equal(r.json.corrected, true);
-  assert.equal(r.json.verified, true);
-  assert.equal(r.json.replay, "spawn");
-  const row = srv.db.raw.prepare("SELECT ticks, ops, verified, size, sx, sy, code FROM scores WHERE id = ?").get(r.json.id);
-  assert.deepEqual({ ...row }, { ticks: a.ticks, ops: a.ops, verified: 1, size: a.size, sx: a.sx, sy: a.sy, code: ev.code });
-  const lb = await onReal("GET", `/api/leaderboard?category=maze&level=${a.level}`);
-  const mine = lb.json.entries.find((e) => e.playerId === p.playerId);
-  assert.deepEqual([mine.ticks, mine.ops, mine.verified], [a.ticks, a.ops, true]);
-
-  // An honest claim is stored as is (corrected: false).
-  const honest = await onReal("POST", "/api/scores", { body: { ...body, ticks: a.ticks, ops: a.ops }, token: p.token });
-  assert.equal(honest.status, 201, honest.text);
-  assert.equal(honest.json.corrected, false);
+test("maze seed: from secret, week and level only; not computable without the secret", () => {
+  const seeds = new Set();
+  for (const week of [WEEK, NEXT_WEEK, "2027-W01"]) for (const level of [1, 2, 3]) {
+    const seed = mazeSeed(SECRET, week, level);
+    assert.ok(Number.isInteger(seed) && seed >= 0 && seed <= 0xffffffff);
+    assert.equal(mazeSeed(SECRET, week, level), seed);
+    assert.notEqual(mazeSeed(`${SECRET}!`, week, level), seed);
+    seeds.add(seed);
+  }
+  assert.equal(seeds.size, 9, "another week or level, another maze");
+  const a = mazeBenchmark(SECRET, MONDAY - 1);
+  assert.deepEqual([a.period, a.seed(2)], [WEEK, mazeSeed(SECRET, WEEK, 2)]);
+  assert.equal(mazeBenchmark(SECRET, MONDAY).period, NEXT_WEEK);
+  for (const bad of [undefined, null, "", "short"]) assert.throws(() => mazeSeed(bad, WEEK, 1), /secret/);
 });
 
-test("maze: code that doesn't solve the recorded maze is rejected (422)", async () => {
-  const p = await registerReal("Maze-Bluffer");
-  const ev = await localMazeRecord();
-  const a = ev.attempt;
-  const base = { category: "maze", level: a.level, ticks: a.ticks, ops: a.ops, seed: a.seed, size: a.size, sx: a.sx, sy: a.sy };
-  for (const code of ["use_item(Items.Fertilizer);", "use_item(Items.Fertilizer); while (true) move(North);", "nope();"]) {
-    const r = await onReal("POST", "/api/scores", { body: { ...base, code }, token: p.token });
-    assert.equal(r.status, 422, `${code} → ${r.status} ${r.text}`);
-    assert.match(r.json.error, /maze score rejected/);
+test("maze: every submission of a week runs on the same hidden maze; the next week has another", () => {
+  const jobs = [];
+  const real = createVerifier();
+  const spy = { verify: (job) => (jobs.push(job), real.verify(job)), close: () => real.close() };
+  return withWeek(
+    "maze-week",
+    async ({ at, clock, db, post }) => {
+      const [a, b] = [await register("Week-A", at), await register("Week-B", at)];
+      clock.t = MONDAY - 6 * 24 * 3600 * 1000; // Tuesday … Sunday 23:59:59.999
+      const first = await post(a, { category: "maze", level: 2, code: MAZE_SOLVER });
+      clock.t = MONDAY - 1;
+      const second = await post(b, { category: "maze", level: 2, code: MAZE_SOLVER });
+      const truth = await mazeTruth(2);
+      for (const r of [first, second]) {
+        assert.equal(r.status, 201, r.text);
+        assert.deepEqual([r.json.ticks, r.json.ops, r.json.period, r.json.verified], [truth.ticks, truth.ops, WEEK, true]);
+      }
+      assert.equal(jobs[0].seed, jobs[1].seed, "the same maze");
+      const board = async () => (await call("GET", "/api/leaderboard?category=maze&level=2", { at })).json;
+      assert.deepEqual((await board()).entries.map((e) => [e.rank, e.period, e.legacy]), [[1, WEEK, false], [1, WEEK, false]]);
+      assert.equal((await board()).period, WEEK);
+      clock.t = MONDAY;
+      const third = await post(a, { category: "maze", level: 2, code: MAZE_SOLVER });
+      const next = await mazeTruth(2, NEXT_WEEK);
+      assert.deepEqual([third.json.ticks, third.json.ops, third.json.period], [next.ticks, next.ops, NEXT_WEEK]);
+      assert.notEqual(jobs[2].seed, jobs[0].seed);
+      assert.equal((await board()).period, NEXT_WEEK);
+      const other = await post(a, { category: "maze", level: 1, code: MAZE_SOLVER });
+      assert.equal(other.status, 201, other.text);
+      assert.notEqual(jobs[3].seed, jobs[2].seed, "each level has its own maze");
+      const rows = db.raw.prepare("SELECT period, seed, size, sx, sy FROM scores ORDER BY id").all().map((r) => ({ ...r }));
+      assert.deepEqual(rows, [WEEK, WEEK, NEXT_WEEK, NEXT_WEEK].map((period) => ({ period, seed: null, size: 12, sx: 0, sy: 0 })), "the seed is not even stored");
+      await real.close();
+    },
+    spy,
+  );
+});
+
+test("maze: the client's numbers, seed, farm and week are ignored (✓ verified)", () =>
+  withWeek("maze-claims", async ({ at, db, post }) => {
+    const p = await register("Maze-Faker", at);
+    const truth = await mazeTruth(3);
+    assert.equal(truth.solved, true, JSON.stringify(truth));
+    const claims = [{}, { ticks: 1, ops: 1 }, { seed: 7, size: 1, sx: 0, sy: 0 }, { seed: 7, size: 6, sx: 5, sy: 2, period: "2020-W01", ticks: -3 }];
+    for (const claim of claims) {
+      const r = await post(p, { category: "maze", level: 3, code: MAZE_SOLVER, ...claim });
+      assert.equal(r.status, 201, `${JSON.stringify(claim)} → ${r.text}`);
+      assert.deepEqual([r.json.ticks, r.json.ops, r.json.period, r.json.replay], [truth.ticks, truth.ops, WEEK, "spawn"]);
+      assert.deepEqual(r.json.claimed, claim.ops ? { ticks: 1, ops: 1 } : null);
+      const row = db.raw.prepare("SELECT ticks, ops, verified, period, seed, code FROM scores WHERE id = ?").get(r.json.id);
+      assert.deepEqual({ ...row }, { ticks: truth.ticks, ops: truth.ops, verified: 1, period: WEEK, seed: null, code: MAZE_SOLVER });
+    }
+  }));
+
+test("maze: the seed and the layout never reach a client, whatever the program does", () => {
+  // Every way a program can put its own text into an answer, with what it has seen of the maze.
+  const look = `use_item(Items.Fertilizer);\nconst seen = "LEAK" + [North, East, South, West].map((d) => can_move(d) ? 1 : 0).join("") + measure();\n`;
+  const programs = [
+    `${look}throw new Error(seen);`,
+    `${look}throw seen;`,
+    `${look}class LEAK extends Error { get name() { return seen; } }\nthrow new LEAK(seen);`,
+    `${look}print(seen); console.error(seen); quick_print(seen);`,
+    `${look}setTimeout(() => { throw new Error(seen); }, 0);\nwhile (true) spin_in_place();`,
+    `${look}Promise.reject(new Error(seen));\nwhile (true) move(North);`,
+    `${look}nope();`,
+    "let x = ;",
+    "move(East); move(East); use_item(Items.Fertilizer); throw new Error('LEAK');",
+  ];
+  return withWeek("maze-leak", async ({ at, db, post }) => {
+    const p = await register("Maze-Spy", at);
+    const seed = String(mazeSeed(SECRET, WEEK, 1));
+    const texts = [];
+    for (const code of programs) {
+      const r = await post(p, { category: "maze", level: 1, code });
+      assert.equal(r.status, 422, `${code} → ${r.status} ${r.text}`);
+      assert.match(r.json.error, /^(maze score rejected: |could not verify the run: the replay crashed$)/);
+      texts.push(r.text);
+    }
+    assert.equal(db.raw.prepare("SELECT COUNT(*) AS n FROM scores").get().n, 0, "nothing is stored");
+    const ok = await post(p, { category: "maze", level: 1, code: MAZE_SOLVER });
+    assert.equal(ok.status, 201, ok.text);
+    assert.equal(ok.json.seed, null);
+    texts.push(ok.text);
+    for (const path of ["/api/leaderboard?category=maze&level=1", "/api/daily", "/api/health", "/api/players/me", "/api/players/me/history", "/api/challenges", "/api/settings"]) {
+      texts.push((await call("GET", path, { token: p.token, at })).text);
+    }
+    for (const text of texts) {
+      assert.ok(!text.includes(seed), text);
+      assert.ok(!text.includes(SECRET), text);
+      assert.ok(!/LEAK|is not defined|Unexpected token|treasure":/.test(text), text);
+    }
+  });
+});
+
+test("maze: code that doesn't solve the maze is rejected (422); a program is required", () =>
+  withWeek("maze-bluff", async ({ at, db, post }) => {
+    const p = await register("Maze-Bluffer", at);
+    const maze = { category: "maze", level: 1, ticks: 900, ops: 9, seed: 5, size: 6, sx: 0, sy: 0 };
+    for (const [code, why] of [
+      ["use_item(Items.Fertilizer);", /ended without harvesting the treasure/],
+      ["use_item(Items.Fertilizer); while (true) move(North);", /within 5,000,000 ticks/],
+      ["nope();", /failed with an error/],
+      ["move(East); use_item(Items.Fertilizer);", /away from the start tile \(0, 0\)/],
+    ]) {
+      const r = await post(p, { ...maze, code });
+      assert.equal(r.status, 422, `${code} → ${r.status} ${r.text}`);
+      assert.match(r.json.error, /^maze score rejected: /);
+      assert.match(r.json.error, why);
+    }
+    assert.equal((await post(p, maze)).status, 400);
+    assert.equal(db.raw.prepare("SELECT COUNT(*) AS n FROM scores").get().n, 0);
+  }));
+
+test("maze: an entry counts for the week it arrived in, even if its replay ends after Monday midnight", () => {
+  let tick = () => {};
+  const stubbed = stubVerifier();
+  const slow = { close: stubbed.close, verify: (job) => (tick(), stubbed.verify(job)) };
+  return withWeek(
+    "maze-midnight",
+    async ({ at, clock, post }) => {
+      const p = await register("Late-Owl", at);
+      clock.t = MONDAY - 1;
+      tick = () => (clock.t = MONDAY + 5000);
+      assert.equal((await post(p, mazeScore(1, 4000, 30))).json.period, WEEK);
+    },
+    slow,
+  );
+});
+
+test("the server secret: made once, kept in the DB, different for every DB; a given one must be long enough", async () => {
+  const file = join(dir, "secret.db");
+  const a = await openDb(file);
+  const secret = a.secret();
+  assert.match(secret, /^[0-9a-f]{64}$/);
+  assert.equal(a.secret(), secret);
+  a.close();
+  const again = await openDb(file);
+  assert.equal(again.secret(), secret, "it survives a restart, so the week's maze does too");
+  again.close();
+  const other = await openDb(":memory:");
+  assert.notEqual(other.secret(), secret);
+  other.close();
+  await assert.rejects(startServer({ port: 0, dbPath: ":memory:", distDir: null, secret: "short" }), /secret/);
+});
+
+test("maze board: legacy entries (no period) stay, after the ranked ones and without a rank", async () => {
+  const file = join(dir, "legacy.db");
+  const old = new DatabaseSync(file); // as the BRIEF20 server left it
+  old.exec(`
+    CREATE TABLE players (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE, token_hash TEXT NOT NULL UNIQUE, elo INTEGER NOT NULL DEFAULT 1000, created_at INTEGER NOT NULL);
+    CREATE TABLE scores (id INTEGER PRIMARY KEY, player_id INTEGER NOT NULL REFERENCES players(id), category TEXT NOT NULL, level INTEGER, ticks INTEGER, ops INTEGER, value INTEGER, seed INTEGER, created_at INTEGER NOT NULL, verified INTEGER NOT NULL DEFAULT 0, size INTEGER, sx INTEGER, sy INTEGER, code TEXT, race_date TEXT);
+    INSERT INTO players (name, token_hash, created_at) VALUES ('Parker', '${hashToken("e".repeat(64))}', 1), ('Honest', 'h2', 1);
+  `);
+  const insert = "INSERT INTO scores (player_id, category, level, ticks, ops, value, seed, created_at, verified, size, sx, sy, code, race_date) VALUES (?, 'maze', 1, ?, 2, NULL, 424242, 1, 1, 12, 0, 0, 'c', NULL)";
+  old.prepare(insert).run(1, 1);
+  old.prepare(insert).run(1, 7);
+  old.prepare(insert).run(2, 900);
+  old.close();
+  const sub = await startServer({ port: 0, host: "127.0.0.1", dbPath: file, distDir: null, verifier: stubVerifier(), now: () => MONDAY - 1 });
+  try {
+    const board = async () => (await call("GET", "/api/leaderboard?category=maze&level=1", { at: sub.url })).json.entries.map((e) => [e.rank, e.name, e.ticks, e.period, e.legacy, e.seed]);
+    const legacy = [[null, "Parker", 1, null, true, 424242], [null, "Honest", 900, null, true, 424242]];
+    assert.deepEqual(await board(), legacy);
+    const r = await call("POST", "/api/scores", { body: mazeScore(1, 24_000, 600), token: "e".repeat(64), at: sub.url });
+    assert.equal(r.status, 201, r.text);
+    assert.deepEqual(await board(), [[1, "Parker", 24_000, WEEK, false, null], ...legacy], "a legacy time doesn't hide the new one");
+    sub.db.raw.prepare(insert).run(2, 800); // a rolled-back server's INSERT: legacy again
+    assert.deepEqual((await board()).at(-1), [null, "Honest", 800, null, true, 424242]);
+    assert.equal(sub.db.raw.prepare("SELECT COUNT(*) AS n FROM scores").get().n, 5, "nothing was deleted");
+  } finally {
+    await sub.close();
   }
-  // Unverified (code-less) maze submissions are no longer accepted at all.
-  const none = await onReal("POST", "/api/scores", { body: base, token: p.token });
-  assert.equal(none.status, 400);
-  const n = srv.db.raw.prepare("SELECT COUNT(*) AS n FROM scores WHERE player_id = ?").get(p.playerId).n;
-  assert.equal(n, 0);
 });
 
 // Waits for the dinosaur to grow, then cuts it wherever the sweep meets it.

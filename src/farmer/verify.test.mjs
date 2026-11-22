@@ -5,13 +5,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import * as W from "./world.js";
-import { WORLD_SIZES } from "./constants.js";
-import { createRuntime } from "./runtime.js";
-import { generateSeededMaze, mulberry32 } from "./maze.js";
+import { ACTION_TICKS, FLIP_TICKS } from "./runtime.js";
+import { generateSeededMaze, pathDistances } from "./maze.js";
 import { EXAMPLES } from "./examples.js";
 import { BOT_CODE } from "./arenaBots.js";
 import { DNF_TICKS, runSolo } from "./arena.js";
-import { DINO_BENCHMARK, DINO_MAX_BONE } from "./onlineRules.js";
+import { DINO_BENCHMARK, DINO_MAX_BONE, MAZE_BENCHMARK } from "./onlineRules.js";
 import {
   DINO_VERIFY_CLOCK_CAP,
   MAZE_VERIFY_TICK_CAP,
@@ -44,99 +43,163 @@ dfs();
 `;
 const MAZE_RUNNER = EXAMPLES.find((e) => e.id === "maze").code;
 
-/** Play `code` on a small "player farm" (as the page would) until its first
- *  timed maze solve → the runtime's onRecord event { attempt, code }. */
-async function localRecord(code, { n = 6, x = 2, y = 3, level = 1, rngSeed = 5 } = {}) {
-  const s = W.createGame();
-  s.unlocks.Expand = WORLD_SIZES.indexOf(n);
-  s.size = n;
-  s.tiles = Array.from({ length: n * n }, W.newTile);
-  Object.assign(s.unlocks, { Senses: 1, Plant: 1, Carrots: 1, Pumpkins: 1, Fertilizer: 1, Mazes: level });
-  s.items.Fertilizer = 1;
-  s.drone.x = x;
-  s.drone.y = y;
-  W.droneTile(s).entity = { type: "Bush", progress: 1 };
-  let t = 0;
-  const events = [];
-  const rt = createRuntime({
-    getState: () => s,
-    now: () => t,
-    sleep: (ms) => {
-      t += ms;
-      return new Promise((r) => setImmediate(r));
-    },
-    yieldFn: () => new Promise((r) => setImmediate(r)),
-    rng: mulberry32(rngSeed),
-    onRecord: (ev) => {
-      events.push(ev);
-      rt.stop();
-    },
-  });
-  await rt.run(code);
-  assert.equal(events.length, 1, "the local run set a record");
-  return events[0];
-}
-const jobOf = (ev) => ({ code: ev.code, level: ev.attempt.level, seed: ev.attempt.seed, size: ev.attempt.size, sx: ev.attempt.sx, sy: ev.attempt.sy });
+const SOLVE_ONLY = SOLVER.replace("use_item(Items.Fertilizer);", "");
+const JOB = { level: 1, seed: 424242 };
+const { size: N, sx: SX, sy: SY } = MAZE_BENCHMARK;
+const COURSE = generateSeededMaze(N, SX, SY, JOB.seed);
+const DIST = pathDistances(N, COURSE.walls, SX, SY)[COURSE.treasure.y * N + COURSE.treasure.x];
+/** The fewest ticks any program can need: every step of the way, one action each. */
+const FLOOR = DIST * ACTION_TICKS;
 
-test("maze replay reproduces a local record exactly (program spawns the maze itself)", async () => {
-  for (const [code, opts] of [
-    [SOLVER, {}],
-    [SOLVER, { n: 10, x: 7, y: 1, level: 3 }],
-    [MAZE_RUNNER, { n: 8, x: 0, y: 0, level: 2 }],
-  ]) {
-    const ev = await localRecord(code, opts);
-    const r = await verifyMaze(jobOf(ev));
-    assert.equal(r.solved, true, JSON.stringify(r));
-    assert.equal(r.mode, "spawn");
-    assert.deepEqual([r.ticks, r.ops], [ev.attempt.ticks, ev.attempt.ops]);
-    // Deterministic: the same job again gives the same numbers.
-    const again = await verifyMaze(jobOf(ev));
-    assert.deepEqual([again.ticks, again.ops], [r.ticks, r.ops]);
+test("maze benchmark: the documented, fixed farm; its public definition has no maze seed", () => {
+  assert.deepEqual(MAZE_BENCHMARK, { size: 12, sx: 0, sy: 0, rngSeed: 2112 });
+  const { state } = mazeVerifyWorld({ ...MAZE_BENCHMARK, ...JOB, level: 2, hidden: true });
+  assert.ok(state.tiles.every((t) => t.entity.type === "Bush" && t.entity.progress === 1));
+  assert.deepEqual([state.unlocks.Mazes, state.unlocks.Speed, state.drone.x, state.drone.y, state.weather], [2, 5, 0, 0, null]);
+  for (const [item, n] of Object.entries(state.items)) assert.equal(n, item === "Power" ? 0 : VERIFY_STOCK, item);
+  // The fallback world holds exactly the maze of the seed.
+  const standing = mazeVerifyWorld({ ...MAZE_BENCHMARK, ...JOB, hidden: true }, { prespawned: true }).state;
+  assert.deepEqual(standing.maze.treasure, COURSE.treasure);
+  assert.deepEqual(standing.tiles.map((t) => t.entity?.type === "Hedge"), COURSE.walls);
+  assert.equal(W.createGame().benchMaze, null, "no other world has one");
+  assert.equal("benchMaze" in W.serialize(state), false, "never saved");
+});
+
+test("maze benchmark: one program, one seed → the same numbers every time; another seed → another maze", async () => {
+  for (const code of [SOLVER, MAZE_RUNNER]) {
+    const r = await verifyMaze({ ...JOB, code });
+    assert.deepEqual([r.solved, r.mode, r.error], [true, "spawn", null], JSON.stringify(r));
+    assert.ok(r.ticks >= FLOOR && r.ops > DIST);
+    assert.deepEqual(await verifyMaze({ ...JOB, code }), r);
+    const other = await verifyMaze({ ...JOB, seed: 7, code });
+    assert.equal(other.solved, true);
+    assert.notDeepEqual([other.ticks, other.ops], [r.ticks, r.ops]);
   }
 });
 
-test("maze replay: the claim is never an input (fake numbers can't leak in)", async () => {
-  const ev = await localRecord(SOLVER);
-  const r = await runVerification({ kind: "maze", ...jobOf(ev), ticks: 1, ops: 1 });
-  assert.deepEqual([r.ticks, r.ops], [ev.attempt.ticks, ev.attempt.ops]);
+test("maze benchmark: no claim and no layout from the job is an input", async () => {
+  const r = await verifyMaze({ ...JOB, code: SOLVER });
+  const forged = await runVerification({ kind: "maze", ...JOB, code: SOLVER, ticks: 1, ops: 1, size: 1, sx: 3, sy: 5, rngSeed: 9, hidden: false });
+  assert.deepEqual(forged, r, "a tiny farm or another start tile can't be asked for");
 });
 
-test("maze replay: a solver that expects an existing maze is verified in prespawned mode", async () => {
-  const solveOnly = SOLVER.replace("use_item(Items.Fertilizer);", "");
-  const r = await verifyMaze({ code: solveOnly, level: 1, seed: 424242, size: 8, sx: 3, sy: 5 });
-  assert.equal(r.solved, true, JSON.stringify(r));
-  assert.equal(r.mode, "prespawned");
-  assert.ok(r.ticks > 0 && r.ops > 0);
-  // The maze it solved is the claimed one: the prespawned world holds exactly it.
-  const { state } = mazeVerifyWorld({ seed: 424242, size: 8, sx: 3, sy: 5, level: 1 }, { prespawned: true });
-  const { walls, treasure } = generateSeededMaze(8, 3, 5, 424242);
-  assert.deepEqual(state.maze.treasure, treasure);
-  assert.deepEqual(state.tiles.map((t) => t.entity?.type === "Hedge"), walls);
+test("maze benchmark: the clock runs from the start of the run, whoever grows the maze", async () => {
+  const grown = await verifyMaze({ ...JOB, code: SOLVER });
+  const standing = await verifyMaze({ ...JOB, code: SOLVE_ONLY });
+  assert.deepEqual([standing.solved, standing.mode], [true, "prespawned"], JSON.stringify(standing));
+  assert.deepEqual([grown.ticks, grown.ops], [standing.ticks + ACTION_TICKS, standing.ops + 1], "growing it costs its one action");
+  const late = await verifyMaze({ ...JOB, code: `spin_in_place();\n${SOLVER}` });
+  assert.equal(late.ticks, grown.ticks + FLIP_TICKS);
 });
 
-test("maze replay: programs that never solve the recorded maze are not verified", async () => {
-  const job = { level: 1, seed: 99, size: 6, sx: 0, sy: 0 };
-  const walker = await verifyMaze({ ...job, code: "while (true) { move(North); }" });
+test("maze benchmark: a program that prepares its own farm first is measured too", async () => {
+  const code = `clear(); plant(Entities.Bush); while (!can_harvest()) spin_in_place(); trade(Items.Fertilizer);\n${SOLVER}`;
+  const r = await verifyMaze({ ...JOB, code });
+  assert.deepEqual([r.solved, r.mode], [true, "spawn"], JSON.stringify(r));
+  const plain = await verifyMaze({ ...JOB, code: SOLVER });
+  assert.ok(r.ticks > plain.ticks);
+});
+
+test("maze benchmark: bots parked on the treasure (even with the seed known) gain nothing", async () => {
+  const go = (n, d) => `for (let i = 0; i < ${n}; i++) move(${d});`;
+  const code = `if (num_bots() === 1) {
+  spawn_bot();
+  for (let i = 0; i < 40; i++) spin_in_place();
+  use_item(Items.Fertilizer);
+} else {
+  ${go(COURSE.treasure.x, "East")} ${go(COURSE.treasure.y, "North")}
+  for (let i = 0; i < 400 && get_entity_type() !== Entities.Treasure; i++) spin_in_place();
+  harvest();
+}`;
+  const r = await verifyMaze({ ...JOB, code });
+  assert.equal(r.solved, false, JSON.stringify(r));
+  // Growing the maze brings every bot to the spawner …
+  const { state, rng } = mazeVerifyWorld({ ...MAZE_BENCHMARK, ...JOB, hidden: true });
+  Object.assign(W.spawnDrone(state).drone, COURSE.treasure);
+  W.spawnMaze(state, rng);
+  assert.deepEqual(state.drones.map((d) => [d.x, d.y]), [[SX, SY], [SX, SY]]);
+  // … on the benchmark only: on a player's farm a bot on a path tile stays there.
+  const own = mazeVerifyWorld({ ...MAZE_BENCHMARK, ...JOB });
+  Object.assign(W.spawnDrone(own.state).drone, COURSE.treasure);
+  W.spawnMaze(own.state, own.rng);
+  assert.deepEqual([own.state.drones[1].x, own.state.drones[1].y], [COURSE.treasure.x, COURSE.treasure.y]);
+});
+
+test("maze benchmark: spreading bots blindly, or running a timeline ahead first, is no shortcut", async () => {
+  const solve = SOLVE_ONLY;
+  const blind = `if (num_bots() === 1) {
+  for (let i = 0; i < 11; i++) spawn_bot();
+  for (let i = 0; i < 60; i++) spin_in_place();
+  use_item(Items.Fertilizer);
+} else {
+  for (let i = Math.floor(Math.random() * 6); i > 0; i--) { move(East); move(East); }
+  for (let i = Math.floor(Math.random() * 6); i > 0; i--) { move(North); move(North); }
+  while (can_move(North) && can_move(East) && can_move(South) && can_move(West)) spin_in_place();
+}
+${solve}`;
+  // Free senses move a bot's own clock without any waiting: 60,000 ticks ahead.
+  const ahead = `if (num_bots() === 1) {
+  spawn_bot();
+  for (let i = 0; i < 60000; i++) get_time();
+  use_item(Items.Fertilizer);
+} else {
+  while (get_entity_type() === Entities.Bush) spin_in_place();
+${solve}
+}`;
+  for (const [name, code] of Object.entries({ blind, ahead })) {
+    const r = await verifyMaze({ ...JOB, code });
+    if (r.solved) assert.ok(r.ticks >= FLOOR, `${name}: ${r.ticks} ticks, the way alone is ${FLOOR}`);
+  }
+  const masked = await verifyMaze({ ...JOB, code: ahead });
+  assert.ok(masked.solved && masked.ticks >= 60_000, JSON.stringify(masked));
+});
+
+test("maze benchmark: a program can't work the seed out from its random numbers or a decoy maze", async () => {
+  // Math.random() and the world's rolls are the same whatever the seed …
+  const read = async (seed) => {
+    const { state, rng } = mazeVerifyWorld({ ...MAZE_BENCHMARK, level: 1, seed, hidden: true });
+    assert.equal(state.pendingSeed, null);
+    const r = await verifyMaze({ level: 1, seed, code: "throw new Error([Math.random(), Math.random()].join());" });
+    return [rng(), rng(), r.error];
+  };
+  assert.deepEqual(await read(1), await read(2 ** 32 - 1));
+  // … and a maze grown anywhere else is a decoy that has nothing to do with it.
+  const decoy = (seed) => {
+    const { state, rng } = mazeVerifyWorld({ ...MAZE_BENCHMARK, level: 1, seed, hidden: true });
+    state.drone.x = 4;
+    W.spawnMaze(state, rng);
+    return [state.maze.seed, state.tiles.map((t) => t.entity?.type ?? null)];
+  };
+  assert.deepEqual(decoy(1), decoy(99));
+  assert.notEqual(decoy(1)[0], 1);
+  const away = await verifyMaze({ ...JOB, code: "move(East); move(East); use_item(Items.Fertilizer);" });
+  assert.deepEqual([away.solved, away.wrongStart], [false, { x: 2, y: 0 }]);
+  // A solver that grows it elsewhere still gets its run, on the standing maze.
+  const late = await verifyMaze({ ...JOB, code: `move(East); move(East);\n${SOLVER}` });
+  assert.deepEqual([late.solved, late.mode], [true, "prespawned"], JSON.stringify(late));
+});
+
+test("maze benchmark: programs that never solve the maze have no result", async () => {
+  const walker = await verifyMaze({ ...JOB, code: "while (true) { move(North); }" });
   assert.equal(walker.solved, false);
   assert.equal(walker.ticks, null);
   assert.match(walker.reason, /cap/);
   assert.ok(MAZE_VERIFY_TICK_CAP >= 1_000_000);
-  const broken = await verifyMaze({ ...job, code: "use_item(Items.Fertilizer); nope();" });
+  const broken = await verifyMaze({ ...JOB, code: "use_item(Items.Fertilizer); nope();" });
   assert.equal(broken.solved, false);
   assert.match(broken.error, /nope/);
-  const quits = await verifyMaze({ ...job, code: "use_item(Items.Fertilizer);" });
+  const quits = await verifyMaze({ ...JOB, code: "use_item(Items.Fertilizer);" });
   assert.equal(quits.solved, false);
   assert.match(quits.reason, /ended|idle/);
 });
 
-test("maze replay: program randomness is seeded, so a random-walk solver replays deterministically", async () => {
+test("maze benchmark: program randomness is seeded, so a random-walk solver replays deterministically", async () => {
   const code = `use_item(Items.Fertilizer);
 const dirs = [North, East, South, West];
 while (get_entity_type() !== Entities.Treasure) move(dirs[Math.floor(Math.random() * 4)]);
 harvest();`;
-  const job = { code, level: 1, seed: 7, size: 5, sx: 2, sy: 2 };
-  const a = await verifyMaze(job);
-  const b = await verifyMaze(job);
+  const a = await verifyMaze({ ...JOB, code });
+  const b = await verifyMaze({ ...JOB, code });
   assert.equal(a.solved, true, JSON.stringify(a));
   assert.deepEqual([a.ticks, a.ops], [b.ticks, b.ops]);
 });

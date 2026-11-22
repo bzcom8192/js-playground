@@ -13,6 +13,7 @@
 // (saveData.js only exports farmer_save_v1 + farmer_files_v1) and Reset Save
 // does not touch it either. v5: it has its own export / import file (the
 // Online window's "ส่งออกบัญชี" / "นำเข้าบัญชี"), see below.
+import { bangkokWeek } from "./dailyRace.js";
 import { MAZE_LEVELS, validateName, validateScore } from "./onlineRules.js";
 
 export const IDENTITY_KEY = "farmer_online_v1";
@@ -174,11 +175,14 @@ export function createOnlineApi({ fetchFn, base = DEFAULT_BASE, timeoutMs = DEFA
     /** → { events: [{ challengeId, role, opponentId, opponentName, goal, seed, myTicks, myOps, opponentTicks,
      *  opponentOps, outcome: "win" | "lose" | "draw" | "expired", eloDelta, createdAt, closedAt }] } (latest 20) */
     history: (token) => request("GET", "/players/me/history", { token }),
-    /** → { category, level, entries: [{ rank, playerId, name, ticks, ops, value, seed, size, sx, sy, createdAt, verified }] } */
+    /** → { category, level, entries: [{ rank, playerId, name, ticks, ops, value, seed, size, sx, sy, createdAt, verified }] }
+     *  maze: also period (the current week) and per entry period + legacy; legacy
+     *  entries (a maze the player chose) come last, with rank null. */
     leaderboard: (category, level = null) =>
       request("GET", `/leaderboard?category=${enc(category)}${level === null || level === undefined ? "" : `&level=${enc(level)}`}`),
-    /** maze: { category, level, ticks, ops, seed, size, sx, sy, code } → the stored
-     *  score with the SERVER's ticks / ops (+ claimed, corrected, verified).
+    /** maze: { category, level, code, ticks?, ops? } → the stored benchmark result:
+     *  the SERVER's ticks / ops on its hidden maze of the week (+ period, claimed,
+     *  verified).
      *  dino: { category, code, value? } → the stored benchmark result: the
      *  SERVER's value (Bone) / ticks / ops (+ claimed, verified).
      *  daily: { category, code } → the stored race result: the SERVER's date, seed,
@@ -207,35 +211,34 @@ export const onlineApi = createOnlineApi();
 /** A local record event (runtime onRecord) → a POST /api/scores body, or null
  *  if it is not leaderboard material (maze level outside 1–3, insane numbers,
  *  no program to replay).
- *  v4 phase 2: a maze score carries what the server needs to REPLAY it — the
- *  program as it ran (ev.code, helper files included), the seed, the farm
- *  size and the start tile; the server keeps its own ticks / ops.
- *  v5 phase 2: a dino score carries the program too; the server runs it on its
- *  own benchmark farm and keeps the Bone / ticks / ops measured there. */
+ *  Both carry the program as it ran (ev.code, helper files included); the
+ *  server runs it on its own benchmark (maze: the hidden maze of the week, dino:
+ *  the benchmark farm) and keeps what IT measures there. The local numbers are
+ *  only echoed back. */
 export function scoreForRecord(ev) {
   let score = null;
   if (ev?.kind === "maze" && ev.attempt && MAZE_LEVELS.includes(ev.attempt.level)) {
     const a = ev.attempt;
-    score = { category: "maze", level: a.level, ticks: a.ticks, ops: a.ops, seed: a.seed ?? null, size: a.size, sx: a.sx, sy: a.sy, code: ev.code };
+    score = { category: "maze", level: a.level, ticks: a.ticks, ops: a.ops, code: ev.code };
   } else if (ev?.kind === "dino" && ev.rec) {
     score = { category: "dino", value: ev.rec.bone, code: ev.code };
   }
   return score && validateScore(score).ok ? score : null;
 }
 
-// The dino program each identity (token) sent last: its benchmark result does
-// not depend on the local harvest, so a run that keeps beating its own record
-// sends the same program only once.
-const dinoSent = new Map();
+// The program each identity (token) sent last, per board (and week, for the
+// mazes): its benchmark result does not depend on the local record, so a run
+// that keeps beating its own record sends the same program only once.
+const lastSent = new Map();
+const sentKey = (token, score, now) => [token, score.category, ...(score.category === "maze" ? [score.level, bangkokWeek(now)] : [])].join("|");
 
 /**
  * Fire-and-forget: send a new local record to the leaderboard if this
  * browser has an identity. Never rejects. → Promise<{ sent, score?, stored?,
- * reason?, rejected? }> — stored: the server's answer (maze: its replayed
- * ticks / ops, dino: its benchmark result); rejected: the server's replay
- * could not reproduce it (422).
+ * reason?, rejected? }> — stored: the server's answer (its benchmark result);
+ * rejected: the program has no benchmark result (422).
  */
-export async function submitRecord(ev, { api = onlineApi, storage, demo = false, sent = dinoSent } = {}) {
+export async function submitRecord(ev, { api = onlineApi, storage, demo = false, sent = lastSent, now = Date.now() } = {}) {
   let undo = () => {};
   try {
     if (demo) return { sent: false, reason: "demo" };
@@ -243,11 +246,10 @@ export async function submitRecord(ev, { api = onlineApi, storage, demo = false,
     if (!id) return { sent: false, reason: "no identity" };
     const score = scoreForRecord(ev);
     if (!score) return { sent: false, reason: "not a leaderboard score" };
-    if (score.category === "dino") {
-      if (sent.get(id.token) === score.code) return { sent: false, reason: "already sent" };
-      sent.set(id.token, score.code);
-      undo = () => sent.get(id.token) === score.code && sent.delete(id.token);
-    }
+    const key = sentKey(id.token, score, now);
+    if (sent.get(key) === score.code) return { sent: false, reason: "already sent" };
+    sent.set(key, score.code);
+    undo = () => sent.get(key) === score.code && sent.delete(key);
     const stored = await api.submitScore(id.token, score);
     return { sent: true, score, stored: stored && typeof stored === "object" ? stored : null };
   } catch (err) {

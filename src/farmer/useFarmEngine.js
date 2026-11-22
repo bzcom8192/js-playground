@@ -116,7 +116,7 @@ export default function useFarmEngine() {
         if (demoRef.current) return;
         void submitRecord(ev).then((r) => {
           if (!r.sent) {
-            // The server replayed the program and could not reproduce it.
+            // The program has no result on the server's benchmark.
             if (r.rejected) logBuffer.current.push({ id: ++logId, kind: "warn", text: `🌐 The online leaderboard did not accept this record: ${r.reason}` });
             return;
           }
@@ -125,8 +125,8 @@ export default function useFarmEngine() {
           const st = r.stored;
           const num = (n) => Number(n || 0).toLocaleString("en-US");
           let verified = "";
-          if (st?.verified && maze) verified = ` — ✓ verified by the server${st.corrected ? ` (${num(st.ticks)} ticks · ${num(st.ops)} ops)` : ""}`;
-          // The board counts the program's run on the server's benchmark farm, not the local harvest.
+          // The board counts the program's run on the server's benchmark, not the local record.
+          if (st?.verified && maze) verified = ` — ✓ ${num(st.ticks)} ticks · ${num(st.ops)} ops on the server's maze of the week`;
           else if (st?.verified) verified = ` — ✓ ${num(st.value)} Bone on the server's benchmark farm`;
           logBuffer.current.push({ id: ++logId, kind: "info", text: `🌐 Sent your new best (${what}) to the online leaderboard${verified}` });
           setOnlineSeq((n) => n + 1);

@@ -298,20 +298,18 @@ const mazeEv = (level = 1, ticks = 4200, ops = 40, code = MAZE_CODE) => ({
   attempt: { level, seed: 77, size: 6, sx: 2, sy: 4, ticks, ops, lines: 9, chars: 200, at: 1 },
   code,
 });
-const mazeBody = (level, ticks = 4200, ops = 40) => ({ category: "maze", level, ticks, ops, seed: 77, size: 6, sx: 2, sy: 4, code: MAZE_CODE });
+const mazeBody = (level, ticks = 4200, ops = 40) => ({ category: "maze", level, ticks, ops, code: MAZE_CODE });
 
-test("scoreForRecord: maze L1–L3 (with code + layout for the replay) and dino become score bodies; others are skipped", () => {
-  // v4 phase 2: a maze score carries the program, seed, farm size and start tile.
+test("scoreForRecord: maze L1–L3 and dino (with the program) become score bodies; others are skipped", () => {
+  // The program is what counts; the local maze (seed, size, start tile) stays here.
   assert.deepEqual(scoreForRecord(mazeEv(2)), mazeBody(2));
   assert.equal(scoreForRecord(mazeEv(1, 4200, 40, null)), null, "no program → nothing to replay → not sent");
   assert.equal(scoreForRecord(mazeEv(1, 4200, 40, "x".repeat(100_001))), null, "too long to upload");
-  assert.equal(scoreForRecord({ ...mazeEv(1), attempt: { ...mazeEv(1).attempt, sx: 6 } }), null, "start off the farm");
   // v5 phase 2: a dino score carries the program too (the server runs its benchmark with it).
   const dinoRec = { bone: 18, level: 2, cut: 3, seed: 5, size: 6, sx: 0, sy: 0, at: 1 };
   assert.deepEqual(scoreForRecord({ kind: "dino", rec: dinoRec, code: "harvest()" }), { category: "dino", value: 18, code: "harvest()" });
   for (const code of [undefined, null, "  ", "x".repeat(100_001)]) assert.equal(scoreForRecord({ kind: "dino", rec: dinoRec, code }), null, "no program, not sent");
   assert.equal(scoreForRecord(mazeEv(4)), null); // no such leaderboard level
-  assert.equal(scoreForRecord(mazeEv(1, 0, 0)), null); // insane
   assert.equal(scoreForRecord(null), null);
   assert.deepEqual(MAZE_LEVELS, [1, 2, 3]);
 });
@@ -326,7 +324,7 @@ test("submitRecord: sends with the stored token, skips without identity / in dem
   assert.equal((await submitRecord(mazeEv(), { api, storage: st, demo: true })).sent, false);
   assert.equal((await submitRecord(mazeEv(9), { api, storage: st })).sent, false);
   assert.equal(calls.length, 0);
-  const ok = await submitRecord(mazeEv(3), { api, storage: st });
+  const ok = await submitRecord(mazeEv(3), { api, storage: st, sent: new Map() });
   assert.equal(ok.sent, true);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, "/api/scores");
@@ -334,16 +332,17 @@ test("submitRecord: sends with the stored token, skips without identity / in dem
   assert.deepEqual(calls[0].body, mazeBody(3));
   assert.deepEqual(ok.stored, { id: 1 }, "the server's answer is passed on");
   // A replay rejection (422) is reported as such, still without throwing.
-  const rej = await submitRecord(mazeEv(), { api: createOnlineApi({ fetchFn: mockFetch(() => ({ status: 422, json: { error: "maze score rejected: …" } })).fn }), storage: st });
+  const rej = await submitRecord(mazeEv(), { api: createOnlineApi({ fetchFn: mockFetch(() => ({ status: 422, json: { error: "maze score rejected: …" } })).fn }), storage: st, sent: new Map() });
   assert.deepEqual(rej, { sent: false, reason: "maze score rejected: …", rejected: true });
 
   for (const reply of [() => new TypeError("offline"), () => ({ status: 400, json: { error: "nope" } }), () => ({ status: 500, text: "boom" })]) {
-    const r = await submitRecord(mazeEv(), { api: createOnlineApi({ fetchFn: mockFetch(reply).fn }), storage: st });
+    const r = await submitRecord(mazeEv(), { api: createOnlineApi({ fetchFn: mockFetch(reply).fn }), storage: st, sent: new Map() });
     assert.equal(r.sent, false);
     assert.equal(typeof r.reason, "string");
+    assert.notEqual(r.reason, "already sent");
   }
   // even a broken api object
-  assert.equal((await submitRecord(mazeEv(), { api: { submitScore: () => { throw new Error("sync"); } }, storage: st })).sent, false);
+  assert.equal((await submitRecord(mazeEv(), { api: { submitScore: () => { throw new Error("sync"); } }, storage: st, sent: new Map() })).sent, false);
 });
 
 test("submitRecord: a dino program is sent once, however often its run beats the local record", async () => {
@@ -361,8 +360,12 @@ test("submitRecord: a dino program is sent once, however often its run beats the
   assert.equal(calls.length, 1);
   assert.equal((await submitRecord(ev(27, "harvest(); // v2"), opts)).sent, true, "another program is sent");
   assert.equal(calls.length, 2);
-  // A maze record is never held back.
-  for (let i = 0; i < 2; i++) assert.equal((await submitRecord(mazeEv(), opts)).sent, true);
+  // The same for a maze program, per level and week (a new week has a new maze).
+  const monday = Date.UTC(2026, 10, 22, 17);
+  const maze = (level, now) => submitRecord(mazeEv(level), { ...opts, now }).then((r) => r.sent);
+  assert.deepEqual([await maze(1, monday - 1), await maze(1, monday - 1), await maze(2, monday - 1)], [true, false, true]);
+  assert.deepEqual([await maze(1, monday), await maze(1, monday + 1)], [true, false]);
+  assert.equal((await submitRecord(ev(81, "harvest(); // v2"), opts)).reason, "already sent", "each board on its own");
 
   // Offline / busy: not counted as sent, the next record tries again. 422: the
   // same program would fail again, so it is not repeated.
@@ -475,14 +478,14 @@ test("rules: names, scores, challenges, results", () => {
   assert.equal(validateName("x".repeat(25)).ok, false);
   assert.equal(validateName("").ok, false);
   assert.equal(validateName("a\nb").ok, false);
-  const maze = { category: "maze", level: 1, ticks: 200, ops: 200, seed: 5, size: 6, sx: 0, sy: 5, code: "x" };
-  assert.equal(validateScore(maze).ok, true);
-  assert.equal(validateScore({ ...maze, ops: 201 }).ok, false);
-  // v4 phase 2: the replay inputs are required for maze scores.
-  for (const patch of [{ seed: undefined }, { seed: null }, { size: 9 }, { size: undefined }, { sx: 6 }, { sy: -1 }, { sx: 1.5 }, { code: "" }, { code: undefined }, { code: 5 }]) {
-    assert.equal(validateScore({ ...maze, ...patch }).ok, false, JSON.stringify(patch));
+  // Maze: the level and the program; the maze and the numbers are the server's.
+  const mazeScore = { category: "maze", level: 1, ticks: null, ops: null, value: null, seed: null, size: 12, sx: 0, sy: 0, code: "x" };
+  for (const claim of [{}, { ticks: 200, ops: 200, seed: 5, size: 6, sx: 0, sy: 5 }, { ticks: -1, ops: "many", seed: 2 ** 40, size: 1, sx: 99, value: 3, period: "2020-W01" }]) {
+    assert.deepEqual(validateScore({ category: "maze", level: 1, code: "x", ...claim }), { ok: true, score: mazeScore }, JSON.stringify(claim));
   }
-  assert.deepEqual(validateScore(maze).score, { ...maze, value: null });
+  for (const patch of [{ level: 0 }, { level: 4 }, { level: undefined }, { code: "" }, { code: undefined }, { code: 5 }, { code: "x".repeat(100_001) }]) {
+    assert.equal(validateScore({ category: "maze", level: 1, code: "x", ...patch }).ok, false, JSON.stringify(patch));
+  }
   // v5 phase 2: dino needs the program and nothing else; every claimed number is ignored.
   const { seed, size, x, y } = DINO_BENCHMARK;
   const dinoScore = { category: "dino", level: null, ticks: null, ops: null, value: null, seed, size, sx: x, sy: y, code: "x" };

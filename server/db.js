@@ -42,7 +42,12 @@ CREATE TABLE IF NOT EXISTS scores (
   sx INTEGER,
   sy INTEGER,
   code TEXT,
-  race_date TEXT
+  race_date TEXT,
+  period TEXT
+);
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS scores_board ON scores(category, level, player_id);
 CREATE TABLE IF NOT EXISTS challenges (
@@ -81,8 +86,10 @@ CREATE INDEX IF NOT EXISTS challenge_results_player ON challenge_results(player_
 // a rolled-back (older) server can keep inserting rows without it.
 // v5 phase 3: race_date (the Bangkok date of a daily race entry), null for the
 // other categories.
+// v5 cleanup (BRIEF21): period (the Bangkok ISO week whose hidden maze a maze
+// entry ran on). Null = a legacy maze entry, or another category.
 const ADDED_COLUMNS = {
-  scores: ["verified INTEGER NOT NULL DEFAULT 0", "size INTEGER", "sx INTEGER", "sy INTEGER", "code TEXT", "race_date TEXT"],
+  scores: ["verified INTEGER NOT NULL DEFAULT 0", "size INTEGER", "sx INTEGER", "sy INTEGER", "code TEXT", "race_date TEXT", "period TEXT"],
   challenges: ["verified INTEGER NOT NULL DEFAULT 0"],
   challenge_results: ["verified INTEGER NOT NULL DEFAULT 0", "author_elo_delta INTEGER"],
 };
@@ -112,6 +119,15 @@ const DAILY_RANKED = `
     WHERE s.category = 'daily' AND s.race_date = ? AND s.verified = 1
   ) WHERE rn = 1`;
 
+// One maze level's board: the best entry per player. Param: the level.
+const mazeBoard = (which) => `
+  SELECT * FROM (
+    SELECT s.id, s.player_id, p.name, s.ticks, s.ops, s.value, s.seed, s.created_at, s.verified, s.size, s.sx, s.sy, s.period,
+           ROW_NUMBER() OVER (PARTITION BY s.player_id ORDER BY s.ticks ASC, s.ops ASC, s.id ASC) AS rn
+    FROM scores s JOIN players p ON p.id = s.player_id
+    WHERE s.category = 'maze' AND s.level = ? AND s.verified = 1 AND ${which}
+  ) WHERE rn = 1 ORDER BY ticks ASC, ops ASC, id ASC LIMIT ${LEADERBOARD_LIMIT}`;
+
 const isUnique = (err) => /UNIQUE constraint failed/i.test(String(err?.message));
 
 /**
@@ -131,18 +147,16 @@ export async function openDb(file, { now = Date.now } = {}) {
     playerById: db.prepare("SELECT id, name, elo, created_at FROM players WHERE id = ?"),
     setElo: db.prepare("UPDATE players SET elo = ? WHERE id = ?"),
     insertScore: db.prepare(
-      "INSERT INTO scores (player_id, category, level, ticks, ops, value, seed, created_at, verified, size, sx, sy, code, race_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO scores (player_id, category, level, ticks, ops, value, seed, created_at, verified, size, sx, sy, code, race_date, period) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     ),
     // Best entry per player (window function), then the category's order.
     // Only replay-verified rows count: the trust-based ones (maze before v4
     // phase 2, dino before v5 phase 2) stay in the table but off the board.
-    boardMaze: db.prepare(`
-      SELECT * FROM (
-        SELECT s.id, s.player_id, p.name, s.ticks, s.ops, s.value, s.seed, s.created_at, s.verified, s.size, s.sx, s.sy,
-               ROW_NUMBER() OVER (PARTITION BY s.player_id ORDER BY s.ticks ASC, s.ops ASC, s.id ASC) AS rn
-        FROM scores s JOIN players p ON p.id = s.player_id
-        WHERE s.category = 'maze' AND s.level = ? AND s.verified = 1
-      ) WHERE rn = 1 ORDER BY ticks ASC, ops ASC, id ASC LIMIT ${LEADERBOARD_LIMIT}`),
+    // Maze: entries with a period ran on a hidden maze of the week; those without
+    // are legacy (a maze the player chose). Both stay, each with its own best
+    // entry per player, so a legacy time never hides a player's new one.
+    boardMaze: db.prepare(mazeBoard("s.period IS NOT NULL")),
+    boardMazeLegacy: db.prepare(mazeBoard("s.period IS NULL")),
     boardDino: db.prepare(`
       SELECT * FROM (
         SELECT s.id, s.player_id, p.name, s.ticks, s.ops, s.value, s.seed, s.created_at, s.verified, s.size, s.sx, s.sy,
@@ -152,6 +166,8 @@ export async function openDb(file, { now = Date.now } = {}) {
       ) WHERE rn = 1 ORDER BY value DESC, id ASC LIMIT ${LEADERBOARD_LIMIT}`),
     boardDaily: db.prepare(`${DAILY_RANKED} ORDER BY ticks ASC, ops ASC, id ASC LIMIT ${LEADERBOARD_LIMIT}`),
     dailyEntry: db.prepare(`SELECT * FROM (${DAILY_RANKED}) WHERE player_id = ?`),
+    insertSetting: db.prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING"),
+    setting: db.prepare("SELECT value FROM settings WHERE key = ?"),
     insertChallenge: db.prepare(
       "INSERT INTO challenges (author_id, goal, seed, code, author_ticks, author_ops, status, created_at, verified) VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?)",
     ),
@@ -236,15 +252,23 @@ export async function openDb(file, { now = Date.now } = {}) {
 
     /** s: a validated score; s.verified (bool) = the server replayed it and
      *  s.ticks / s.ops / s.value are the server's numbers; s.date: the race
-     *  date (daily only). */
+     *  date (daily only); s.period: the benchmark week (maze only). */
     addScore(playerId, s) {
       const r = q.insertScore.run(
         playerId, s.category, s.level, s.ticks, s.ops, s.value, s.seed, now(),
-        s.verified ? 1 : 0, s.size ?? null, s.sx ?? null, s.sy ?? null, s.code ?? null, s.date ?? null,
+        s.verified ? 1 : 0, s.size ?? null, s.sx ?? null, s.sy ?? null, s.code ?? null, s.date ?? null, s.period ?? null,
       );
       return Number(r.lastInsertRowid);
     },
-    leaderboard: (category, level) => (category === "dino" ? q.boardDino.all() : q.boardMaze.all(level)),
+    /** maze: the current entries first, then the legacy ones (period null). */
+    leaderboard: (category, level) => (category === "dino" ? q.boardDino.all() : [...q.boardMaze.all(level), ...q.boardMazeLegacy.all(level)]),
+
+    /** The server secret of this DB: made once, at random, and kept (the
+     *  benchmark must not change when the server restarts). Never sent out. */
+    secret() {
+      q.insertSetting.run("secret", randomBytes(32).toString("hex"));
+      return q.setting.get("secret").value;
+    },
 
     /** The race of `date`: the best entry per player, at most LEADERBOARD_LIMIT. */
     dailyBoard: (date) => q.boardDaily.all(date),

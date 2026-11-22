@@ -5,6 +5,8 @@
 // demo farm can look but not register, submit or race.
 // v4 phase 2: maze rows and friend challenges are replay-verified by the
 // server (✓); v5 phase 2: so are dino rows (the program's benchmark run).
+// Maze rows are benchmark runs too, on the server's hidden maze of the week;
+// older rows (a maze the player chose) follow unranked, marked "legacy".
 // v5: identity export / import (its own file, not Save Data), challenges
 // expire after 7 days, and a match history (ประวัติ) with the ELO changes.
 // v5 phase 3: the daily maze race (แข่งวงกตประจำวัน, DailyRace.jsx).
@@ -17,7 +19,7 @@ import { playDaily } from "./dailyClient.js";
 import { randomSeed } from "./maze.js";
 import { buildProgram } from "./program.js";
 import { TEAL } from "./farmerUi.jsx";
-import { CODE_MAX, DINO_BENCHMARK, NAME_MAX } from "./onlineRules.js";
+import { CODE_MAX, DINO_BENCHMARK, MAZE_BENCHMARK, NAME_MAX } from "./onlineRules.js";
 import {
   IDENTITY_FILE_MAX,
   OFFLINE_MESSAGE,
@@ -89,13 +91,19 @@ function Leaderboard({ tab, board, meId }) {
         {board.entries.map((e) => {
           const mine = e.playerId === meId;
           return (
-            <tr key={e.playerId} className={mine ? "bg-lime-100 font-semibold text-lime-900" : "odd:bg-white even:bg-stone-50 text-stone-700"}>
-              <td className="px-1 py-0.5 font-mono">{e.rank}</td>
-              <td className="truncate max-w-0 w-full">
+            <tr key={`${e.playerId}${e.legacy ? "-legacy" : ""}`} className={mine ? "bg-lime-100 font-semibold text-lime-900" : "odd:bg-white even:bg-stone-50 text-stone-700"}>
+              <td className="px-1 py-0.5 font-mono">{e.rank ?? "–"}</td>
+              <td className="truncate max-w-0 w-full" title={e.period ? `Maze of ${e.period}` : undefined}>
                 {e.name}
                 {mine ? " (you)" : ""}
+                {e.legacy && (
+                  <span className="text-[10px] font-normal text-stone-400" title="From before the weekly hidden maze, on a maze the player chose: kept, but not ranked">
+                    {" "}
+                    legacy
+                  </span>
+                )}
               </td>
-              <td className="px-1 text-right font-mono whitespace-nowrap">
+              <td className={`px-1 text-right font-mono whitespace-nowrap ${e.legacy ? "text-stone-400" : ""}`}>
                 {dino ? `${fmt(e.value)} ${ITEM_ICONS.Bone}` : `${fmt(e.ticks)} / ${fmt(e.ops)}`}
               </td>
               <td className="pl-0.5 pr-1 text-right whitespace-nowrap w-4">
@@ -653,8 +661,10 @@ export default function OnlinePanel({ files, activeId, demo, onlineSeq = 0, push
           <Leaderboard tab={tab} board={board && board.category === tab.category && board.level === tab.level ? board : null} meId={identity?.playerId} />
         </div>
         <p className="text-[10px] text-stone-400">
-          Maze: fewest ticks, then fewest ops. Dino: biggest single harvest. Best entry per player, top 50. <VerifiedMark /> = the server replayed
-          the program and measured the run itself (records send their code). Dino programs all run on the server&apos;s benchmark farm:{" "}
+          Maze: fewest ticks, then fewest ops. Dino: biggest single harvest. Best entry per player, top 50. <VerifiedMark /> = the server ran
+          the program and measured it itself (records send their code). Maze programs of a level all run on the same hidden{" "}
+          {MAZE_BENCHMARK.size}×{MAZE_BENCHMARK.size} maze, a new one every Monday (Bangkok time): the bot starts on ({MAZE_BENCHMARK.sx}, {MAZE_BENCHMARK.sy}) on a ripe
+          Bush, and the clock runs from the start of the program. Dino programs all run on the server&apos;s benchmark farm:{" "}
           {DINO_BENCHMARK.size}×{DINO_BENCHMARK.size}, dinosaur seed {DINO_BENCHMARK.seed}, {fmt(DINO_BENCHMARK.worldTicks / 10)} s of farm time.
         </p>
       </Section>

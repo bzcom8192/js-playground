@@ -166,6 +166,9 @@ export function createRuntime(opts) {
     // v4 phase 2 (server replay): time a maze that already exists when Run is
     // pressed from the run start (normally such a maze is "not timed").
     timeExistingMaze = false,
+    // Server maze benchmark: time every maze from the run start, also one the
+    // program grows itself (so nothing done before it exists is free).
+    timeFromRunStart = false,
   } = opts;
   const notifyRecord = (ev) => {
     try {
@@ -292,7 +295,7 @@ export function createRuntime(opts) {
   function worldEvent(ctx, s, ev) {
     const session = ctx.session;
     if (ev.type === "mazeSpawn") {
-      session.maze = { ref: ev.maze, ticks: runTicks(session), ops: session.ops };
+      session.maze = timeFromRunStart ? { ref: ev.maze, ticks: 0, ops: 0 } : { ref: ev.maze, ticks: runTicks(session), ops: session.ops };
       log("info", `Maze seed: ${ev.seed}${ev.replay ? " (replay)" : ""}`);
       return;
     }
