@@ -72,7 +72,7 @@ test("board target size grows with the farm and fits the area", () => {
   assert.ok(c <= 1000 * 0.88 + 1e-9);
 });
 
-test("model kit builds every entity, giants, slab and drone; dispose is clean", () => {
+test("model kit builds every entity, giants, slab and bot; dispose is clean", () => {
   const kit = createModelKit();
   const types = ["Grass", "Bush", "Tree", "Carrot", "Pumpkin", "Dead_Pumpkin", "Sunflower", "Cactus"];
   for (const type of types) {
@@ -92,8 +92,15 @@ test("model kit builds every entity, giants, slab and drone; dispose is clean", 
   assert.ok(box.max.x - box.min.x > 2.4 && box.max.x - box.min.x < 3.3, "giant spans ~k tiles");
   const slab = kit.buildSlab(8);
   kit.release(slab);
-  const d = kit.buildDrone();
-  assert.equal(d.rotors.length, 4);
+  const d = kit.buildBot();
+  assert.equal(d.wheels.length, 4);
+  // The status light has its own colour per state; unknown states read as idle.
+  const colors = ["idle", "running", "paused", "error"].map((s) => (d.setStatus(s), d.light.material.color.getHexString()));
+  assert.equal(new Set(colors).size, 4);
+  d.setStatus("stopped");
+  assert.equal(d.light.material.color.getHexString(), colors[0]);
+  kit.release(d.root);
+  kit.release(d.shadow);
   // Geometry is shared per variant.
   const g1 = kit.buildEntity({ type: "Tree", progress: 1 }, 0);
   const g2 = kit.buildEntity({ type: "Tree", progress: 1 }, 3);

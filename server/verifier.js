@@ -1,4 +1,4 @@
-// JS Farmer Online — the replay verifier (anti-cheat level 2). Every
+// Semicolon Acres Online — the replay verifier (anti-cheat level 2). Every
 // verification runs src/farmer/verify.js in its OWN worker_thread
 // (verifyWorker.js) with:
 //  - a wall-clock timeout (default VERIFY_TIMEOUT_MS = 10 s): past it the

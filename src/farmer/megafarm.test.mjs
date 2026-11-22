@@ -130,8 +130,8 @@ test("Megafarm is a real unlock after Dinosaurs; no future unlocks; API declared
   assert.deepEqual(u.cost(0), { Bone: 2000, Gold: 1500 });
   assert.equal(Unlocks.Megafarm, "Megafarm");
   assert.deepEqual(FUTURE_UNLOCKS, []);
-  assert.ok(ACTIONS.includes("spawn_drone"), "spawn_drone is auto-awaited");
-  for (const n of ["spawn_drone", "num_drones", "max_drones"]) {
+  for (const n of ["spawn_bot", "spin_in_place", "spawn_drone", "do_a_flip"]) assert.ok(ACTIONS.includes(n), `${n} is auto-awaited`);
+  for (const n of ["spawn_bot", "num_bots", "max_bots", "spin_in_place", "spawn_drone", "num_drones", "max_drones", "do_a_flip"]) {
     assert.equal(FARMER_GLOBALS[n], "readonly");
     assert.match(FARMER_LIB, new RegExp(`declare function ${n}\\(\\)`));
   }
@@ -239,6 +239,41 @@ print("end", get_pos_x(), get_pos_y());
   ]);
   assert.deepEqual(positions(s), [[2, 1], [1, 1]]);
   assert.deepEqual(h.statuses, ["running", "done"], "one status pair for the whole run");
+});
+
+test("spawn_bot / num_bots / max_bots / spin_in_place and their earlier names run identically", async () => {
+  const play = async (code) => {
+    const s = mega(3);
+    const h = harness(s);
+    h.run(code);
+    await h.runFor(60_000);
+    assert.equal(h.finished(), "done");
+    const st = h.rt.stats();
+    return { prints: h.prints(), warns: h.warns().map((w) => w.replace(/^spawn_\w+/, "spawn")), at: positions(s), flips: s.drones.map((d) => d.flips), ops: st.ops, ticks: st.runTicks, t: h.now() };
+  };
+  const now = `const first = num_bots() === 1;
+print(spawn_bot(), num_bots(), max_bots());
+spin_in_place();
+if (first) move(North);
+else move(East);
+print(get_tick_count());`;
+  const before = now.replaceAll("num_bots", "num_drones").replaceAll("max_bots", "max_drones").replace("spawn_bot", "spawn_drone").replace("spin_in_place", "do_a_flip");
+  const a = await play(now);
+  assert.deepEqual(a, await play(before));
+  assert.equal(a.prints.filter((p) => p === "true 3 3").length, 2, a.prints.join(" | "));
+  assert.equal(a.at.length, 3);
+});
+
+test("a program that declares a later API name itself still runs (its own declaration wins)", async () => {
+  const s = mega(4);
+  const h = harness(s);
+  h.run(`const num_bots = 3;
+let max_bots = num_bots + 1;
+function spin_in_place() { return "mine"; }
+print(num_bots, max_bots, spin_in_place(), num_drones());`);
+  await h.runFor(5_000);
+  assert.deepEqual(h.errors(), []);
+  assert.deepEqual(h.prints(), ["3 4 mine 1"]);
 });
 
 test("cap enforced: every drone spawns until max_drones(); the extra calls return false", async () => {
@@ -368,7 +403,7 @@ for (let i = 0; i < 4; i++) move(East);
 print("drone 0 done");
 `);
   await h.runFor(800, () => h.droneErrors.length > 0);
-  assert.deepEqual(h.errors(), ["Drone 1: Line 5: Error: boom"]);
+  assert.deepEqual(h.errors(), ["Bot 1: Line 5: Error: boom"]);
   assert.equal(h.droneErrors.length, 1);
   assert.equal(h.droneErrors[0].drone, 1);
   assert.equal(h.droneErrors[0].line, 5);
@@ -537,7 +572,7 @@ for (let i = 0; i < me; i++) move(East);
   assert.deepEqual(positions(W.deserialize({ ...data, drones: "nope" })), [[1, 1]]);
 });
 
-test("example 9 (Drone Squad) puts one drone on every column and farms with all of them", async () => {
+test("example 9 (A bot per column) puts one bot on every column and farms with all of them", async () => {
   const code = EXAMPLES.find((e) => e.id === "megafarm").code;
   assert.ok(EXAMPLES.find((e) => e.id === "megafarm").needs.includes("Megafarm"));
   const s = mega(6);
@@ -551,7 +586,7 @@ test("example 9 (Drone Squad) puts one drone on every column and farms with all 
   assert.deepEqual(h.errors(), []);
   assert.equal(s.drones.length, 6);
   assert.deepEqual(s.drones.map((d) => d.x).sort(), [0, 1, 2, 3, 4, 5], "one drone per column");
-  assert.deepEqual(h.prints(), ["6 drones farming, 6 columns"]);
+  assert.deepEqual(h.prints(), ["6 bots at work, 6 columns"]);
   assert.ok(s.items.Hay > 100, `hay ${s.items.Hay}`);
   h.rt.stop();
 
@@ -563,7 +598,7 @@ test("example 9 (Drone Squad) puts one drone on every column and farms with all 
   await h1.runFor(10_000);
   assert.equal(one.drones.length, 1);
   assert.equal(one.drone.x, 0);
-  assert.equal(h1.prints()[0], "No helper for column 1 (Megafarm locked or at the cap)");
+  assert.equal(h1.prints()[0], "Nobody for column 1 (no Bot Crew, or everyone is out)");
   assert.ok(one.items.Hay > 0);
   h1.rt.stop();
 });
@@ -600,7 +635,7 @@ if (num_drones() === 1) {
 
 // ---------- presentation ----------
 
-test("3D: one pumpkin-drone model per drone; helpers get their own band colour", () => {
+test("3D: one field-bot model per bot; helpers get their own band colour", () => {
   assert.equal(droneBand(0), DRONE_BAND_0);
   assert.equal(droneBand(1), DRONE_BANDS[0]);
   assert.equal(droneBand(DRONE_BANDS.length + 1), DRONE_BANDS[0], "colours cycle");
@@ -617,9 +652,9 @@ test("3D: one pumpkin-drone model per drone; helpers get their own band colour",
   fs.update(1 / 60);
   assert.equal(fs.droneRecs.length, 3);
   assert.equal(fs.scene.children.length, base + 4, "model + shadow for each helper");
-  assert.ok(fs.kit._geometryCache.has("droneBody"));
-  assert.ok(fs.kit._geometryCache.has(`droneBody:${droneBand(1)}`));
-  assert.ok(fs.kit._geometryCache.has(`droneBody:${droneBand(2)}`));
+  assert.ok(fs.kit._geometryCache.has("botBody"));
+  assert.ok(fs.kit._geometryCache.has(`botBody:${droneBand(1)}`));
+  assert.ok(fs.kit._geometryCache.has(`botBody:${droneBand(2)}`));
   // Helpers sit on their own tiles (a new drone appears in place, no glide).
   const [, a, b] = fs.droneRecs;
   assert.ok(Math.abs(a.x - (1 - 1.5)) < 1e-6 && Math.abs(a.z - -(2 - 1.5)) < 1e-6);

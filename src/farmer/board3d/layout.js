@@ -3,7 +3,7 @@
 //
 // World space: 1 unit = 1 tile. The board is centred on the origin, tile tops
 // sit at y = 0. x grows East, North is −z (away from the camera), so the
-// camera looks at the board from the South like the TFWR reference.
+// camera looks at the board from the South and "up" on screen is North.
 
 /** Centre of tile (x, y) in world units for an n×n farm. */
 export function tileToWorld(n, x, y) {
@@ -90,8 +90,8 @@ export const waterLevel = (w) => Math.max(0, Math.min(10, Math.round((w || 0) * 
 
 /**
  * On-screen size the board should fill, in CSS px. Like the v2 board it grows
- * with the farm: a 1×1 farm is a small plot, 8×8 is close to the reference
- * (~720 px wide at 1080p) and big farms use the room there is.
+ * with the farm: a 1×1 farm is a small plot, 8×8 is about 720 px
+ * wide at 1080p and big farms use the room there is.
  */
 export function boardTargetPx(n, cw, ch) {
   const w = Math.max(80, Math.min(cw * 0.88, ch * 1.02, 250 + 60 * n));

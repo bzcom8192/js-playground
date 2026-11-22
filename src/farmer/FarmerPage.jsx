@@ -18,8 +18,8 @@ import useFarmEngine, { SAVE_KEY } from "./useFarmEngine.js";
 import useFarmerFiles, { FILES_KEY } from "./useFarmerFiles.js";
 import { buildExport, parseImport } from "./saveData.js";
 import FarmBoardView from "./FarmBoardView.jsx";
-import FloatingWindow, { SquareButton } from "./FloatingWindow.jsx";
-import { Glyph, OLIVE, ORANGE } from "./farmerUi.jsx";
+import FloatingWindow, { PillButton } from "./FloatingWindow.jsx";
+import { BERRY, GAME_NAME, Glyph, INK, MARIGOLD, TEAL } from "./farmerUi.jsx";
 import UnlocksPanel from "./UnlocksPanel.jsx";
 import DocsPanel from "./DocsPanel.jsx";
 import RecordsPanel from "./RecordsPanel.jsx";
@@ -35,25 +35,24 @@ const MonacoEditor = lazy(() => import("../components/MonacoEditor"));
 
 const EXTRA_LIB = { content: FARMER_LIB, fileName: FARMER_LIB_FILE };
 const SHORTCUT_SECTIONS = [
-  { title: "JS Farmer", items: FARMER_SHORTCUTS },
+  { title: GAME_NAME, items: FARMER_SHORTCUTS },
   { title: "Editor", items: EDITOR_SHORTCUTS },
 ];
 // ESLint globals per set of imported helper names (stable identity per set).
 const GLOBALS_CACHE = new Map();
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 
-// Inventory order from the reference: Hay, Wood, Carrot, Pumpkin, Power, Cactus, Water, Fertilizer, Gold, Bone
-// (+ Rice after Cactus, v3 phase 5).
-const INVENTORY = ["Hay", "Wood", "Carrot", "Pumpkin", "Power", "Cactus", "Rice", "Water", "Fertilizer", "Gold", "Bone"];
+// Store room order: what grows, then what helps it grow, then what it buys.
+const INVENTORY = ["Hay", "Wood", "Carrot", "Pumpkin", "Cactus", "Rice", "Water", "Fertilizer", "Power", "Gold", "Bone"];
 // Rice shares Hay's 🌾 icon; a green-gold tint tells the two slots apart.
 const ITEM_TINT = { Rice: "hue-rotate(38deg) saturate(1.25)" };
 
 const STATUS_LABEL = {
-  idle: ["bg-white/50", "Idle"],
+  idle: ["bg-stone-300", "Idle"],
   running: ["bg-lime-400 animate-pulse", "Running"],
   paused: ["bg-orange-400", "Paused"],
   done: ["bg-sky-300", "Finished"],
-  stopped: ["bg-white/60", "Stopped"],
+  stopped: ["bg-stone-300", "Stopped"],
   error: ["bg-red-500", "Error"],
 };
 
@@ -69,64 +68,55 @@ function useIsDesktop() {
   return ok;
 }
 
-// ---------- top bar ----------
+// ---------- store room + top bar ----------
 
-function Inventory({ items }) {
+/** The inventory: a rail down the left side (a wrapping strip on phones). */
+function StoreRoom({ items }) {
   return (
-    <div className="flex flex-wrap md:flex-nowrap items-start gap-x-3 gap-y-2 sm:gap-x-5 pb-1">
+    <section
+      aria-label="Store room"
+      className="rounded-md border border-[#2e2438]/80 bg-[#fdf6ea]/95 text-[#2e2438] p-1.5 grid grid-cols-4 gap-x-2 md:flex md:flex-col md:w-[112px] md:max-h-full md:overflow-y-auto"
+    >
       {INVENTORY.map((k) => (
         <div
           key={k}
           title={`${k}: ${(items[k] || 0).toLocaleString("en-US")}`}
-          className={`flex flex-col items-center shrink-0 select-none ${items[k] > 0 ? "" : "opacity-55"}`}
+          className={`flex items-center gap-2 px-1 py-1 select-none md:border-b md:last:border-b-0 border-[#ecdcc8] ${items[k] > 0 ? "" : "opacity-45"}`}
         >
-          <span
-            className="text-[26px] sm:text-[30px] leading-none drop-shadow-[0_3px_2px_rgba(20,40,60,.35)]"
-            style={ITEM_TINT[k] ? { filter: ITEM_TINT[k] } : undefined}
-          >
+          <span className="text-[19px] leading-none w-6 text-center shrink-0" style={ITEM_TINT[k] ? { filter: ITEM_TINT[k] } : undefined} aria-hidden="true">
             {ITEM_ICONS[k]}
           </span>
-          <span className="farmer-count mt-1 text-[13px] sm:text-[15px] font-extrabold text-white leading-none tabular-nums">
-            {formatCount(items[k])}
+          <span className="min-w-0 leading-tight">
+            <span className="block text-[14px] font-bold tabular-nums">{formatCount(items[k])}</span>
+            <span className="block text-[10px] text-[#75627a] truncate">{k}</span>
           </span>
         </div>
       ))}
-    </div>
+    </section>
   );
 }
 
-function BigButton({ title, onClick, children, active }) {
+/** One entry of the top bar: opens / closes a window. */
+function NavTab({ label, title, onClick, active, badge = 0 }) {
   return (
     <button
       type="button"
       title={title}
-      aria-label={title}
+      aria-pressed={!!active}
       onClick={onClick}
-      className={`relative w-10 h-10 min-[400px]:w-11 min-[400px]:h-11 md:w-12 md:h-12 flex items-center justify-center rounded-lg text-white shadow-[0_3px_8px_rgba(20,40,60,.35),inset_0_1px_0_rgba(255,255,255,.25)] hover:brightness-115 active:brightness-95 transition-[filter] ${
-        active ? "ring-2 ring-white/70" : ""
+      className={`shrink-0 h-full px-3 flex items-center gap-1.5 text-[13px] font-medium border-b-[3px] transition-colors ${
+        active ? "text-white border-[#f0b03f] bg-white/10" : "text-[#d9cbe0] border-transparent hover:text-white hover:bg-white/5"
       }`}
-      style={{ background: OLIVE }}
     >
-      {children}
+      {label}
+      {badge > 0 && (
+        <span className="min-w-4 h-4 px-1 rounded-full text-[10px] font-bold leading-4 text-center text-[#2e2438]" style={{ background: MARIGOLD }}>
+          {badge}
+        </span>
+      )}
     </button>
   );
 }
-
-const GridIcon = (
-  <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" strokeWidth="2.4" aria-hidden="true">
-    <rect x="9" y="2.5" width="6" height="6" rx="1" />
-    <rect x="3" y="14.5" width="6" height="6" rx="1" />
-    <rect x="15" y="14.5" width="6" height="6" rx="1" />
-  </svg>
-);
-
-const TrophyIcon = (
-  <svg viewBox="0 0 24 24" width="25" height="25" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinejoin="round" strokeLinecap="round" aria-hidden="true">
-    <path d="M7 3.5 H17 V9 A5 5 0 0 1 7 9 Z" />
-    <path d="M7 5.5 H4 V7 A3.5 3.5 0 0 0 7.6 10.5 M17 5.5 H20 V7 A3.5 3.5 0 0 1 16.4 10.5" />
-    <path d="M12 14 V18 M8 20.5 H16" />
-  </svg>
-);
 
 function FilesMenu({ files, windows, onNew, onToggle, onDelete, onClose }) {
   return (
@@ -134,14 +124,14 @@ function FilesMenu({ files, windows, onNew, onToggle, onDelete, onClose }) {
       <div className="fixed inset-0 z-[9000]" onClick={onClose} />
       <div
         role="menu"
-        className="absolute right-0 top-full mt-2 z-[9001] w-64 rounded-xl bg-white/95 backdrop-blur shadow-2xl border border-black/10 text-stone-800 text-sm overflow-hidden"
+        className="absolute right-2 top-full mt-1 z-[9001] w-64 rounded-md bg-[#fdf6ea] shadow-xl border border-[#2e2438] text-stone-800 text-sm overflow-hidden"
       >
         <button
           role="menuitem"
           onClick={onNew}
           className="w-full flex items-center gap-2 px-3 py-2 font-semibold hover:bg-stone-100"
         >
-          <span className="w-5 h-5 rounded flex items-center justify-center text-white text-xs" style={{ background: OLIVE }}>
+          <span className="w-5 h-5 rounded-full flex items-center justify-center text-white text-xs" style={{ background: TEAL }}>
             +
           </span>
           New file
@@ -160,7 +150,7 @@ function FilesMenu({ files, windows, onNew, onToggle, onDelete, onClose }) {
                   className="flex-1 min-w-0 text-left px-3 py-1.5 flex items-center gap-2"
                   title={open ? "Bring to front" : "Reopen"}
                 >
-                  <span className={`w-2 h-2 rounded-full ${open ? "bg-[#6f9419]" : "bg-stone-300"}`} />
+                  <span className={`w-2 h-2 rounded-full ${open ? "bg-[#1c7a72]" : "bg-stone-300"}`} />
                   <span className="truncate font-mono">{f.name}</span>
                   {!open && <span className="ml-auto text-[11px] text-stone-400">reopen</span>}
                 </button>
@@ -190,13 +180,13 @@ function StatusPill({ game, stats, status, paused, demo, toast }) {
   const f = useSampled(stripFields(game, stats, status, paused), STRIP_REFRESH_MS);
   const [dot, label] = STATUS_LABEL[f.status] || STATUS_LABEL.idle;
   return (
-    <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 px-3 py-1.5 rounded-full bg-black/40 backdrop-blur-md text-white text-[11px] sm:text-xs font-mono shadow-lg max-w-full">
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 px-2.5 py-1 w-fit mx-auto rounded-md bg-[#fdf6ea]/95 border border-[#2e2438]/80 text-[#2e2438] text-[11px] sm:text-xs font-mono max-w-full">
       <span className="whitespace-nowrap">
         📍 ({f.x}, {f.y})
       </span>
       {f.drones !== undefined && (
-        <span className="whitespace-nowrap" title={`${f.drones} drones on the farm (the strip follows drone 0)`}>
-          🚁×{f.drones}
+        <span className="whitespace-nowrap" title={`${f.drones} bots on the farm (this strip follows bot 0)`}>
+          🤖×{f.drones}
         </span>
       )}
       <span className="opacity-50">·</span>
@@ -205,7 +195,7 @@ function StatusPill({ game, stats, status, paused, demo, toast }) {
       {f.weather !== undefined && (
         <>
           <span className="opacity-50">·</span>
-          <span className="whitespace-nowrap" title="Weather (Info → Weather for the forecast)">
+          <span className="whitespace-nowrap" title="Weather (the forecast is in Field Guide → Weather)">
             {f.weather}
           </span>
         </>
@@ -226,13 +216,13 @@ function StatusPill({ game, stats, status, paused, demo, toast }) {
       </span>
       {demo && (
         <span
-          className="ml-1 px-1.5 rounded bg-orange-500/90 text-[10px] font-bold uppercase"
-          title="Demo farm (not saved). Any edit, run, save or purchase returns to your saved farm."
+          className="ml-1 px-1.5 rounded bg-[#f0b03f] text-[10px] font-bold uppercase"
+          title="A show farm; nothing on it is saved. Edit, run, save or buy something and you are back on your own farm."
         >
           Demo
         </span>
       )}
-      {toast && <span className="ml-1 text-lime-300">{toast}</span>}
+      {toast && <span className="ml-1 font-bold text-lime-700">{toast}</span>}
     </div>
   );
 }
@@ -257,23 +247,23 @@ function CodeWindow({ file, win, floating, isRunning, paused, lintGlobals, ownFu
     [],
   );
 
-  const left = isRunning ? (
+  const actions = isRunning ? (
     <>
-      <SquareButton color={ORANGE} title={`Stop ${file.name}`} onClick={onStop}>
-        {Glyph.stop}
-      </SquareButton>
-      <SquareButton color={ORANGE} title={paused ? "Resume" : "Pause (program + farm)"} onClick={onPause}>
-        {paused ? Glyph.play : Glyph.pause}
-      </SquareButton>
+      <PillButton color={INK} title={paused ? "Resume" : "Pause (program + farm)"} onClick={onPause}>
+        {paused ? Glyph.play : Glyph.pause} {paused ? "Resume" : "Pause"}
+      </PillButton>
+      <PillButton color={BERRY} title={`Stop ${file.name}`} onClick={onStop}>
+        {Glyph.stop} Stop
+      </PillButton>
     </>
   ) : (
-    <SquareButton color={OLIVE} title={`Run ${file.name} (Ctrl/⌘+Enter)`} onClick={onRun}>
-      {Glyph.play}
-    </SquareButton>
+    <PillButton color={TEAL} title={`Run ${file.name} (Ctrl/⌘+Enter)`} onClick={onRun}>
+      {Glyph.play} Run
+    </PillButton>
   );
 
   return (
-    <FloatingWindow {...windowProps} title={file.name} rect={win} floating={floating} left={left} label={`Code: ${file.name}`}>
+    <FloatingWindow {...windowProps} title={<span className="font-mono">{file.name}</span>} rect={win} floating={floating} actions={actions} accent={TEAL} label={`Code: ${file.name}`}>
       <Suspense fallback={<div className="p-4 text-gray-500 text-sm">Loading editor…</div>}>
         <MonacoEditor
           value={file.code}
@@ -315,7 +305,7 @@ function FilesPanel({ files, windows, active, onToggle, onRename, onDelete, onNe
     <div className="p-3 space-y-2 text-sm">
       <div className="flex items-center justify-between">
         <span className="text-[11px] uppercase tracking-wider font-semibold text-gray-500">Files</span>
-        <button onClick={onNew} className="px-2.5 py-1 rounded text-xs font-semibold text-white hover:brightness-110" style={{ background: OLIVE }}>
+        <button onClick={onNew} className="px-2.5 py-1 rounded text-xs font-semibold text-white hover:brightness-110" style={{ background: TEAL }}>
           + New File
         </button>
       </div>
@@ -330,7 +320,7 @@ function FilesPanel({ files, windows, active, onToggle, onRename, onDelete, onNe
                 onChange={() => onToggle(f.id, !open)}
                 title={open ? "Close window" : "Open window"}
                 aria-label={`${open ? "Close" : "Open"} ${f.name}`}
-                className="accent-[#6f9419]"
+                className="accent-[#1c7a72]"
               />
               {editing === f.id ? (
                 <input
@@ -384,7 +374,7 @@ function FilesPanel({ files, windows, active, onToggle, onRename, onDelete, onNe
         })}
       </ul>
       <p className="text-[11px] text-gray-500 leading-relaxed">
-        ▶ in a window runs that file. All other files share only their top-level functions with it.
+        Run starts the file of that window. From the other files it can call the functions, and nothing else of them runs.
       </p>
     </div>
   );
@@ -522,7 +512,7 @@ export default function FarmerPage() {
   );
 
   const handleClearFarm = () => {
-    if (confirm("Clear the farm? All plants are removed and the ground resets to grassland.")) engine.clearFarm();
+    if (confirm("Clear the farm? Every plant goes and all ground turns back into grassland.")) engine.clearFarm();
   };
 
   const importInputRef = useRef(null);
@@ -544,7 +534,7 @@ export default function FarmerPage() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `js-farmer-save-${new Date().toISOString().slice(0, 10)}.json`;
+    a.download = `semicolon-acres-save-${new Date().toISOString().slice(0, 10)}.json`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 5000);
     pushLog("info", "💾 Exported game data (farm save + code files) as a JSON file.");
@@ -568,7 +558,7 @@ export default function FarmerPage() {
   };
 
   const handleResetSave = () => {
-    if (confirm("Reset ALL JS Farmer progress (items, unlocks, farm) and ALL code files? This cannot be undone.")) {
+    if (confirm(`Start ${GAME_NAME} from scratch? Items, upgrades, the farm and ALL code files are deleted. This cannot be undone.`)) {
       engine.resetSave();
       fm.resetFiles();
       setRunningFileId(null);
@@ -607,7 +597,7 @@ export default function FarmerPage() {
   });
 
   const openFiles = files.filter((f) => windows[f.id]?.open);
-  // On mobile, show windows in a stable order (files first, then Info, Unlocks, Records, Contracts, Arena, Online).
+  // On mobile, show windows in a stable order (files first, then Field Guide, Workshop, Almanac, Contracts, Arena, Online).
   const codeWindows = openFiles.map((f) => (
     <CodeWindow
       key={f.id}
@@ -628,10 +618,10 @@ export default function FarmerPage() {
   ));
 
   const infoWindow = windows.info?.open && (
-    <FloatingWindow key="info" title="Info" rect={windows.info} {...windowProps("info")} bodyClass="bg-[#161616] flex flex-col" mobileBodyClass="h-[28rem]">
+    <FloatingWindow key="info" title="Field Guide" rect={windows.info} {...windowProps("info")} bodyClass="bg-[#2a2033] flex flex-col" mobileBodyClass="h-[28rem]">
       <div className="flex items-center gap-1 px-2 pt-2 border-b border-gray-800 select-none" role="tablist">
         {[
-          ["docs", "Docs"],
+          ["docs", "Guide"],
           ["log", `Output${logs.length ? ` (${logs.length})` : ""}`],
           ["files", `Files (${files.length})`],
           ["weather", "Weather"],
@@ -642,7 +632,7 @@ export default function FarmerPage() {
             aria-selected={infoTab === id}
             onClick={() => setInfoTab(id)}
             className={`px-3 py-1.5 text-xs font-semibold rounded-t-md transition-colors ${
-              infoTab === id ? "bg-[#262626] text-gray-100" : "text-gray-500 hover:text-gray-300"
+              infoTab === id ? "bg-[#3d3048] text-gray-100" : "text-gray-500 hover:text-gray-300"
             }`}
           >
             {label}
@@ -671,16 +661,10 @@ export default function FarmerPage() {
         )}
       </div>
       <div className="shrink-0 flex items-center gap-3 px-3 py-2 border-t border-gray-800 text-[11px]">
-        <a href={ROUTES.playground} className="text-gray-400 hover:text-white" title="Back to the JS Playground">
-          ← Playground
-        </a>
-        <button onClick={() => setShortcutsOpen(true)} className="text-gray-400 hover:text-white" title="Keyboard shortcuts (?)">
-          ⌨ Shortcuts
-        </button>
-        <button onClick={handleExportData} className="text-gray-400 hover:text-white" title="Download your farm save + code files as one JSON file">
+        <button onClick={handleExportData} className="text-gray-400 hover:text-white" title="Download the farm and all code files as one JSON file">
           💾 Save Data
         </button>
-        <button onClick={() => importInputRef.current?.click()} className="text-gray-400 hover:text-white" title="Replace your farm + code files from an exported JSON file">
+        <button onClick={() => importInputRef.current?.click()} className="text-gray-400 hover:text-white" title="Replace the farm and all code files with a downloaded one">
           📥 Import Data
         </button>
         <input ref={importInputRef} type="file" accept="application/json,.json" className="hidden" onChange={handleImportFile} />
@@ -694,16 +678,16 @@ export default function FarmerPage() {
   const unlocksWindow = windows.unlocks?.open && (
     <FloatingWindow
       key="unlocks"
-      title={`Unlocks${affordable ? ` · ${affordable} available` : ""}`}
+      title={`Workshop${affordable ? ` · ${affordable} within reach` : ""}`}
       rect={windows.unlocks}
       {...windowProps("unlocks")}
-      bodyClass="bg-white/95 flex flex-col"
+      bodyClass="bg-[#fdf6ea] flex flex-col"
       mobileBodyClass="h-[28rem]"
     >
-      <div className="flex-1 overflow-y-auto min-h-0 bg-stone-50/90">
+      <div className="flex-1 overflow-y-auto min-h-0 bg-stone-50">
         <UnlocksPanel game={game} onBuy={engine.buy} />
       </div>
-      <div className="shrink-0 flex items-center gap-2 px-3 py-2 border-t border-stone-200 bg-white text-xs text-stone-700">
+      <div className="shrink-0 flex items-center gap-2 px-3 py-2 border-t border-stone-200 bg-[#f8ecdb] text-xs text-stone-700">
         <button
           onClick={handleClearFarm}
           className="ml-auto px-3 py-1 rounded border border-stone-300 hover:border-red-400 hover:text-red-600 font-semibold"
@@ -716,8 +700,8 @@ export default function FarmerPage() {
   );
 
   const recordsWindow = windows.records?.open && (
-    <FloatingWindow key="records" title="Records" rect={windows.records} {...windowProps("records")} bodyClass="bg-white/95 flex flex-col" mobileBodyClass="h-[28rem]">
-      <div className="flex-1 overflow-y-auto min-h-0 bg-stone-50/90">
+    <FloatingWindow key="records" title="Almanac" rect={windows.records} {...windowProps("records")} bodyClass="bg-[#fdf6ea] flex flex-col" mobileBodyClass="h-[28rem]">
+      <div className="flex-1 overflow-y-auto min-h-0 bg-stone-50">
         <RecordsPanel game={game} stats={view.stats} onSetSeed={engine.setPendingSeed} />
       </div>
     </FloatingWindow>
@@ -729,10 +713,10 @@ export default function FarmerPage() {
       title={`Contracts${deliverable ? ` · ${deliverable} ready` : ""}`}
       rect={windows.contracts}
       {...windowProps("contracts")}
-      bodyClass="bg-white/95 flex flex-col"
+      bodyClass="bg-[#fdf6ea] flex flex-col"
       mobileBodyClass="h-[24rem]"
     >
-      <div className="flex-1 overflow-y-auto min-h-0 bg-stone-50/90">
+      <div className="flex-1 overflow-y-auto min-h-0 bg-stone-50">
         <ContractsPanel game={game} onDeliver={engine.deliverContract} />
       </div>
     </FloatingWindow>
@@ -744,113 +728,95 @@ export default function FarmerPage() {
       title={`Arena · rating ${game.arena?.rating ?? 1000}`}
       rect={windows.arena}
       {...windowProps("arena")}
-      bodyClass="bg-white/95 flex flex-col"
+      bodyClass="bg-[#fdf6ea] flex flex-col"
       mobileBodyClass="h-[30rem]"
     >
-      <div className="flex-1 overflow-y-auto min-h-0 bg-stone-50/90">
+      <div className="flex-1 overflow-y-auto min-h-0 bg-stone-50">
         <ArenaPanel game={game} files={files} activeId={activeFile.id} demo={demo} onRecord={engine.recordArenaMatch} onExitDemo={exitDemo} />
       </div>
     </FloatingWindow>
   );
 
   const onlineWindow = windows.online?.open && (
-    <FloatingWindow key="online" title="Online" rect={windows.online} {...windowProps("online")} bodyClass="bg-white/95 flex flex-col" mobileBodyClass="h-[32rem]">
-      <div className="flex-1 overflow-y-auto min-h-0 bg-stone-50/90">
+    <FloatingWindow key="online" title="Online" rect={windows.online} {...windowProps("online")} bodyClass="bg-[#fdf6ea] flex flex-col" mobileBodyClass="h-[32rem]">
+      <div className="flex-1 overflow-y-auto min-h-0 bg-stone-50">
         <OnlinePanel files={files} activeId={activeFile.id} demo={demo} onlineSeq={engine.onlineSeq} pushLog={pushLog} onExitDemo={exitDemo} />
       </div>
     </FloatingWindow>
   );
 
+  const tabs = [
+    ["info", "Field Guide", "How everything works, program output, files, weather"],
+    ["unlocks", "Workshop", `Upgrades${affordable ? ` (${affordable} within reach)` : ""}`, affordable],
+    ["records", "Almanac", "Your best maze and dinosaur runs, attempts, replay seed"],
+    ["contracts", "Contracts", `Today's orders${deliverable ? ` (${deliverable} ready to deliver)` : ""}`, deliverable],
+    ["arena", "Arena", "Race a program against a rival (ELO rating)"],
+    ["online", "Online", "Shared leaderboard and friend arena"],
+  ];
+
   return (
     <div
-      className={`farmer-bg relative w-full min-h-screen md:h-screen md:overflow-hidden text-gray-200 font-sans flex flex-col md:block ${
+      className={`acres farmer-bg relative w-full min-h-screen md:h-screen md:overflow-hidden text-gray-200 font-sans flex flex-col md:block ${
         paused ? "farmer-paused" : ""
       }`}
     >
-      <ShortcutsModal open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} sections={SHORTCUT_SECTIONS} />
+      {shortcutsOpen && (
+        <div className="relative z-[9500]">
+          <ShortcutsModal open onClose={() => setShortcutsOpen(false)} sections={SHORTCUT_SECTIONS} />
+        </div>
+      )}
 
-      {/* Top bar: inventory (left) + seven buttons (right). Floats on the background. */}
-      <div className="relative z-[60] flex items-start justify-between gap-3 px-3 pt-3 md:px-6 md:pt-5 md:absolute md:inset-x-0 md:top-0 pointer-events-none">
-        <div className="pointer-events-auto min-w-0">
-          <Inventory items={game.items} />
-        </div>
-        <div className="pointer-events-auto relative flex gap-1.5 min-[400px]:gap-2 md:gap-3 shrink-0">
-          <BigButton title="Files: new / reopen / delete" onClick={() => setMenuOpen((o) => !o)} active={menuOpen}>
-            <svg viewBox="0 0 24 24" width="24" height="24" stroke="currentColor" strokeWidth="3.2" strokeLinecap="round" aria-hidden="true">
-              <path d="M12 4 V20 M4 12 H20" />
-            </svg>
-          </BigButton>
-          <BigButton title="Info: docs, output, files" onClick={() => toggleWindow("info")} active={windows.info?.open}>
-            <span className="text-[24px] font-black font-serif leading-none">i</span>
-          </BigButton>
-          <BigButton
-            title={`Unlocks${affordable ? ` (${affordable} affordable)` : ""}`}
-            onClick={() => toggleWindow("unlocks")}
-            active={windows.unlocks?.open}
-          >
-            {GridIcon}
-            {affordable > 0 && (
-              <span className="absolute -top-1.5 -right-1.5 min-w-4 h-4 px-1 rounded-full bg-orange-500 text-[10px] font-bold leading-4 text-center">
-                {affordable}
-              </span>
-            )}
-          </BigButton>
-          <BigButton title="Records: best mazes, attempt histograms, replay seed" onClick={() => toggleWindow("records")} active={windows.records?.open}>
-            {TrophyIcon}
-          </BigButton>
-          <BigButton
-            title={`Contracts: today's delivery orders${deliverable ? ` (${deliverable} ready to deliver)` : ""}`}
-            onClick={() => toggleWindow("contracts")}
-            active={windows.contracts?.open}
-          >
-            <span className="text-[24px] leading-none" aria-hidden="true">
-              📜
-            </span>
-            {deliverable > 0 && (
-              <span className="absolute -top-1.5 -right-1.5 min-w-4 h-4 px-1 rounded-full bg-orange-500 text-[10px] font-bold leading-4 text-center">
-                {deliverable}
-              </span>
-            )}
-          </BigButton>
-          <BigButton title="Arena: race your program against a bot (ELO rating)" onClick={() => toggleWindow("arena")} active={windows.arena?.open}>
-            <span className="text-[22px] leading-none" aria-hidden="true">
-              ⚔️
-            </span>
-          </BigButton>
-          <BigButton title="Online: shared leaderboard + friend arena" onClick={() => toggleWindow("online")} active={windows.online?.open}>
-            <span className="text-[22px] leading-none" aria-hidden="true">
-              🌐
-            </span>
-          </BigButton>
-          {menuOpen && (
-            <FilesMenu
-              files={files}
-              windows={windows}
-              onClose={() => setMenuOpen(false)}
-              onNew={() => {
-                setMenuOpen(false);
-                fm.newFile();
-              }}
-              onToggle={(id) => {
-                setMenuOpen(false);
-                fm.setOpen(id, true);
-              }}
-              onDelete={(id) => {
-                setMenuOpen(false);
-                handleDelete(id);
-              }}
-            />
-          )}
-        </div>
+      {/* Top bar: the name on the left, every window as a labelled tab. */}
+      <header className="relative z-[8000] md:absolute md:inset-x-0 md:top-0 bg-[#2e2438] text-white flex flex-col md:flex-row md:items-stretch md:h-12">
+        <h1 className="flex items-center gap-2 px-4 h-11 md:h-full shrink-0 text-[16px] font-bold tracking-tight">
+          {Glyph.brand}
+          {GAME_NAME}
+        </h1>
+        <nav aria-label="Windows" className="flex items-stretch h-10 md:h-full min-w-0 overflow-x-auto md:ml-auto">
+          {tabs.map(([key, label, title, badge]) => (
+            <NavTab key={key} label={label} title={title} badge={badge} active={windows[key]?.open} onClick={() => toggleWindow(key)} />
+          ))}
+          <NavTab label="Files" title="Code files: new / reopen / delete" active={menuOpen} onClick={() => setMenuOpen((o) => !o)} />
+          <button onClick={() => setShortcutsOpen(true)} className="shrink-0 px-3 text-[13px] text-[#d9cbe0] hover:text-white" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">
+            ⌨
+          </button>
+          <a href={ROUTES.playground} className="shrink-0 px-3 flex items-center text-[13px] text-[#d9cbe0] hover:text-white" title="Back to the JS Playground">
+            ← Playground
+          </a>
+        </nav>
+        {menuOpen && (
+          <FilesMenu
+            files={files}
+            windows={windows}
+            onClose={() => setMenuOpen(false)}
+            onNew={() => {
+              setMenuOpen(false);
+              fm.newFile();
+            }}
+            onToggle={(id) => {
+              setMenuOpen(false);
+              fm.setOpen(id, true);
+            }}
+            onDelete={(id) => {
+              setMenuOpen(false);
+              handleDelete(id);
+            }}
+          />
+        )}
+      </header>
+
+      {/* Left rail: the store room. */}
+      <div className="relative z-[10] p-3 pb-0 md:p-0 md:absolute md:left-4 md:top-16 md:bottom-4">
+        <StoreRoom items={game.items} />
       </div>
 
-      {/* Farm: center-left hero, floating on the background. */}
-      <div className="relative w-full h-[92vw] max-h-[72vh] md:max-h-none md:h-auto md:absolute md:left-0 md:top-[84px] md:bottom-0 md:w-[55%]">
-        <div className="absolute inset-0 pb-10 md:pb-14">
-          <FarmBoardView game={game} moveMs={moveMs} paused={paused} />
-        </div>
-        <div className="absolute left-3 bottom-2 md:left-6 md:bottom-4 z-[50] max-w-[calc(100%-1.5rem)]">
+      {/* Farm, between the rail and the code; the info strip sits above it. */}
+      <div className="relative w-full h-[92vw] max-h-[72vh] md:max-h-none md:h-auto md:absolute md:left-[140px] md:top-12 md:bottom-0 md:w-[calc(55%-140px)]">
+        <div className="absolute left-3 right-3 top-2 md:top-4 z-[5]">
           <StatusPill game={game} stats={view.stats} status={status} paused={paused} demo={demo} toast={toast} />
+        </div>
+        <div className="absolute inset-0 pt-10 md:pt-12">
+          <FarmBoardView game={game} moveMs={moveMs} paused={paused} status={status} />
         </div>
       </div>
 
@@ -874,22 +840,6 @@ export default function FarmerPage() {
           {contractsWindow}
           {arenaWindow}
           {onlineWindow}
-          <div className="flex justify-center gap-4 text-xs text-white/80 py-2">
-            <a href={ROUTES.playground} className="hover:text-white">
-              ← Playground
-            </a>
-          </div>
-        </div>
-      )}
-
-      {desktop && (
-        <div className="absolute right-4 bottom-2 z-[15] flex gap-3 text-[11px] text-white/60">
-          <a href={ROUTES.playground} className="hover:text-white" title="Back to the JS Playground">
-            ← Playground
-          </a>
-          <button onClick={() => setShortcutsOpen(true)} className="hover:text-white" title="Keyboard shortcuts (?)">
-            ⌨ ?
-          </button>
         </div>
       )}
     </div>

@@ -1,4 +1,4 @@
-// JS Farmer Online (v4 phase 2) — headless replay of submitted programs, so
+// Semicolon Acres Online (v4 phase 2) — headless replay of submitted programs, so
 // the server can store results it measured itself (anti-cheat level 2).
 //
 // Pure engine code (no DOM, no Node APIs): it only wires the existing

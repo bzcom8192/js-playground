@@ -1,4 +1,4 @@
-// JS Farmer — TypeScript-style annotation stripping (pure string → string,
+// Semicolon Acres — TypeScript-style annotation stripping (pure string → string,
 // unit-tested in node). Lets the player write
 //
 //   function go(arg: GroundType): boolean { … }

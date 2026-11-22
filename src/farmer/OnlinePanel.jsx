@@ -13,7 +13,7 @@ import { playSolo } from "./arenaClient.js";
 import { ITEM_ICONS } from "./constants.js";
 import { randomSeed } from "./maze.js";
 import { buildProgram } from "./program.js";
-import { OLIVE } from "./farmerUi.jsx";
+import { TEAL } from "./farmerUi.jsx";
 import { CODE_MAX, NAME_MAX } from "./onlineRules.js";
 import {
   IDENTITY_FILE_MAX,
@@ -158,7 +158,7 @@ function SoloProgress({ p, goal }) {
       </div>
       <div className="flex items-center gap-2 text-[11px]">
         <div className="flex-1 h-2 rounded bg-stone-200 overflow-hidden">
-          <div className="h-full rounded" style={{ width: `${pct}%`, background: OLIVE }} />
+          <div className="h-full rounded" style={{ width: `${pct}%`, background: TEAL }} />
         </div>
         <span className="w-20 shrink-0 text-right font-mono text-stone-700">
           {fmt(p.you)} {ITEM_ICONS[goal.item]}
@@ -473,7 +473,7 @@ export default function OnlinePanel({ files, activeId, demo, onlineSeq = 0, push
         <p className="text-xs text-stone-500 leading-relaxed">
           The online server could not be reached. Everything else in the game works as before; your records stay on this device.
         </p>
-        <button onClick={reload} className={btn} style={{ background: OLIVE }}>
+        <button onClick={reload} className={btn} style={{ background: TEAL }}>
           ↻ Retry
         </button>
       </div>
@@ -520,7 +520,7 @@ export default function OnlinePanel({ files, activeId, demo, onlineSeq = 0, push
               aria-label="Online name"
               className="flex-1 min-w-0 px-2 py-1 rounded border border-stone-300 bg-white text-xs text-stone-800 disabled:opacity-60"
             />
-            <button onClick={register} disabled={locked || !nameText.trim()} className={btn} style={{ background: OLIVE }}>
+            <button onClick={register} disabled={locked || !nameText.trim()} className={btn} style={{ background: TEAL }}>
               {busy === "register" ? "…" : "เข้าร่วม"}
             </button>
           </div>
@@ -610,12 +610,12 @@ export default function OnlinePanel({ files, activeId, demo, onlineSeq = 0, push
               ))}
             </select>
           </label>
-          <button onClick={create} disabled={locked || !identity || badIdentity} className={btn} style={{ background: OLIVE }} title="Run your program on a fresh random seed, then post it as a challenge">
+          <button onClick={create} disabled={locked || !identity || badIdentity} className={btn} style={{ background: TEAL }} title="Run your program on a fresh random seed, then post it as a challenge">
             {busy === "create" ? "Running…" : "สร้างคำท้า"}
           </button>
         </div>
         <p className="text-[10px] text-stone-400 leading-relaxed">
-          Uses <span className="font-semibold text-stone-500">{file.name}</span> (with its helper files, like ▶) on the fixed 8×8 arena farm. Fewer ticks to the
+          Uses <span className="font-semibold text-stone-500">{file.name}</span> (with its helper files, as with Run) on the fixed 8×8 arena farm. Fewer ticks to the
           goal wins, then fewer ops. ELO K = 32. An unanswered challenge expires after 7 days.{!identity && " Join above to race."}
         </p>
 
@@ -649,7 +649,7 @@ export default function OnlinePanel({ files, activeId, demo, onlineSeq = 0, push
                   <button
                     onClick={() => accept(c)}
                     disabled={locked || !identity || own || badIdentity}
-                    className="px-2 py-0.5 rounded text-[11px] font-semibold text-white bg-amber-700 hover:brightness-110 disabled:opacity-40"
+                    className="px-2 py-0.5 rounded text-[11px] font-semibold text-white bg-[#b83a5e] hover:brightness-110 disabled:opacity-40"
                     title={own ? "Your own challenge" : "Race your current program on this seed"}
                   >
                     {busy === `accept:${c.id}` ? "…" : own ? "yours" : "ท้าแข่ง"}

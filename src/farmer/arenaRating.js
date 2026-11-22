@@ -1,4 +1,4 @@
-// JS Farmer — arena rating + the save's `arena` section (pure, no DOM).
+// Semicolon Acres — arena rating + the save's `arena` section (pure, no DOM).
 // Kept apart from arena.js (the match runner) so world.js can sanitize the
 // section without importing the runtime.
 //

@@ -1,4 +1,4 @@
-// JS Farmer — maze generation and maze geometry helpers (pure, no DOM).
+// Semicolon Acres — maze generation and maze geometry helpers (pure, no DOM).
 //
 // The farm grid itself is the maze: every tile is either a path tile (empty
 // ground the drone can walk on) or a wall tile (an Entities.Hedge). Path

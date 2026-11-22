@@ -1,4 +1,4 @@
-// JS Farmer Online — HTTP app: the JSON API under /api/ and the built game
+// Semicolon Acres Online — HTTP app: the JSON API under /api/ and the built game
 // (dist/) as static files with an SPA fallback. Plain node:http, no framework.
 //
 // Every error is JSON { error } with a fitting status. Write endpoints (every

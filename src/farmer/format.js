@@ -1,4 +1,4 @@
-// Inventory count format (like the reference): 616, 9k, 10.1k, 3.26k, 1.5M.
+// Inventory count format (short form): 616, 9k, 10.1k, 3.26k, 1.5M.
 // Up to 2 decimals, trailing zeros trimmed, truncated (never overstates).
 export function formatCount(n) {
   n = Math.max(0, Math.floor(Number(n) || 0));

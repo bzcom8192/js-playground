@@ -1,4 +1,4 @@
-# JS Farmer Online — systemd unit (see server/README.md).
+# Semicolon Acres Online — systemd unit (see server/README.md).
 #
 #   sudo cp server/deploy/farmer-server.service /etc/systemd/system/
 #   sudo systemctl daemon-reload
@@ -10,7 +10,7 @@
 #   ExecStart          where node is (`command -v node`), Node 22.15 or newer
 
 [Unit]
-Description=JS Farmer Online (game + API behind Apache)
+Description=Semicolon Acres Online (game + API behind Apache)
 Documentation=file:/opt/js-farmer/server/README.md
 After=network.target
 

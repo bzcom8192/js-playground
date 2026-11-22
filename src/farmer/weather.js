@@ -1,4 +1,4 @@
-// JS Farmer — weather (v3 phase 4). Pure, no DOM, no ambient randomness.
+// Semicolon Acres — weather (v3 phase 4). Pure, no DOM, no ambient randomness.
 //
 // Weather is a world-level system: one state for the whole farm, changing
 // over time, read by the world tick (see world.js `tick`). Every bit of it is

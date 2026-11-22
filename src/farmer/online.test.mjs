@@ -193,20 +193,20 @@ test("identity file: exactly { format, v, name, token }, and it round-trips", ()
   for (const text of [JSON.stringify(out), JSON.stringify(out, null, 2)]) {
     assert.deepEqual(parseIdentityImport(text), { ok: true, name: "ชาวนา", token: TOKEN });
   }
-  assert.equal(identityFileName("ชาวนา 1"), "js-farmer-identity-ชาวนา_1.json");
-  assert.equal(identityFileName("../a:b"), "js-farmer-identity-_a_b.json");
+  assert.equal(identityFileName("ชาวนา 1"), "semicolon-acres-identity-ชาวนา_1.json");
+  assert.equal(identityFileName("../a:b"), "semicolon-acres-identity-_a_b.json");
 });
 
 test("identity file: bad files are rejected", () => {
   const bad = [
     ["", /not valid JSON/],
     ["{", /not valid JSON/],
-    ["null", /not a JS Farmer identity/],
-    ["42", /not a JS Farmer identity/],
-    ["[]", /not a JS Farmer identity/],
-    [JSON.stringify(buildExport({ save: { v: 1 } })), /not a JS Farmer identity/], // a game save
-    [JSON.stringify({ v: 1, playerId: 1, name: "Nok", token: TOKEN }), /not a JS Farmer identity/], // the localStorage form
-    [identityText({ format: "js-farmer-save" }), /not a JS Farmer identity/],
+    ["null", /not a Semicolon Acres identity/],
+    ["42", /not a Semicolon Acres identity/],
+    ["[]", /not a Semicolon Acres identity/],
+    [JSON.stringify(buildExport({ save: { v: 1 } })), /not a Semicolon Acres identity/], // a game save
+    [JSON.stringify({ v: 1, playerId: 1, name: "Nok", token: TOKEN }), /not a Semicolon Acres identity/], // the localStorage form
+    [identityText({ format: "js-farmer-save" }), /not a Semicolon Acres identity/],
     [identityText({ v: 2 }), /unknown version/],
     [identityText({ v: "1" }), /unknown version/],
     [identityText({ name: "" }), /damaged/],
@@ -217,8 +217,8 @@ test("identity file: bad files are rejected", () => {
     [identityText({ token: `${TOKEN}\n` }), /damaged/],
     [identityText({ token: "z".repeat(64) }), /damaged/],
     [identityText({ token: [TOKEN] }), /damaged/],
-    [identityText() + " ".repeat(IDENTITY_FILE_MAX), /not a JS Farmer identity/],
-    [null, /not a JS Farmer identity/], // the panel passes null for an oversized file
+    [identityText() + " ".repeat(IDENTITY_FILE_MAX), /not a Semicolon Acres identity/],
+    [null, /not a Semicolon Acres identity/], // the panel passes null for an oversized file
   ];
   for (const [text, re] of bad) {
     const r = parseIdentityImport(text);

@@ -31,9 +31,9 @@ export function stripFields(game, stats, status, paused) {
     measure: stats.lastMeasure ?? null,
     status: paused ? "paused" : status,
   };
-  // Megafarm: the strip still follows drone 0; with helpers on the farm it
-  // also notes how many drones there are (absent with one drone, so the
-  // single-drone strip is exactly as before).
+  // Megafarm: the strip still follows bot 0; with helpers on the farm it
+  // also notes how many bots there are (absent with one bot, so the
+  // single-bot strip is exactly as before).
   const drones = W.allDrones(game).length;
   if (drones > 1) fields.drones = drones;
   // Weather (v3 phase 4): icon + name, absent on a weatherless world.

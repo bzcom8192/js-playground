@@ -1,6 +1,6 @@
 // Tiny hash router (no react-router, keeps static deploys working).
 //   "" / "#/"   → playground
-//   "#/farmer"  → JS Farmer   ("#/farmer?demo=1" → demo farm, see farmer/demo.js)
+//   "#/farmer"  → Semicolon Acres   ("#/farmer?demo=1" → demo farm, see farmer/demo.js)
 import { useEffect, useState } from "react";
 
 export const ROUTES = { playground: "#/", farmer: "#/farmer" };

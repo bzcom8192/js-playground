@@ -1,4 +1,4 @@
-// JS Farmer Online (v4 phase 1) — the rules shared by the Node server
+// Semicolon Acres Online (v4 phase 1) — the rules shared by the Node server
 // (server/) and the game client (onlineApi.js / OnlinePanel.jsx). Pure, no
 // DOM, no Node APIs: both sides import this file, so the server validates
 // with exactly the rules the client builds its payloads with.

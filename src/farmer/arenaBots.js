@@ -1,12 +1,12 @@
-// JS Farmer — the Arena's built-in opponents (v3 phase 3).
+// Semicolon Acres — the Arena's built-in opponents (v3 phase 3).
 //
 // Plain player programs: each one is a source string that goes through the
 // same transform and runtime as your own code, with no special privileges.
 // They read the match goal with get_arena_goal() like any arena program can.
 //   rookie (800):  a spiral walker, Hay and Wood only, lots of wasted steps.
-//   pro    (1200): one drone, ensure_*-style phases: Speed → hay → wood →
+//   pro    (1200): one bot, ensure_*-style phases: Speed → hay → wood →
 //                  carrot → pumpkin.
-//   ace    (1600): pro's plan on a full Megafarm squad (8 drones, one per
+//   ace    (1600): pro's plan on a full Megafarm squad (8 bots, one per
 //                  column) with tighter loops.
 
 const ROOKIE = `// Rookie — a simple spiral farmer (Hay and Wood only).
@@ -63,7 +63,7 @@ while (true) {
 }
 `;
 
-const PRO = `// Pro — a structured ensure_* farmer (one drone).
+const PRO = `// Pro — a structured ensure_* farmer (one bot).
 // Speed first (it pays for itself), then the pipeline the goal needs:
 // hay → wood → carrot → pumpkin. Snakes the farm column by column.
 const n = get_world_size();
@@ -204,15 +204,15 @@ if (goal.item === Items.Hay) {
 `;
 
 const ACE = `// Ace — pro's plan on a full Megafarm squad.
-// The first drone walks East and spawns one helper per column (max_drones()
-// = 8 on 8×8), then every drone farms its own column. Phases are read from
-// the shared inventory, so all drones switch together:
+// The first bot walks East and spawns one helper per column (max_bots()
+// = 8 on 8×8), then every bot farms its own column. Phases are read from
+// the shared inventory, so all bots switch together:
 //   0 grass (buy Speed) → 1 trees/bushes → 2 carrots → pumpkins.
-// For pumpkins the first drone sweeps the whole farm and harvests the full
+// For pumpkins the first bot sweeps the whole farm and harvests the full
 // 8×8 square (512) as soon as every tile is a ripe pumpkin.
 const n = get_world_size();
 const goal = get_arena_goal() || { item: Items.Hay, amount: 500 };
-const leader = num_drones() === 1;
+const leader = num_bots() === 1;
 const SPEED_MAX = goal.item === Items.Hay ? 2 : 3;
 const HAY_NEED = 150;
 const WOOD_NEED = 150;
@@ -242,7 +242,7 @@ function update_phase() {
     }
   }
   if (phase === 1 && goal.item === Items.Pumpkin) {
-    // Hay only goes down once some drone plants carrots: follow it.
+    // Hay only goes down once some bot plants carrots: follow it.
     if (num_items(Items.Wood) >= WOOD_NEED || num_items(Items.Hay) < hay_mark) {
       phase = 2;
     }
@@ -309,14 +309,14 @@ function tend(x, y) {
   return tend_pumpkin();
 }
 
-// Leader: hand every other column to a new drone, then come back to column 0.
+// Leader: hand every other column to a new bot, then come back to column 0.
 if (leader) {
-  for (let i = 1; i < max_drones(); i++) {
+  for (let i = 1; i < max_bots(); i++) {
     if (can_harvest()) {
       harvest();
     }
     move(East);
-    spawn_drone();
+    spawn_bot();
   }
   while (get_pos_x() !== 0) {
     move(East);

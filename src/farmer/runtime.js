@@ -1,9 +1,9 @@
-// JS Farmer — execution runtime. Compiles transformed player code into an
-// AsyncFunction whose parameters are the drone API, runs it, and makes it
+// Semicolon Acres — execution runtime. Compiles transformed player code into an
+// AsyncFunction whose parameters are the bot API, runs it, and makes it
 // stoppable. No DOM dependencies: time sources are injectable for node tests.
 //
 // Megafarm: one Run is a *session* that owns one program instance (ctx) per
-// drone. Drone 0 runs the program as before; spawn_drone() adds a drone on the
+// drone. Drone 0 runs the program as before; spawn_bot() adds a drone on the
 // caller's tile that runs the SAME program from the top in its own ctx. Every
 // API call acts on the calling drone (W.withDrone). The instances interleave
 // on the event loop: each one sleeps for its own action time, and each yields
@@ -38,7 +38,7 @@
 // FORECAST_OPS = 25 ops (1 for the call + 24 extra), still 1 tick. Both read
 // the world's weather (null on a weatherless world such as the arena).
 
-import { transform } from "./transform.js";
+import { topLevelNames, transform } from "./transform.js";
 import {
   DIR_DELTA,
   Directions,
@@ -62,6 +62,12 @@ export const ACTION_TICKS = 200;
 export const FLIP_TICKS = 600;
 export const SENSE_TICKS = 1;
 export const RUNAWAY_GUARDS = 200_000;
+// The bot turns once around itself: its current name and its earlier one.
+const SPIN_NAMES = new Set(["spin_in_place", "do_a_flip"]);
+// API names added after programs were already saved and stored online. An old
+// program may declare one of them itself (`const num_bots = 3`), which would
+// clash with the API parameter: its own declaration wins.
+const LATER_NAMES = new Set(["spin_in_place", "spawn_bot", "num_bots", "max_bots"]);
 export const SYNC_LOOP_LIMIT = 10_000_000;
 const MIN_SLEEP_MS = 4;
 const YIELD_EVERY_MS = 16;
@@ -179,6 +185,7 @@ export function createRuntime(opts) {
     const donePromise = new Promise((r) => (resolveDone = r));
     return {
       body, // transformed program source, compiled once per drone
+      ownNames: topLevelNames(code), // top-level names the program declares itself (see LATER_NAMES)
       code, // the source as run (v4: sent along with a maze record for replay)
       mapLine,
       program, // { lines, chars } of the main file
@@ -327,8 +334,8 @@ export function createRuntime(opts) {
     }
   }
 
-  // "Drone 2: " in front of errors from spawned drones (drone 0 logs as before).
-  const dronePrefix = (ctx) => (ctx.index > 0 ? `Drone ${ctx.index}: ` : "");
+  // "Bot 2: " in front of errors from spawned bots (bot 0 logs without a prefix).
+  const dronePrefix = (ctx) => (ctx.index > 0 ? `Bot ${ctx.index}: ` : "");
 
   // While paused, wait in small slices until resumed or stopped.
   async function waitWhilePaused(ctx) {
@@ -398,7 +405,7 @@ export function createRuntime(opts) {
           // Called from an un-awaited callback: fail the whole run (the main
           // flow sees the error at its next action) and never settle this one.
           const err = new Error(
-            `${name}(): the drone is still busy with another action. ` +
+            `${name}(): the bot is still busy with another action. ` +
               "Actions inside callbacks (forEach/map/setTimeout) are not awaited — use a for…of loop instead.",
           );
           log("error", `${dronePrefix(ctx)}${err.name}: ${err.message}`);
@@ -423,7 +430,7 @@ export function createRuntime(opts) {
             s.items.Power -= 1; // each action while Power > 0 costs 1 Power…
             mult *= 2; // …and runs 2× faster
           }
-          if (name === "do_a_flip") (ctx.drone ?? s.drone).flipMs = Math.min(600, ticks / mult);
+          if (SPIN_NAMES.has(name)) (ctx.drone ?? s.drone).flipMs = Math.min(600, ticks / mult);
           onChange();
           await spend(ticks / mult);
           return res;
@@ -456,6 +463,22 @@ export function createRuntime(opts) {
 
     const print = (...args) => log("print", args.map(formatValue).join(" "));
 
+    // Actions / senses that answer to two names (see LATER_NAMES).
+    const spin = (s) => {
+      s.drone.flips = (s.drone.flips || 0) + 1;
+      return true;
+    };
+    const spawnBot = (s) => {
+      if (session.finished || session.stopped || ctx.finished || current !== session) {
+        return { ok: false, msg: "only works inside a running program" };
+      }
+      const res = W.spawnDrone(s);
+      if (res.ok) startDrone(session, res.drone, ctx.t0 + ctx.ticks);
+      return res;
+    };
+    const botCount = (s) => W.allDrones(s).length;
+    const botCap = (s) => (W.isUnlocked(s, "Megafarm") ? W.droneCap(s) : 1);
+
     const api = {
       // constants
       Entities,
@@ -486,14 +509,7 @@ export function createRuntime(opts) {
       use_item: action("use_item", (s, item, n = 1) => W.useItem(s, item, n, rng)),
       trade: action("trade", (s, item, n = 1) => W.trade(s, item, n)),
       unlock: action("unlock", (s, id) => W.buyUnlock(s, id)),
-      do_a_flip: action(
-        "do_a_flip",
-        (s) => {
-          s.drone.flips = (s.drone.flips || 0) + 1;
-          return true;
-        },
-        FLIP_TICKS,
-      ),
+      spin_in_place: action("spin_in_place", spin, FLIP_TICKS),
       // Contracts: deliver today's contract `id` from the shared inventory.
       deliver_contract: action("deliver_contract", (s, id) => {
         if (arenaGoal) return { ok: false, msg: "there are no contracts in the arena" };
@@ -502,15 +518,11 @@ export function createRuntime(opts) {
         if (res.ok) log("info", C.deliveredText(res.contract));
         return res;
       }),
-      // Megafarm: a new drone on this tile runs this same program from the top.
-      spawn_drone: action("spawn_drone", (s) => {
-        if (session.finished || session.stopped || ctx.finished || current !== session) {
-          return { ok: false, msg: "only works inside a running program" };
-        }
-        const res = W.spawnDrone(s);
-        if (res.ok) startDrone(session, res.drone, ctx.t0 + ctx.ticks);
-        return res;
-      }),
+      // Megafarm: a new bot on this tile runs this same program from the top.
+      spawn_bot: action("spawn_bot", spawnBot),
+      // Earlier names of the same actions (saved programs, stored replays).
+      do_a_flip: action("do_a_flip", spin, FLIP_TICKS),
+      spawn_drone: action("spawn_drone", spawnBot),
 
       // senses (need the Senses unlock)
       // Apples are never harvestable (only the dinosaur eats them).
@@ -557,9 +569,11 @@ export function createRuntime(opts) {
         },
         false,
       ),
-      num_drones: sense("num_drones", (s) => W.allDrones(s).length, false),
+      num_bots: sense("num_bots", botCount, false),
       // 1 until Megafarm is unlocked, then the cap (farm side length).
-      max_drones: sense("max_drones", (s) => (W.isUnlocked(s, "Megafarm") ? W.droneCap(s) : 1), false),
+      max_bots: sense("max_bots", botCap, false),
+      num_drones: sense("num_drones", botCount, false),
+      max_drones: sense("max_drones", botCap, false),
       get_time: sense("get_time", () => runSeconds(session), false),
       get_tick_count: sense("get_tick_count", () => ctx.ticks, false),
       // Today's contracts: [{ id, item, amount, reward, rewardItem, ticksLeft, status }].
@@ -600,7 +614,7 @@ export function createRuntime(opts) {
             ctx.warnedRunaway = true;
             log(
               "warn",
-              `⚠️ ${RUNAWAY_GUARDS.toLocaleString("en-US")} loop iterations without a drone action — ` +
+              `⚠️ ${RUNAWAY_GUARDS.toLocaleString("en-US")} loop iterations without a bot action — ` +
                 "throttling this loop to 100/s (loop without actions?). It speeds up again after the next action.",
             );
           }
@@ -663,7 +677,8 @@ export function createRuntime(opts) {
 
   function compile(body, ctx) {
     const api = buildApi(ctx);
-    const names = Object.keys(api);
+    const { ownNames } = ctx.session;
+    const names = Object.keys(api).filter((n) => !(LATER_NAMES.has(n) && ownNames.has(n)));
     // "use strict" is prepended on line 1 (no newline) so line numbers stay intact.
     const fn = new AsyncFunction(...names, '"use strict";' + body);
     return { fn, args: names.map((n) => api[n]) };
@@ -698,7 +713,7 @@ export function createRuntime(opts) {
     );
   }
 
-  // spawn_drone(): the new drone starts on the next microtask, outside the
+  // spawn_bot(): the new bot starts on the next microtask, outside the
   // spawning action (so none of its code runs inside the caller's call).
   function startDrone(session, drone, t0) {
     const ctx = makeCtx(session, drone, t0);

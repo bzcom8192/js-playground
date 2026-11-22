@@ -1,7 +1,7 @@
-// JS Farmer — multi-file programs (pure, unit-tested in node).
+// Semicolon Acres — multi-file programs (pure, unit-tested in node).
 //
 // Running file F: every OTHER file contributes only its top-level function
-// declarations (TFWR's `from helper import *`), prepended BEFORE F's code.
+// declarations, prepended BEFORE F's code.
 // Name collisions: F's own top-level names win (a helper with the same name is
 // skipped — a helper `const f = () => …` followed by F's `function f` would
 // otherwise be a redeclaration SyntaxError). Between helper files, the first

@@ -41,7 +41,7 @@ export function parseImport(text) {
     return { ok: false, error: "That file is not valid JSON." };
   }
   if (!data || data.format !== EXPORT_FORMAT || data.v !== EXPORT_VERSION) {
-    return { ok: false, error: "That file is not a JS Farmer save export." };
+    return { ok: false, error: "That file is not a Semicolon Acres save." };
   }
   const save = data.save && typeof data.save === "object" ? data.save : null;
   if (save && save.v !== 1) return { ok: false, error: "The save inside that file has an unknown version." };

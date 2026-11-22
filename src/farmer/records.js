@@ -1,4 +1,4 @@
-// JS Farmer — personal records (pure, no DOM). v3 phase 1.
+// Semicolon Acres — personal records (pure, no DOM). v3 phase 1.
 //
 // There is no server, so "leaderboard" means your own records: the best maze
 // run per Mazes level, the full attempt history behind it (for histograms) and

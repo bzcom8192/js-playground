@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { formatCount } from "./format.js";
 
-test("formatCount abbreviates like the reference inventory", () => {
+test("formatCount abbreviates inventory counts", () => {
   assert.equal(formatCount(0), "0");
   assert.equal(formatCount(155), "155");
   assert.equal(formatCount(999), "999");

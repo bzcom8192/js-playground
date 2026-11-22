@@ -6,14 +6,14 @@ import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { FarmScene } from "./board3d/FarmScene.js";
 
-export default function FarmBoard3D({ game, moveMs, paused, onFail }) {
+export default function FarmBoard3D({ game, moveMs, paused, status, onFail }) {
   const wrapRef = useRef(null);
-  const live = useRef({ game, moveMs, paused, onFail });
+  const live = useRef({ game, moveMs, paused, status, onFail });
 
   // Latest props for the frame loop (the game object is mutated in place by
   // the engine, so the loop always sees live state between React renders).
   useEffect(() => {
-    live.current = { game, moveMs, paused, onFail };
+    live.current = { game, moveMs, paused, status, onFail };
   });
 
   useEffect(() => {
@@ -28,7 +28,7 @@ export default function FarmBoard3D({ game, moveMs, paused, onFail }) {
       return undefined;
     }
     renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
-    renderer.setClearColor(0x000000, 0); // the page's blue-grey shows through
+    renderer.setClearColor(0x000000, 0); // the page background shows through
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFShadowMap;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -65,11 +65,11 @@ export default function FarmBoard3D({ game, moveMs, paused, onFail }) {
       raf = requestAnimationFrame(frame);
       const dt = (now - last) / 1000;
       last = now;
-      const { game: g, paused: p, moveMs: m } = live.current;
+      const { game: g, paused: p, moveMs: m, status: st } = live.current;
       const sizeBefore = farm.n;
       if (farm.sync(g)) needsRender = true;
       if (farm.n !== sizeBefore) resize();
-      if (farm.update(dt, { paused: p, moveMs: m })) needsRender = true;
+      if (farm.update(dt, { paused: p, moveMs: m, status: st })) needsRender = true;
       if (needsRender) {
         renderer.render(farm.scene, farm.camera);
         needsRender = false;

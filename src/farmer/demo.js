@@ -4,18 +4,19 @@ import { UNLOCKS, WORLD_SIZES } from "./constants.js";
 import * as W from "./world.js";
 import { DEMO_WEATHER_SEED } from "./weather.js";
 
-// Rows from North (y = 7) to South (y = 0).
-//  W wheat (grown grass)  g young grass  T tree  B bush  C carrot
+// A little of everything in beds around a centre path. Rows from North (y = 7)
+// to South (y = 0).
+//  W grown grass  g young grass  T tree  B bush  C carrot  R rice
 //  P grown pumpkin  p growing pumpkin  D dead pumpkin  S sunflower  X cactus  . bare soil
 const LAYOUT = [
-  "TWWTWCWS",
-  "WTWWTWCS",
-  "PPTCWTWX",
-  "PPCBWWTX",
-  "pDCBCWWX",
-  "PPPpSWBX",
-  "PPPCCWWg",
-  "PPPp.CWW",
+  "TBTWWTBT",
+  "RRRggCCC",
+  "RRRgWPPC",
+  "SX.gWPPC",
+  "SXXgWCCC",
+  "BPPPgpDB",
+  "WPPPgXXS",
+  "TPPPWXSS",
 ];
 
 const CODES = {
@@ -27,6 +28,7 @@ const CODES = {
   P: ["Pumpkin", "Soil", 1],
   p: ["Pumpkin", "Soil", 0.8],
   D: ["Dead_Pumpkin", "Soil", 1],
+  R: ["Rice", "Soil", 1],
   S: ["Sunflower", "Soil", 1],
   X: ["Cactus", "Soil", 1],
   ".": [null, "Soil", 0],
@@ -47,23 +49,24 @@ export function createDemoGame() {
       const tile = W.tileAt(s, x, y);
       tile.ground = ground;
       if (type) tile.entity = W.makeEntity(type, rng, progress);
-      if (ground === "Soil" && (x + y) % 5 === 0) tile.water = 0.6;
+      if (type === "Rice") tile.water = 0.8;
+      else if (ground === "Soil" && (x + 2 * y) % 7 === 0) tile.water = 0.6;
     });
   });
   Object.assign(s.items, {
-    Hay: 9000,
-    Wood: 10100,
-    Carrot: 6100,
-    Pumpkin: 3260,
-    Power: 3320,
-    Cactus: 2300,
-    Water: 616,
-    Fertilizer: 155,
-    Gold: 1440,
-    Bone: 625,
-    Rice: 480,
+    Hay: 5240,
+    Wood: 4480,
+    Carrot: 2750,
+    Pumpkin: 1890,
+    Power: 320,
+    Cactus: 940,
+    Water: 18,
+    Fertilizer: 45,
+    Gold: 860,
+    Bone: 144,
+    Rice: 410,
   });
-  s.drone.x = 4;
+  s.drone.x = 3;
   s.drone.y = 4;
   // Demo farms never write personal records (records.js checks this flag).
   s.demo = true;

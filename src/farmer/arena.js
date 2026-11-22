@@ -1,4 +1,4 @@
-// JS Farmer — Async Arena + ELO (pure, no DOM). v3 phase 3.
+// Semicolon Acres — Async Arena + ELO (pure, no DOM). v3 phase 3.
 //
 // A match races the player's program against a built-in bot. Each side gets
 // its OWN fresh 8×8 world (built from the same seed, so both start
@@ -85,7 +85,7 @@ if (Object.keys(GOALS).join() !== GOAL_IDS.join()) throw new Error("arena: GOALS
 export const BOTS = Object.freeze({
   rookie: Object.freeze({ id: "rookie", name: "Rookie", rating: BOT_RATINGS.rookie, code: BOT_CODE.rookie, desc: "Spiral farmer: Hay and Wood only, walks a lot." }),
   pro: Object.freeze({ id: "pro", name: "Pro", rating: BOT_RATINGS.pro, code: BOT_CODE.pro, desc: "Structured ensure_* farmer: Speed, then hay → wood → carrot → pumpkin." }),
-  ace: Object.freeze({ id: "ace", name: "Ace", rating: BOT_RATINGS.ace, code: BOT_CODE.ace, desc: "Pro with a full Megafarm squad (8 drones) and tighter loops." }),
+  ace: Object.freeze({ id: "ace", name: "Ace", rating: BOT_RATINGS.ace, code: BOT_CODE.ace, desc: "Pro with a full Megafarm crew (8 bots) and tighter loops." }),
 });
 export const BOT_IDS = Object.keys(BOTS);
 

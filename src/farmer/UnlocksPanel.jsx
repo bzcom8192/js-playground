@@ -1,4 +1,4 @@
-import { ITEM_ICONS, UNLOCKS } from "./constants.js";
+import { ITEM_ICONS, UNLOCK_BY_ID, UNLOCKS } from "./constants.js";
 import * as W from "./world.js";
 
 function CostChips({ cost, items }) {
@@ -26,7 +26,7 @@ function Pips({ level, max }) {
   return (
     <span className="flex items-center gap-0.5" title={`Level ${level} / ${max}`}>
       {Array.from({ length: max }, (_, i) => (
-        <span key={i} className={`w-1.5 h-1.5 rounded-full ${i < level ? "bg-[#6f9419]" : "bg-stone-300"}`} />
+        <span key={i} className={`w-1.5 h-1.5 rounded-full ${i < level ? "bg-[#1c7a72]" : "bg-stone-300"}`} />
       ))}
     </span>
   );
@@ -50,14 +50,17 @@ export default function UnlocksPanel({ game, onBuy }) {
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2">
                 <span className="font-semibold text-sm text-stone-800">{u.name}</span>
+                <code className="text-[10px] text-stone-400" title="Its id in code">
+                  Unlocks.{u.id}
+                </code>
                 <Pips level={level} max={u.maxLevel} />
-                {u.maxLevel === 1 && level === 1 && <span className="text-[11px] text-[#5b7a12] font-bold">✓</span>}
+                {u.maxLevel === 1 && level === 1 && <span className="text-[11px] text-[#155e58] font-bold">✓</span>}
               </div>
               <div className="text-[11px] text-stone-500 leading-snug">{u.desc}</div>
               {status !== "maxed" && (
                 <div className="mt-1">
                   {blocked ? (
-                    <span className="text-[11px] text-stone-500">🔒 Requires {u.requires}</span>
+                    <span className="text-[11px] text-stone-500">🔒 after {UNLOCK_BY_ID[u.requires].name}</span>
                   ) : (
                     <CostChips cost={u.cost(level)} items={game.items} />
                   )}
@@ -65,14 +68,14 @@ export default function UnlocksPanel({ game, onBuy }) {
               )}
             </div>
             {status === "maxed" ? (
-              <span className="text-[11px] text-stone-400 shrink-0">Maxed</span>
+              <span className="text-[11px] text-stone-400 shrink-0">Complete</span>
             ) : (
               <button
                 onClick={() => onBuy(u.id)}
                 disabled={status !== "affordable"}
-                className="shrink-0 px-3 py-1 text-xs font-semibold rounded bg-[#6f9419] text-white hover:brightness-110 disabled:bg-stone-200 disabled:text-stone-400 disabled:cursor-not-allowed transition-colors"
+                className="shrink-0 px-3 py-1 text-xs font-semibold rounded-full bg-[#1c7a72] text-white hover:brightness-110 disabled:bg-stone-200 disabled:text-stone-400 disabled:cursor-not-allowed transition-colors"
               >
-                {level === 0 ? "Unlock" : "Upgrade"}
+                {level === 0 ? "Build" : "Improve"}
               </button>
             )}
           </div>

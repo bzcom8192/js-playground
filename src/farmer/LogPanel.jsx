@@ -15,8 +15,8 @@ export default function LogPanel({ logs }) {
 
   if (logs.length === 0) {
     return (
-      <div className="h-full flex items-center justify-center text-gray-700 italic text-sm select-none">
-        print() output and errors appear here…
+      <div className="h-full flex items-center justify-center text-gray-500 italic text-sm select-none">
+        Nothing yet. What your programs print() shows up here, errors too.
       </div>
     );
   }

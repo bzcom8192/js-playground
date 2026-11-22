@@ -31,7 +31,7 @@ test("findGiantPumpkins: only full k×k groups of grown pumpkins (k ≥ 2)", () 
   assert.equal(findGiantPumpkins(s).length, 1);
 });
 
-test("demo farm: 8×8, all unlocks, a 3×3 and a 2×2 giant pumpkin, drone mid-board", () => {
+test("demo farm: 8×8, all unlocks, a 3×3 and a 2×2 giant pumpkin, bot mid-board", () => {
   const s = createDemoGame();
   assert.equal(s.size, 8);
   assert.equal(s.tiles.length, 64);
@@ -39,8 +39,8 @@ test("demo farm: 8×8, all unlocks, a 3×3 and a 2×2 giant pumpkin, drone mid-b
   const giants = findGiantPumpkins(s)
     .map(({ x0, y0, k }) => `${k}@${x0},${y0}`)
     .sort();
-  assert.deepEqual(giants, ["2@0,4", "3@0,0"]);
-  assert.deepEqual([s.drone.x, s.drone.y], [4, 4]);
+  assert.deepEqual(giants, ["2@5,4", "3@1,0"]);
+  assert.deepEqual([s.drone.x, s.drone.y], [3, 4]);
   // survives a save round-trip (but the page never saves it)
   assert.equal(W.deserialize(W.serialize(s)).size, 8);
   assert.equal(isDemoHash("#/farmer?demo=1"), true);

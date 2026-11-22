@@ -533,8 +533,8 @@ test("old saves load fine; inconsistent dinosaur data is dropped cleanly", () =>
 
 // ---------- the example, end to end (demo farm) ----------
 
-test("Bone Farm example runs end-to-end on the demo farm", async () => {
-  const s = createDemoGame(); // all unlocks maxed, 8×8 full of crops, 1,440 Gold
+test("dinosaur example runs end-to-end on the demo farm", async () => {
+  const s = createDemoGame(); // all unlocks maxed, 8×8 full of crops
   assert.equal(s.unlocks.Dinosaurs, 3);
   s.items.Bone = 0;
   const gold = s.items.Gold;

@@ -284,7 +284,7 @@ test("dead rice harvest gives nothing and clears the tile", () => {
   assert.deepEqual(s.items, before, "no yield");
   assert.equal(tile.entity, null);
   assert.equal(tile.ground, "Soil", "the paddy stays");
-  // Unripe rice: harvest destroys it, also without yield (TFWR rule).
+  // Unripe rice: harvest destroys it, also without yield.
   paddy(s, 0.6);
   W.plant(s, "Rice");
   const mid = { ...s.items };
@@ -571,7 +571,7 @@ test("presentation: info strip shows the dry count; 3D models for Rice / Dead_Ri
 
 // ---------- example ----------
 
-test("Rice Paddy example: tills, waters, plants, harvests and sells rice for Gold, no errors", async () => {
+test("rice example: tills, waters, plants, harvests and sells rice for Gold, no errors", async () => {
   const ex = EXAMPLES.find((e) => e.id === "rice");
   assert.ok(ex, "example exists");
   assert.ok(ex.needs.includes("Rice"));
@@ -581,15 +581,15 @@ test("Rice Paddy example: tills, waters, plants, harvests and sells rice for Gol
   const { rt, logs, time } = runtime(s);
   let finished = null;
   rt.run(ex.code).then((r) => (finished = r));
-  while (finished === null && time() < 240_000 && !logs.some((l) => /^Sold [1-9]/.test(l.text))) {
+  while (finished === null && time() < 240_000 && !logs.some((l) => /^Market day: [1-9]/.test(l.text))) {
     await new Promise((r) => setImmediate(r));
   }
   rt.stop();
   await new Promise((r) => setImmediate(r));
   assert.ok(!logs.some((l) => l.kind === "error"), JSON.stringify(logs.filter((l) => l.kind === "error")));
-  const sold = logs.find((l) => /^Sold [1-9]/.test(l.text));
+  const sold = logs.find((l) => /^Market day: [1-9]/.test(l.text));
   assert.ok(sold, JSON.stringify(logs.slice(-6)));
-  const n = Number(sold.text.split(" ")[1]);
+  const n = Number(sold.text.split(" ")[2]);
   assert.equal(n % 3, 0, "3 Rice per plant at L1");
   assert.ok(s.items.Gold >= 2 * n, `gold ${s.items.Gold}`);
   assert.ok(s.tiles.every((t) => t.ground === "Soil"), "the field became a paddy");

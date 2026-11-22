@@ -113,8 +113,8 @@ test("ops: locked / failed calls count too; a new Run resets the counter", async
 test("ops: every function the program is given is counted (the whole API surface)", async () => {
   const s = farm(2);
   const { rt } = runtime(s);
-  const fns = Object.keys(FARMER_GLOBALS).filter((n) => !/^[A-Z]/.test(n) && n !== "spawn_drone");
-  // Every non-constant global in the .d.ts (spawn_drone needs Megafarm; covered below), called once.
+  const fns = Object.keys(FARMER_GLOBALS).filter((n) => !/^[A-Z]/.test(n) && n !== "spawn_bot" && n !== "spawn_drone");
+  // Every non-constant global in the .d.ts (spawn_bot needs Megafarm; covered below), called once.
   const calls = fns.map((n) => `${n}(${n === "move" || n === "swap" || n === "can_move" ? "North" : ""});`).join("\n");
   assert.equal(await rt.run(calls), "done");
   // v3 phase 4: get_forecast() is the one priced call (25 ops = 1 + 24 extra).
@@ -382,8 +382,9 @@ test("demo mode writes no records (maze solve or dinosaur harvest)", async () =>
   d.dino = { body: [{ x: 0, y: 0 }, { x: 1, y: 0 }], dir: "West", stepTimer: 0, appleTimer: 0 };
   d.drone.x = 0;
   d.drone.y = 0;
+  const bone = d.items.Bone;
   await rt.run("harvest()");
-  assert.ok(d.items.Bone > 625);
+  assert.ok(d.items.Bone > bone);
   assert.deepEqual(d.records, R.emptyRecords());
   assert.equal(R.addMazeAttempt(d, { level: 1, seed: 1, ticks: 1, ops: 1 }).recorded, false);
   assert.equal(R.addDinoHarvest(d, { bone: 1 }).recorded, false);

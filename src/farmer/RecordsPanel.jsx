@@ -6,7 +6,7 @@ import { parseSeed } from "./maze.js";
 import { hasRecords, histogram } from "./records.js";
 import { STRIP_REFRESH_MS } from "./statusStrip.js";
 import useSampled from "./useSampled.js";
-import { OLIVE } from "./farmerUi.jsx";
+import { TEAL } from "./farmerUi.jsx";
 
 const fmt = (n) => Number(n || 0).toLocaleString("en-US");
 const RECENT_SHOWN = 10;
@@ -41,8 +41,8 @@ function RunStats({ stats }) {
   return (
     <Section title={f.running ? "This run" : "Last run"}>
       <div className="grid grid-cols-4 gap-1.5 text-xs">
-        <Stat label="ticks" value={fmt(f.ticks)} title="Run clock in ticks (longest drone timeline)" />
-        <Stat label="ops" value={fmt(f.ops)} title="Farmer API calls, all drones combined" />
+        <Stat label="ticks" value={fmt(f.ticks)} title="Run clock in ticks (longest bot timeline)" />
+        <Stat label="ops" value={fmt(f.ops)} title="Farmer API calls, all bots combined" />
         <Stat label="lines" value={fmt(f.lines)} title="Non-empty lines in the file you ran" />
         <Stat label="chars" value={fmt(f.chars)} title="Characters in the file you ran" />
       </div>
@@ -76,7 +76,7 @@ function SeedInput({ pending, onSetSeed }) {
           type="submit"
           disabled={seed === null}
           className="px-2.5 py-1 rounded text-xs font-semibold text-white hover:brightness-110 disabled:opacity-40"
-          style={{ background: OLIVE }}
+          style={{ background: TEAL }}
         >
           Use next
         </button>
@@ -110,7 +110,7 @@ function Histogram({ attempts, best }) {
             <div
               key={b.from}
               className="flex-1 rounded-t-sm"
-              style={{ height: b.count ? `${Math.max(6, (b.count / max) * 100)}%` : 0, background: hasBest ? OLIVE : "#a8a29e" }}
+              style={{ height: b.count ? `${Math.max(6, (b.count / max) * 100)}%` : 0, background: hasBest ? TEAL : "#cdb9c6" }}
               title={`${fmt(b.from)}${b.to !== b.from ? `–${fmt(b.to)}` : ""} ticks: ${b.count} attempt${b.count === 1 ? "" : "s"}`}
             />
           );
@@ -129,7 +129,7 @@ function SeedButton({ seed, onSetSeed }) {
   return (
     <button
       onClick={() => onSetSeed(seed)}
-      className="font-mono text-stone-700 hover:text-[#6f9419] underline decoration-dotted"
+      className="font-mono text-stone-700 hover:text-[#1c7a72] underline decoration-dotted"
       title="Replay: the next maze uses this seed"
     >
       {seed}
@@ -144,7 +144,7 @@ function MazeLevel({ level, entry, onSetSeed }) {
   return (
     <div className="rounded-lg border border-stone-200 bg-white p-2 space-y-1.5">
       <div className="flex items-baseline justify-between text-xs">
-        <span className="font-semibold text-stone-800">🧩 Mazes level {level}</span>
+        <span className="font-semibold text-stone-800">🧩 Labyrinth level {level}</span>
         <span className="text-stone-400">
           {attempts.length} attempt{attempts.length === 1 ? "" : "s"}
         </span>
@@ -212,7 +212,7 @@ export default function RecordsPanel({ game, stats, onSetSeed }) {
       <RunStats stats={stats} />
       <SeedInput pending={game.pendingSeed ?? null} onSetSeed={onSetSeed} />
       {!hasRecords(recs) ? (
-        <p className="text-center text-stone-500 text-xs py-6">No records yet — solve a maze!</p>
+        <p className="text-center text-stone-500 text-xs py-6">A blank page. Your first solved maze goes here.</p>
       ) : (
         <>
           {levels.length > 0 && (
@@ -229,7 +229,7 @@ export default function RecordsPanel({ game, stats, onSetSeed }) {
               <div className="rounded-lg border border-stone-200 bg-white p-2 text-xs text-stone-600 flex flex-wrap gap-x-2">
                 <span className="font-mono font-bold text-stone-800">🦴 {fmt(recs.dino.bone)} Bone</span>
                 <span>{recs.dino.cut} segments cut</span>
-                <span className="text-stone-400">Dinosaurs level {recs.dino.level}</span>
+                <span className="text-stone-400">level {recs.dino.level}</span>
               </div>
             ) : (
               <p className="text-[11px] text-stone-400">No dinosaur harvest yet.</p>
@@ -239,7 +239,7 @@ export default function RecordsPanel({ game, stats, onSetSeed }) {
       )}
       <ContractStats stats={recs?.contracts} />
       <p className="text-[10px] text-stone-400 leading-relaxed">
-        Personal records on this device only (saved with your farm and in Save Data). Best = fewest ticks, then fewest ops.
+        Your own records, kept on this device with the farm (and in Save Data). Fewest ticks first, then fewest ops.
       </p>
     </div>
   );

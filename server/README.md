@@ -1,4 +1,4 @@
-# JS Farmer Online server: install and update
+# Semicolon Acres Online server: install and update
 
 One Node process serves the built game (`dist/`) and the JSON API (`/api/…`) on one port, with one SQLite file. The production model is the same as money-app: a systemd service listening on localhost, and Apache in front as the public HTTPS reverse proxy.
 
@@ -67,7 +67,7 @@ sudo systemctl enable --now farmer-server
 ```bash
 curl http://127.0.0.1:4188/api/health        # {"ok":true}
 systemctl status farmer-server
-journalctl -u farmer-server -n 50            # "JS Farmer Online listening on http://127.0.0.1:4188 (db …)"
+journalctl -u farmer-server -n 50            # "Semicolon Acres Online listening on http://127.0.0.1:4188 (db …)"
 ```
 
 ### 6. Apache

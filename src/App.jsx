@@ -426,9 +426,9 @@ export default function App() {
           <a
             href={ROUTES.farmer}
             className="ml-1 px-2.5 py-1 text-xs font-medium rounded-full border border-gray-700 text-gray-400 hover:text-white hover:border-gray-500 transition-colors"
-            title="Open JS Farmer"
+            title="Open Semicolon Acres"
           >
-            🚜 Farmer
+            🤖 Semicolon Acres
           </a>
         </div>
 

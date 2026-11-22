@@ -1,4 +1,4 @@
-// JS Farmer Online server tests (node --test). Each test file run gets its
+// Semicolon Acres Online server tests (node --test). Each test file run gets its
 // own temp SQLite files; the servers listen on ephemeral ports.
 //
 // Two servers:

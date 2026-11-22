@@ -5,9 +5,9 @@
 // flat-shaded material, so a model costs one draw call. Geometries are cached
 // per variant and shared by every tile that shows that model; the kit owns
 // and disposes them. The only textures are small canvas ones (soil rows,
-// grass speckles, water ripples, slab strata, the drone's blob shadow).
+// meadow speckles, water ripples, plank grain, the bot's blob shadow).
 import * as THREE from "three";
-import { DRONE_BAND_0 } from "../droneBands.js";
+import { DRONE_BAND_0, statusLight } from "../droneBands.js";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 
 const hasDOM = typeof document !== "undefined";
@@ -122,10 +122,10 @@ function canvasTexture(size, draw, { repeat = false } = {}) {
 /** Bevel feel on a tile top: light top-left rim, dark bottom-right rim. */
 function bevel(ctx, s) {
   const b = Math.max(2, Math.round(s * 0.04));
-  ctx.fillStyle = "rgba(255,235,200,.18)";
+  ctx.fillStyle = "rgba(255,245,235,.16)";
   ctx.fillRect(0, 0, s, b);
   ctx.fillRect(0, 0, b, s);
-  ctx.fillStyle = "rgba(30,15,0,.28)";
+  ctx.fillStyle = "rgba(40,20,45,.22)";
   ctx.fillRect(0, s - b, s, b);
   ctx.fillRect(s - b, 0, b, s);
 }
@@ -140,26 +140,26 @@ function speckle(ctx, s, colors, count, seed, size = 2) {
 
 const soilTexture = () =>
   canvasTexture(128, (ctx, s) => {
-    ctx.fillStyle = "#a2652a";
+    ctx.fillStyle = "#675659";
     ctx.fillRect(0, 0, s, s);
     // Plough rows (East–West): a dark furrow and a light ridge, 4 per tile.
     const rows = 4;
     for (let i = 0; i < rows; i++) {
       const y = (i + 0.5) * (s / rows);
-      ctx.fillStyle = "rgba(70,35,8,.42)";
+      ctx.fillStyle = "rgba(40,20,32,.42)";
       ctx.fillRect(0, y - 4, s, 7);
-      ctx.fillStyle = "rgba(255,200,130,.16)";
+      ctx.fillStyle = "rgba(255,205,190,.14)";
       ctx.fillRect(0, y + 5, s, 4);
     }
-    speckle(ctx, s, ["rgba(60,30,5,.35)", "rgba(255,210,150,.18)"], 220, 11);
+    speckle(ctx, s, ["rgba(38,18,30,.35)", "rgba(255,215,200,.16)"], 220, 11);
     bevel(ctx, s);
   });
 
 const grassTexture = () =>
   canvasTexture(128, (ctx, s) => {
-    ctx.fillStyle = "#74a23c";
+    ctx.fillStyle = "#6fa58a";
     ctx.fillRect(0, 0, s, s);
-    speckle(ctx, s, ["#5f8c2e", "#86b449", "#6a9935", "#93be55"], 900, 23, 3);
+    speckle(ctx, s, ["#5d9479", "#82b699", "#669c82", "#93c3a4"], 900, 23, 3);
     bevel(ctx, s);
   });
 
@@ -180,24 +180,23 @@ const waterTexture = () =>
     }
   });
 
-const slabTexture = () =>
+/** Side of the planter box: three stained planks with a little grain. */
+const plankTexture = () =>
   canvasTexture(
     128,
     (ctx, s) => {
-      // Strata: dark topsoil band, warm earth, a darker plank-like line, deep dirt.
-      const bands = [
-        [0, 0.16, "#5a361a"],
-        [0.16, 0.55, "#b8702f"],
-        [0.55, 0.6, "#8a5021"],
-        [0.6, 1, "#9c5a26"],
-      ];
-      for (const [a, b, c] of bands) {
+      const planks = ["#7c5468", "#714b60", "#674358"];
+      planks.forEach((c, i) => {
         ctx.fillStyle = c;
-        ctx.fillRect(0, a * s, s, (b - a) * s + 1);
+        ctx.fillRect(0, (i * s) / 3, s, s / 3);
+        ctx.fillStyle = "rgba(35,18,40,.5)";
+        ctx.fillRect(0, ((i + 1) * s) / 3 - 3, s, 3);
+      });
+      const r = rng(31);
+      for (let i = 0; i < 46; i++) {
+        ctx.fillStyle = i % 2 ? "rgba(40,20,45,.16)" : "rgba(255,225,215,.1)";
+        ctx.fillRect(Math.floor(r() * s), Math.floor(r() * s), 12 + r() * 34, 1.5);
       }
-      ctx.fillStyle = "rgba(60,30,8,.35)";
-      for (let x = 0; x < s; x += s / 2) ctx.fillRect(x, 0.16 * s, 2, 0.84 * s); // plank seams
-      speckle(ctx, s, ["rgba(60,30,5,.3)", "rgba(255,210,150,.15)"], 260, 31);
     },
     { repeat: true },
   );
@@ -283,9 +282,9 @@ function bushGeometry(seed, grown) {
   const r = rng(seed);
   const parts = [];
   const blobs = [
-    [-0.13, 0.17, 0.06, 0.2, "#4d8a2b"],
-    [0.13, 0.19, -0.05, 0.22, "#5a9a32"],
-    [0.0, 0.31, 0.04, 0.18, "#68aa3b"],
+    [-0.13, 0.17, 0.06, 0.2, "#2f7d63"],
+    [0.13, 0.19, -0.05, 0.22, "#3b8f70"],
+    [0.0, 0.31, 0.04, 0.18, "#4fa582"],
   ];
   for (const [x, y, z, rad, c] of blobs) {
     parts.push(part(new THREE.IcosahedronGeometry(rad, 0), c, M(x, y, z, r() * 3, r() * 3, r() * 3, 1, 0.85, 1)));
@@ -297,7 +296,7 @@ function bushGeometry(seed, grown) {
       parts.push(
         part(
           new THREE.IcosahedronGeometry(0.045, 0),
-          "#7b3fa0",
+          "#e2574c",
           M(bx + Math.cos(a) * br * 0.95, by + (r() - 0.2) * br * 0.7, bz + Math.sin(a) * br * 0.95),
         ),
       );
@@ -311,11 +310,11 @@ function treeGeometry(seed) {
   const parts = [];
   const trunk = new THREE.CylinderGeometry(0.05, 0.08, 0.55, 6);
   trunk.translate(0, 0.275, 0);
-  parts.push(part(trunk, "#6e4524"));
+  parts.push(part(trunk, "#5a3d4f"));
   const canopy = [
-    [0, 0.68, 0, 0.32, "#4f8f2a"],
-    [0.18, 0.55, 0.1, 0.22, "#5fa034"],
-    [-0.14, 0.88, -0.04, 0.24, "#478225"],
+    [0, 0.68, 0, 0.32, "#2d7a6b"],
+    [0.18, 0.55, 0.1, 0.22, "#3f9580"],
+    [-0.14, 0.88, -0.04, 0.24, "#f0b9a8"],
   ];
   for (const [x, y, z, rad, c] of canopy) {
     parts.push(part(new THREE.IcosahedronGeometry(rad, 0), c, M(x, y, z, r() * 3, r() * 3, r() * 3)));
@@ -338,7 +337,7 @@ function carrotGeometry(seed, grown) {
     if (grown) {
       const shoulder = new THREE.ConeGeometry(0.065, 0.14, 6);
       shoulder.rotateX(Math.PI); // tip down, into the soil
-      parts.push(part(shoulder, "#e8761e", M(x, 0.03, z)));
+      parts.push(part(shoulder, "#ef7b45", M(x, 0.03, z)));
     }
     const leaves = 5;
     for (let k = 0; k < leaves; k++) {
@@ -346,10 +345,10 @@ function carrotGeometry(seed, grown) {
       const leaf = new THREE.ConeGeometry(0.036, 0.3, 4);
       leaf.translate(0, 0.15, 0);
       const tilt = 0.35 + r() * 0.3;
-      parts.push(part(leaf, k % 2 ? "#4c9a2a" : "#5cae34", M(x, 0.04, z, Math.sin(a) * tilt, 0, -Math.cos(a) * tilt)));
+      parts.push(part(leaf, k % 2 ? "#3a9a78" : "#57b592", M(x, 0.04, z, Math.sin(a) * tilt, 0, -Math.cos(a) * tilt)));
     }
     if (grown && i % 2 === 0) {
-      parts.push(part(new THREE.IcosahedronGeometry(0.035, 0), "#9b5bc4", M(x + 0.03, 0.27, z)));
+      parts.push(part(new THREE.IcosahedronGeometry(0.035, 0), "#fbe3c8", M(x + 0.03, 0.27, z)));
     }
   });
   return merge(parts);
@@ -359,10 +358,10 @@ function pumpkinGeometry(dead) {
   const parts = [];
   const body = ribbedSphere(0.4, { lobes: 10, w: 30, h: 12, squash: 0.66, dimple: 0.45 });
   body.translate(0, 0.4 * 0.66 * 0.92, 0);
-  parts.push(part(body, "#fff", null, dead ? ribShade(10, "#6f695e", "#9a9384") : ribShade(10, "#d97a1c", "#f6b24c")));
+  parts.push(part(body, "#fff", null, dead ? ribShade(10, "#645c6b", "#948a98") : ribShade(10, "#a8505f", "#eeab98")));
   const stem = new THREE.CylinderGeometry(0.025, 0.045, 0.14, 5);
   stem.translate(0, 0.07, 0);
-  parts.push(part(stem, dead ? "#5b5546" : "#6b6e24", M(0, 0.36, 0, 0.25, 0, 0.15)));
+  parts.push(part(stem, dead ? "#4f4854" : "#3f7a5c", M(0, 0.36, 0, 0.25, 0, 0.15)));
   return merge(parts);
 }
 
@@ -371,7 +370,7 @@ function sunflowerGeometry(seed) {
   const parts = [];
   const stem = new THREE.CylinderGeometry(0.018, 0.026, 0.62, 5);
   stem.translate(0, 0.31, 0);
-  parts.push(part(stem, "#4f8a24"));
+  parts.push(part(stem, "#3a8a68"));
   for (const [y, a] of [
     [0.22, 0.4],
     [0.36, 0.4 + Math.PI],
@@ -379,7 +378,7 @@ function sunflowerGeometry(seed) {
     const leaf = new THREE.IcosahedronGeometry(0.1, 0);
     leaf.scale(1.4, 0.22, 0.65);
     leaf.translate(0.13, 0, 0);
-    parts.push(part(leaf, "#5f9e2c", M(0, y, 0, 0, a + r() * 0.3, 0.3)));
+    parts.push(part(leaf, "#4fa07c", M(0, y, 0, 0, a + r() * 0.3, 0.3)));
   }
   // Head: petals + seed disc, built facing +y then tilted toward the camera (+z).
   const head = [];
@@ -388,10 +387,10 @@ function sunflowerGeometry(seed) {
     const a = (i / petals) * Math.PI * 2;
     const petal = new THREE.BoxGeometry(0.07, 0.018, 0.13);
     petal.translate(0, 0, 0.14);
-    head.push(part(petal, i % 2 ? "#f7c51e" : "#f2b318", M(0, 0, 0, 0, a, 0)));
+    head.push(part(petal, i % 2 ? "#ffd25e" : "#f2a93b", M(0, 0, 0, 0, a, 0)));
   }
   const disc = new THREE.CylinderGeometry(0.09, 0.09, 0.04, 10);
-  head.push(part(disc, "#6b3d16", M(0, 0.012, 0)));
+  head.push(part(disc, "#4a2b45", M(0, 0.012, 0)));
   const headGeo = merge(head);
   headGeo.applyMatrix4(M(0, 0.64, 0.02, 0.75, 0, 0));
   parts.push(headGeo);
@@ -401,14 +400,14 @@ function sunflowerGeometry(seed) {
 function cactusGeometry(size, grown) {
   const parts = [];
   const h = 0.26 + (size || 0) * 0.035;
-  const green = "#4f9b46";
-  const rib = "#8fcf7d";
+  const green = "#3f8f86";
+  const rib = "#a9ddc9";
   const segs = 2 + (size >= 5 ? 1 : 0);
   // Main column: stacked capsule segments with lighter vertical ribs.
   for (let s = 0; s < segs; s++) {
     const sh = h / segs;
     const seg = new THREE.CapsuleGeometry(0.1 - s * 0.008, sh * 0.6, 2, 8);
-    parts.push(part(seg, s % 2 ? "#57a64d" : green, M(0, sh * (s + 0.5) + 0.04, 0)));
+    parts.push(part(seg, s % 2 ? "#4a9d93" : green, M(0, sh * (s + 0.5) + 0.04, 0)));
   }
   for (let k = 0; k < 4; k++) {
     const a = (k / 4) * Math.PI * 2 + Math.PI / 4;
@@ -421,7 +420,7 @@ function cactusGeometry(size, grown) {
   const armOut = new THREE.CapsuleGeometry(0.05, 0.06, 2, 6);
   parts.push(part(armOut, green, M(0.11, h * 0.5, 0, 0, 0, Math.PI / 2)));
   if (grown) {
-    parts.push(part(new THREE.IcosahedronGeometry(0.055, 0), "#ff7eb6", M(0, h + 0.13, 0, 0, 0, 0, 1, 0.6, 1)));
+    parts.push(part(new THREE.IcosahedronGeometry(0.055, 0), "#ff8d6b", M(0, h + 0.13, 0, 0, 0, 0, 1, 0.6, 1)));
     parts.push(part(new THREE.IcosahedronGeometry(0.022, 0), "#ffe066", M(0, h + 0.16, 0)));
   }
   return merge(parts);
@@ -436,9 +435,9 @@ function hedgeGeometry(seed) {
   const shadeByHeight = (p, c) => c.multiplyScalar(0.62 + 0.38 * Math.max(0, Math.min(1, p.y / H)));
   const body = new THREE.BoxGeometry(0.98, H, 0.98, 2, 2, 2);
   body.translate(0, H / 2, 0);
-  parts.push(part(body, "#2f6a24", null, shadeByHeight));
+  parts.push(part(body, "#2a5f5a", null, shadeByHeight));
   // Leafy clumps on the top break up the perfect box a little.
-  const greens = ["#2a5f20", "#367a2a", "#3f852f", "#2c6522"];
+  const greens = ["#265650", "#32716a", "#3c8078", "#2a5f58"];
   for (let i = 0; i < 9; i++) {
     const gx = ((i % 3) - 1) * 0.3 + (r() - 0.5) * 0.08;
     const gz = (Math.floor(i / 3) - 1) * 0.3 + (r() - 0.5) * 0.08;
@@ -492,10 +491,10 @@ function treasureGeometry() {
 // a "bridge" reaching forward to the next segment so the chain reads as one
 // continuous animal at tile size.
 
-const DINO_GREEN = "#58ab3d";
-const DINO_DARK = "#2f6e22";
-const DINO_BELLY = "#cfe39a";
-const DINO_PLATE = "#eea43a";
+const DINO_GREEN = "#8b6fc0"; // skin
+const DINO_DARK = "#5a4390";
+const DINO_BELLY = "#f3dfc6";
+const DINO_PLATE = "#ff9d7a"; // back fins
 
 /** Darker underneath, a pale belly band low down. */
 const dinoShade = (p, c) => {
@@ -503,17 +502,26 @@ const dinoShade = (p, c) => {
   return c.multiplyScalar(0.78 + 0.22 * Math.min(1, p.y / 0.45));
 };
 
+/** A rounded, leaf-like back fin of height h, standing on y = 0 and swept back (−z). */
+function finGeometry(h) {
+  const g = new THREE.SphereGeometry(0.5, 6, 5);
+  g.scale(0.07, h * 1.25, h * 1.15);
+  g.rotateX(-0.45);
+  g.translate(0, h * 0.5, -h * 0.15);
+  return g;
+}
+
 function dinoHeadGeometry() {
   const parts = [];
   const skull = new THREE.SphereGeometry(0.26, 10, 8);
   parts.push(part(skull, DINO_GREEN, M(0, 0.31, -0.03, 0, 0, 0, 1, 0.86, 1.08), dinoShade));
   // Snout + lower jaw, pushed forward.
-  parts.push(part(new THREE.BoxGeometry(0.3, 0.18, 0.28, 1, 1, 1), "#66bb48", M(0, 0.28, 0.22)));
+  parts.push(part(new THREE.BoxGeometry(0.3, 0.18, 0.28, 1, 1, 1), "#9c82cf", M(0, 0.28, 0.22)));
   parts.push(part(new THREE.BoxGeometry(0.26, 0.07, 0.26), DINO_BELLY, M(0, 0.17, 0.21)));
   // A little smile line and nostrils.
-  parts.push(part(new THREE.BoxGeometry(0.27, 0.018, 0.02), "#24521a", M(0, 0.205, 0.347)));
+  parts.push(part(new THREE.BoxGeometry(0.27, 0.018, 0.02), "#3c2a66", M(0, 0.205, 0.347)));
   for (const x of [-0.07, 0.07]) {
-    parts.push(part(new THREE.BoxGeometry(0.035, 0.02, 0.03), "#24521a", M(x, 0.37, 0.34)));
+    parts.push(part(new THREE.BoxGeometry(0.035, 0.02, 0.03), "#3c2a66", M(x, 0.37, 0.34)));
   }
   // Big eyes on top of the head (they read from the 55° camera whichever way it faces).
   for (const x of [-0.12, 0.12]) {
@@ -526,7 +534,7 @@ function dinoHeadGeometry() {
     [-0.06, 0.12],
     [-0.19, 0.1],
   ]) {
-    parts.push(part(new THREE.ConeGeometry(0.055, h, 4), DINO_PLATE, M(0, 0.54 + h / 2 - 0.03 + z * 0.4, z)));
+    parts.push(part(finGeometry(h), DINO_PLATE, M(0, 0.54 - 0.03 + z * 0.4, z)));
   }
   return merge(parts);
 }
@@ -545,7 +553,7 @@ function dinoBodyGeometry(legs) {
     [0.42, 0.11],
   ]) {
     const y = z > 0.3 ? 0.43 : 0.49;
-    parts.push(part(new THREE.ConeGeometry(0.06, h, 4), DINO_PLATE, M(0, y + h / 2 - 0.02, z)));
+    parts.push(part(finGeometry(h), DINO_PLATE, M(0, y - 0.02, z)));
   }
   if (legs) {
     for (const x of [-0.21, 0.21]) {
@@ -565,7 +573,7 @@ function dinoTailGeometry() {
   // Tapering tail tip pointing backwards (−z), curling up slightly.
   const tip = new THREE.ConeGeometry(0.19, 0.42, 8);
   parts.push(part(tip, DINO_GREEN, M(0, 0.25, -0.26, -Math.PI / 2 - 0.15, 0, 0, 1, 0.85, 1), dinoShade));
-  parts.push(part(new THREE.ConeGeometry(0.05, 0.1, 4), DINO_PLATE, M(0, 0.43, 0.02)));
+  parts.push(part(finGeometry(0.1), DINO_PLATE, M(0, 0.38, 0.02)));
   return merge(parts);
 }
 
@@ -616,21 +624,21 @@ export function createModelKit() {
 
   const flat = own(new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.82, metalness: 0 }));
   const wheatBase = own(
-    new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.9, metalness: 0, color: "#e3ac3e" }),
+    new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.9, metalness: 0, color: "#efc985" }),
   );
 
   const textures = {
     soil: own(soilTexture()),
     grass: own(grassTexture()),
     water: own(waterTexture()),
-    slab: own(slabTexture()),
+    slab: own(plankTexture()),
     blob: own(blobShadowTexture()),
   };
 
-  const tileSide = own(new THREE.MeshStandardMaterial({ color: "#7a4a22", roughness: 0.95 }));
+  const tileSide = own(new THREE.MeshStandardMaterial({ color: "#54394a", roughness: 0.95 }));
   const tileMats = {
-    Soil: own(new THREE.MeshStandardMaterial({ color: textures.soil ? "#ffffff" : "#a2652a", map: textures.soil, roughness: 0.95 })),
-    Grassland: own(new THREE.MeshStandardMaterial({ color: textures.grass ? "#ffffff" : "#74a23c", map: textures.grass, roughness: 0.95 })),
+    Soil: own(new THREE.MeshStandardMaterial({ color: textures.soil ? "#ffffff" : "#675659", map: textures.soil, roughness: 0.95 })),
+    Grassland: own(new THREE.MeshStandardMaterial({ color: textures.grass ? "#ffffff" : "#6fa58a", map: textures.grass, roughness: 0.95 })),
   };
   // Box face order: +x, −x, +y (top), −y, +z, −z.
   const tileMaterials = {
@@ -648,8 +656,8 @@ export function createModelKit() {
     waterMats.push(
       own(
         new THREE.MeshStandardMaterial({
-          color: "#2f86d8",
-          emissive: "#0c3a78",
+          color: "#2aa5b5",
+          emissive: "#0b4a58",
           map: textures.water,
           transparent: true,
           opacity: 0.2 + 0.045 * i,
@@ -809,10 +817,10 @@ export function createModelKit() {
     if (level > 0) mesh.material = waterMats[Math.min(10, level)];
   };
 
-  /** The thick earth slab under an n×n board, with rocks along its base. */
+  /** The raised planter box around an n×n board: plank sides, a pale rim and brass-capped corner posts. */
   function buildSlab(n) {
     const g = new THREE.Group();
-    const thick = Math.min(0.62, 0.3 + 0.045 * n); // thinner under tiny farms
+    const thick = Math.min(0.62, 0.3 + 0.045 * n); // shallower for tiny farms
     const side = n + 0.16;
     const slabGeo = new THREE.BoxGeometry(side, thick, side);
     slabGeo.translate(0, -0.1 - thick / 2, 0);
@@ -821,90 +829,127 @@ export function createModelKit() {
       const tex = textures.slab.clone();
       tex.needsUpdate = true;
       tex.repeat.set(Math.max(1, Math.round(side / 1.2)), 1);
-      sideMat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.95 });
+      sideMat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.85 });
       sideMat.userData.ownMap = tex;
     } else {
-      sideMat = new THREE.MeshStandardMaterial({ color: "#a8622a", roughness: 0.95 });
+      sideMat = new THREE.MeshStandardMaterial({ color: "#714b60", roughness: 0.85 });
     }
-    const topMat = new THREE.MeshStandardMaterial({ color: "#4a2e14", roughness: 1 });
+    const topMat = new THREE.MeshStandardMaterial({ color: "#33232f", roughness: 1 });
     const slab = new THREE.Mesh(slabGeo, [sideMat, sideMat, topMat, topMat, sideMat, sideMat]);
     slab.receiveShadow = true;
     slab.castShadow = true;
     g.add(slab);
 
-    // Grey rocks poking out along the bottom edge.
-    const rockGeo = new THREE.DodecahedronGeometry(0.07, 0);
-    const rockMat = new THREE.MeshStandardMaterial({ color: "#8d8a86", flatShading: true, roughness: 0.9 });
-    const r = rng(77 + n);
-    const count = Math.max(4, Math.round(side * 2.2));
-    const rocks = new THREE.InstancedMesh(rockGeo, rockMat, count * 2);
-    let i = 0;
-    for (let k = 0; k < count; k++) {
-      const t = ((k + 0.5) / count - 0.5) * side;
-      const y = -0.1 - thick + 0.04 + r() * 0.05;
-      const sc = (0.6 + r() * 0.8) * Math.min(1, 0.45 + 0.08 * n);
-      rocks.setMatrixAt(i++, M(t, y, side / 2 + 0.01, r() * 3, r() * 3, r() * 3, sc, sc * 0.7, sc));
-      rocks.setMatrixAt(i++, M(side / 2 + 0.01, y, t, r() * 3, r() * 3, r() * 3, sc, sc * 0.7, sc));
+    const parts = [];
+    const rim = 0.1;
+    const edge = side / 2 + rim / 2 - 0.02;
+    for (const s of [-1, 1]) {
+      parts.push(part(new THREE.BoxGeometry(side + rim * 2, 0.1, rim), "#e9cfb2", M(0, -0.06, s * edge)));
+      parts.push(part(new THREE.BoxGeometry(rim, 0.1, side + rim * 2), "#e9cfb2", M(s * edge, -0.06, 0)));
     }
-    rocks.castShadow = false;
-    rocks.receiveShadow = true;
-    g.add(rocks);
-    g.userData.disposables = [slabGeo, sideMat, topMat, rockGeo, rockMat, sideMat.userData.ownMap, rocks];
+    const post = Math.min(0.24, 0.1 + 0.018 * n); // slimmer on tiny farms
+    const postH = thick + 0.16;
+    for (const sx of [-1, 1]) {
+      for (const sz of [-1, 1]) {
+        parts.push(part(new THREE.BoxGeometry(post, postH, post), "#54394a", M(sx * edge, 0.06 - postH / 2, sz * edge)));
+        parts.push(part(new THREE.BoxGeometry(post * 1.15, 0.05, post * 1.15), "#f0b03f", M(sx * edge, 0.08, sz * edge)));
+      }
+    }
+    const frameGeo = merge(parts);
+    const frame = meshOf(frameGeo, flat);
+    g.add(frame);
+    g.userData.disposables = [slabGeo, sideMat, topMat, frameGeo, sideMat.userData.ownMap];
     return g;
   }
 
-  /** The pumpkin drone: ribbed body, straw hat, X arms with four rotors. */
-  /** band: hat band colour (drone 0 keeps the original red; Megafarm helpers get DRONE_BANDS). */
-  function buildDrone(band = DRONE_BAND_0) {
+  /**
+   * The field bot: a boxy over-the-row robot. Four long legs on wheels carry
+   * the body high above the tile, so it straddles whatever grows there. One
+   * round lens, a tilted solar roof, a seed probe underneath, and a mast with
+   * the status light. Wheels stand on y = 0, the front is +z.
+   * band: the identity stripe around the body (see droneBands.js).
+   */
+  function buildBot(band = DRONE_BAND_0) {
     const root = new THREE.Group(); // positioned on the board
-    const yaw = new THREE.Group(); // faces the movement direction
-    const flip = new THREE.Group(); // do_a_flip()
+    const yaw = new THREE.Group(); // faces the direction of travel
+    const spin = new THREE.Group(); // spin_in_place()
     root.add(yaw);
-    yaw.add(flip);
+    yaw.add(spin);
 
-    const parts = [];
-    const body = ribbedSphere(0.2, { lobes: 8, w: 20, h: 10, squash: 0.88, dimple: 0.15, rib: 0.08 });
-    parts.push(part(body, "#fff", null, ribShade(8, "#d5701a", "#f7a83a")));
-    for (const ex of [-0.07, 0.07]) {
-      parts.push(part(new THREE.SphereGeometry(0.032, 6, 4), "#2e1c0c", M(ex, 0.06, 0.16)));
-      parts.push(part(new THREE.SphereGeometry(0.011, 4, 3), "#ffffff", M(ex + 0.01, 0.075, 0.188)));
-    }
-    // Straw hat, pushed back on the head so the face shows from above.
-    const hat = M(0, 0.15, -0.07, -0.45, 0, 0);
-    const brim = new THREE.CylinderGeometry(0.24, 0.25, 0.022, 16);
-    parts.push(part(brim, "#dcb35c", hat));
-    const bandGeo = new THREE.CylinderGeometry(0.12, 0.125, 0.04, 12);
-    parts.push(part(bandGeo, band, hat.clone().multiply(M(0, 0.03, 0))));
-    const crown = new THREE.ConeGeometry(0.125, 0.16, 12);
-    parts.push(part(crown, "#ecc96f", hat.clone().multiply(M(0, 0.1, 0))));
-    for (const a of [Math.PI / 4, -Math.PI / 4]) {
-      const arm = new THREE.BoxGeometry(0.78, 0.025, 0.035);
-      parts.push(part(arm, "#4b4f55", M(0, 0.0, 0, 0, a, 0)));
-    }
-    const hubs = [];
-    for (let k = 0; k < 4; k++) {
-      const a = Math.PI / 4 + (k * Math.PI) / 2;
-      const hx = Math.cos(a) * 0.37;
-      const hz = Math.sin(a) * 0.37;
-      hubs.push([hx, hz]);
-      parts.push(part(new THREE.CylinderGeometry(0.025, 0.03, 0.06, 6), "#35383d", M(hx, 0.03, hz)));
-    }
-    const bodyGeo = geo(band === DRONE_BAND_0 ? "droneBody" : `droneBody:${band}`, () => merge(parts.splice(0)));
-    const bodyMesh = meshOf(bodyGeo, flat, { cast: false, receive: false });
-    flip.add(bodyMesh);
+    const SHELL = "#f6ead6";
+    const FRAME = "#3a2c44";
+    const BRASS = "#f0b03f";
+    const makeBody = () => {
+      const parts = [];
+      const box = (w, h, d, color, m) => parts.push(part(new THREE.BoxGeometry(w, h, d), color, m));
+      // Body: two stacked boxes with the identity stripe between them.
+      box(0.44, 0.13, 0.4, SHELL, M(0, 0.63, 0));
+      box(0.465, 0.07, 0.425, band, M(0, 0.73, 0));
+      box(0.4, 0.09, 0.36, SHELL, M(0, 0.805, 0));
+      // One big lens on a dark plate, plus a small speaker grille.
+      box(0.2, 0.15, 0.02, FRAME, M(-0.07, 0.65, 0.206));
+      const lens = new THREE.CylinderGeometry(0.055, 0.062, 0.05, 14);
+      lens.rotateX(Math.PI / 2);
+      parts.push(part(lens, "#7fe3ea", M(-0.07, 0.65, 0.225)));
+      const pupil = new THREE.CylinderGeometry(0.026, 0.026, 0.02, 10);
+      pupil.rotateX(Math.PI / 2);
+      parts.push(part(pupil, "#16353d", M(-0.07, 0.65, 0.25)));
+      for (let i = 0; i < 3; i++) box(0.08, 0.012, 0.012, FRAME, M(0.12, 0.62 + i * 0.028, 0.204));
+      // Solar roof: a tilted panel, frame + 3×2 cells.
+      const roof = M(0, 0.9, -0.01, 0.3, 0, 0);
+      box(0.56, 0.03, 0.42, FRAME, roof);
+      for (let i = 0; i < 3; i++) {
+        for (let j = 0; j < 2; j++) {
+          box(0.16, 0.012, 0.18, (i + j) % 2 ? "#2b5f9e" : "#3674b5", roof.clone().multiply(M((i - 1) * 0.176, 0.018, (j - 0.5) * 0.196)));
+        }
+      }
+      // Status mast at the back corner (the light itself is a separate mesh).
+      const mast = new THREE.CylinderGeometry(0.012, 0.016, 0.3, 6);
+      parts.push(part(mast, FRAME, M(0.21, 0.95, -0.17)));
+      // Legs, axle bars and the seed probe under the belly.
+      for (const x of [-0.27, 0.27]) {
+        box(0.06, 0.05, 0.62, FRAME, M(x, 0.575, 0));
+        for (const z of [-0.28, 0.28]) {
+          box(0.045, 0.46, 0.05, SHELL, M(x, 0.34, z));
+          box(0.06, 0.06, 0.07, BRASS, M(x, 0.13, z));
+        }
+      }
+      const probe = new THREE.CylinderGeometry(0.035, 0.02, 0.1, 8);
+      parts.push(part(probe, BRASS, M(0, 0.52, 0.04)));
+      const tip = new THREE.ConeGeometry(0.022, 0.07, 8);
+      tip.rotateX(Math.PI);
+      parts.push(part(tip, FRAME, M(0, 0.44, 0.04)));
+      return merge(parts);
+    };
+    const body = meshOf(geo(band === DRONE_BAND_0 ? "botBody" : `botBody:${band}`, makeBody), flat, { cast: false, receive: false });
+    spin.add(body);
 
-    const bladeGeo = geo("droneBlade", () => {
-      const b = part(new THREE.BoxGeometry(0.24, 0.008, 0.03), "#2f3237");
-      return merge([b]);
+    const wheelGeo = geo("botWheel", () => {
+      const tyre = new THREE.CylinderGeometry(0.085, 0.085, 0.07, 10);
+      const hub = new THREE.BoxGeometry(0.06, 0.078, 0.06);
+      const g = merge([part(tyre, "#2a2130"), part(hub, BRASS)]);
+      g.rotateZ(Math.PI / 2);
+      return g;
     });
-    const rotors = hubs.map(([hx, hz], k) => {
-      const blade = meshOf(bladeGeo, flat, { cast: false, receive: false });
-      blade.position.set(hx, 0.065, hz);
-      blade.rotation.y = k * 0.8;
-      flip.add(blade);
-      return blade;
-    });
-    parts.forEach((p) => p.dispose());
+    const wheels = [];
+    for (const x of [-0.27, 0.27]) {
+      for (const z of [-0.28, 0.28]) {
+        const w = meshOf(wheelGeo, flat, { cast: false, receive: false });
+        w.position.set(x, 0.085, z);
+        spin.add(w);
+        wheels.push(w);
+      }
+    }
+
+    const lightMat = new THREE.MeshBasicMaterial({ color: statusLight("idle"), toneMapped: false });
+    const light = new THREE.Mesh(
+      geo("botLight", () => new THREE.SphereGeometry(0.055, 12, 8)),
+      lightMat,
+    );
+    light.position.set(0.21, 1.13, -0.17);
+    light.userData.disposables = [lightMat];
+    spin.add(light);
+    const setStatus = (status) => lightMat.color.set(statusLight(status));
 
     const shadowMat = new THREE.MeshBasicMaterial({
       map: textures.blob,
@@ -922,7 +967,7 @@ export function createModelKit() {
     shadow.renderOrder = 2;
     shadow.userData.disposables = [shadowMat];
 
-    return { root, yaw, flip, rotors, shadow };
+    return { root, yaw, spin, wheels, light, setStatus, shadow };
   }
 
   /** Free per-instance resources of an object built by this kit. */
@@ -951,7 +996,7 @@ export function createModelKit() {
     buildWater,
     setWater,
     buildSlab,
-    buildDrone,
+    buildBot,
     release,
     dispose,
     stats: () => ({ geometries: geos.size }),
@@ -959,7 +1004,7 @@ export function createModelKit() {
   };
 }
 
-export { DRONE_BAND_0, DRONE_BANDS, droneBand } from "../droneBands.js";
+export { DRONE_BAND_0, DRONE_BANDS, droneBand, statusLight } from "../droneBands.js";
 
 /** Triangle count of an object tree (for the perf budget test). */
 export function countTriangles(obj) {

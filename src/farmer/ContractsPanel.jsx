@@ -5,7 +5,7 @@ import { ITEM_ICONS } from "./constants.js";
 import { isDeliverable, ticksLeft } from "./contracts.js";
 import { STRIP_REFRESH_MS } from "./statusStrip.js";
 import useSampled from "./useSampled.js";
-import { OLIVE } from "./farmerUi.jsx";
+import { TEAL } from "./farmerUi.jsx";
 
 const fmt = (n) => Number(n || 0).toLocaleString("en-US");
 
@@ -51,7 +51,7 @@ function ContractCard({ c, game, onDeliver }) {
             <button
               onClick={() => onDeliver(c.id)}
               className="px-2.5 py-1 rounded text-xs font-semibold text-white hover:brightness-110"
-              style={{ background: OLIVE }}
+              style={{ background: TEAL }}
             >
               Deliver
             </button>

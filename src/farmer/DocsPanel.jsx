@@ -1,139 +1,136 @@
+import { UNLOCK_BY_ID } from "./constants.js";
 import { EXAMPLES } from "./examples.js";
 import * as W from "./world.js";
 
 const API = [
   {
-    title: "Actions — take time (200 ticks), no await needed",
+    title: "Actions: 200 ticks each, and no await to write",
     items: [
-      ["harvest()", "Harvest the tile. Ripe → yield; unripe → destroyed (unripe grass is left alone). On the dinosaur: cuts off that segment and its tail → Bone."],
-      ["plant(entity)", "Plant Entities.X (Plant unlock + its own unlock). Seed cost is paid automatically. Entities.Rice needs Soil with water ≥ 0.5. Entities.Dinosaur hatches the dinosaur."],
-      ["move(dir)", "North / East / South / West. Wraps around the edges. Hedges block it (returns false)."],
-      ["till()", "Grassland ⇄ Soil, removes the entity. Needs Carrots. Not on the dinosaur / an apple."],
-      ["swap(dir)", "Swap entity with neighbour (no wrap). Needs Cactus. Not with the dinosaur / an apple."],
-      ["use_item(item, n=1)", "Items.Water: +0.25 water. Items.Fertilizer: −2 s growth (on a grown Bush with Mazes: spawns a maze)."],
-      ["trade(item, n=1)", "Buy: Fertilizer = 1 Pumpkin, Water = 1 Carrot. Sell: Items.Rice → 2 Gold per Rice."],
-      ["unlock(Unlocks.X)", "Buy the next level from code."],
-      ["clear()", "Reset farm to empty grassland (no maze, no dinosaur), this drone to (0,0)."],
-      ["do_a_flip()", "600 ticks of pure style."],
-      ["deliver_contract(id)", "Deliver today's contract id (from get_contracts()): consumes the items, pays the reward. false when short, expired, done or unknown."],
-      ["spawn_drone()", "Megafarm: a new drone on this tile runs this same program from the top. false when locked or at the cap."],
+      ["harvest()", "Gather what is on the tile. Ripe pays; unripe is lost (young grass is spared). On the dinosaur it cuts that segment and the tail behind it into Bone."],
+      ["plant(entity)", "Plant Entities.X; needs the Seed Hopper and the plant's own upgrade. The seed is paid for you. Rice wants Soil with water ≥ 0.5; Entities.Dinosaur sets an egg."],
+      ["move(dir)", "North, East, South or West. Over one edge and in at the other. A Hedge stops the bot (false)."],
+      ["till()", "Grassland ⇄ Soil; clears the tile. Needs the Plough Blade. Not on the dinosaur or an apple."],
+      ["swap(dir)", "Trade places with the neighbour's plant, never over the edge. Needs the Cactus Bench. Not with the dinosaur or an apple."],
+      ["use_item(item, n=1)", "Water: +0.25 water. Fertilizer: 2 s of growth, or a labyrinth when used on a full-grown Bush with Hedge Labyrinth."],
+      ["trade(item, n=1)", "The market sells Fertilizer (1 Pumpkin) and Water (1 Carrot), and pays 2 Gold per Rice."],
+      ["unlock(Unlocks.X)", "Buy the next level of an upgrade from code."],
+      ["clear()", "Bare grassland everywhere, no labyrinth, no dinosaur; this bot goes to (0, 0)."],
+      ["spin_in_place()", "One turn on the spot. 600 ticks: good for waiting."],
+      ["deliver_contract(id)", "Hand over one of today's orders (id from get_contracts()) and collect the reward. false when short, too late, already done or unknown."],
+      ["spawn_bot()", "Bot Crew: one more bot on this tile, running this same program from line 1. false without the upgrade or with everyone out."],
     ],
   },
   {
-    title: "Senses — instant (1 tick). 🔒 = needs Senses, returns null before",
+    title: "Sensors: 1 tick. 🔒 = null until you have the Sensor Mast",
     items: [
-      ["can_harvest() 🔒", "Is the entity under the drone ripe? (Dinosaur: always; Apple: never.)"],
-      ["get_entity_type() 🔒", "Entities.X or null."],
-      ["get_ground_type() 🔒", "Grounds.Grassland / Grounds.Soil."],
-      ["get_pos_x() / get_pos_y() 🔒", "Drone position, (0,0) = South-West."],
-      ["measure(dir?) 🔒", "Sunflower petals (7–15) / cactus size (0–9), here or at a neighbour. In a maze: direction of the treasure."],
-      ["get_water() 🔒", "Water level 0…1 here."],
-      ["get_world_size()", "Farm side length."],
-      ["num_items(item)", "Inventory count."],
-      ["get_cost(thing)", "Unlock cost or seed cost, e.g. {Wood: 1, Hay: 1}. Cactus/Grass/Rice → unlock."],
-      ["num_unlocked(thing)", "Unlock level (entities map to their unlock)."],
-      ["can_move(dir)", "Always true in an open field; false into a Hedge or over a maze's edge."],
-      ["get_time() / get_tick_count()", "Seconds since Run (one clock for all drones) / this drone's ticks."],
-      ["get_contracts()", "Today's contracts: [{ id, item, amount, reward, rewardItem, ticksLeft, status }]."],
-      ["get_arena_goal()", "In an arena match: its goal { item, amount }, e.g. { item: \"Hay\", amount: 500 }. null on your own farm."],
-      ["get_weather()", "The weather now: \"Sunny\", \"Rain\", \"Storm\" or \"Drought\" (null in the arena)."],
-      ["get_forecast()", "Costs 25 ops! { next, inTicks }: the true next weather and ≈ world ticks until then (±20%, never exact)."],
-      ["num_drones() / max_drones()", "Drones on the farm / the cap (farm size with Megafarm, else 1)."],
-      ["print(...) / quick_print(...)", "Write to the Log (console.log works too)."],
+      ["can_harvest() 🔒", "Is it full-grown? (The dinosaur always, an apple never.)"],
+      ["get_entity_type() 🔒", "Entities.X, or null on an empty tile."],
+      ["get_ground_type() 🔒", "Grounds.Grassland or Grounds.Soil."],
+      ["get_pos_x() / get_pos_y() 🔒", "Where this bot stands. (0, 0) is the South-West corner."],
+      ["measure(dir?) 🔒", "Petals of a Sunflower (7–15) or size of a Cactus (0–9), here or next door. In a labyrinth: which way the treasure lies."],
+      ["get_water() 🔒", "How wet the tile is, 0…1."],
+      ["get_world_size()", "Tiles along one side of the farm."],
+      ["num_items(item)", "How much of it is in the store room."],
+      ["get_cost(thing)", "Price of an upgrade or a seed, e.g. {Wood: 1, Hay: 1}. Cactus, Grass and Rice mean the upgrade."],
+      ["num_unlocked(thing)", "Level of an upgrade; for a plant, of the upgrade it belongs to."],
+      ["can_move(dir)", "false into a Hedge or over a labyrinth's outer edge, otherwise true."],
+      ["get_time() / get_tick_count()", "Seconds since Run, the same for every bot / ticks this bot has used."],
+      ["get_contracts()", "Today's orders: [{ id, item, amount, reward, rewardItem, ticksLeft, status }]."],
+      ["get_arena_goal()", "In a race: { item, amount }, e.g. { item: \"Hay\", amount: 500 }. At home: null."],
+      ["get_weather()", "\"Sunny\", \"Rain\", \"Storm\" or \"Drought\" (null in the arena)."],
+      ["get_forecast()", "25 ops a look! { next, inTicks }: what comes next for sure, and when give or take 20%."],
+      ["num_bots() / max_bots()", "Bots on the farm / how many may be (the farm's width with Bot Crew, else 1)."],
+      ["print(...) / quick_print(...)", "A line in the Output tab. console.log does the same."],
     ],
   },
   {
-    title: "Constants",
+    title: "Names to use in code",
     items: [
       ["Entities", "Grass, Bush, Tree, Carrot, Pumpkin, Sunflower, Cactus, Dead_Pumpkin, Hedge, Treasure, Dinosaur, Apple, Rice, Dead_Rice"],
       ["Items", "Hay, Wood, Carrot, Pumpkin, Power, Cactus, Rice, Fertilizer, Water, Gold, Bone"],
       ["Grounds", "Grassland, Soil"],
-      ["Weather", "Plain strings: \"Sunny\", \"Rain\", \"Storm\", \"Drought\" (what get_weather() returns)."],
-      ["Unlocks", "Speed, Expand, Plant, Senses, Grass, Carrots, Trees, Watering, Pumpkins, Sunflowers, Fertilizer, Rice, Cactus, Mazes, Dinosaurs, Megafarm"],
-      ["North East South West", "Directions (plain strings)."],
+      ["Unlocks", "Speed, Expand, Plant, Senses, Grass, Carrots, Trees, Watering, Pumpkins, Sunflowers, Fertilizer, Rice, Cactus, Mazes, Dinosaurs, Megafarm (the Workshop shows which is which)"],
+      ["North East South West", "Directions; plain strings, like the weather names."],
     ],
   },
 ];
 
 const WEATHER = [
-  ["Segments", "The weather changes every 1,200 world ticks (10 per second of farm time ≈ 2 min), from your save's own seed. Paused = frozen."],
-  ["☀️ Sunny", "Normal."],
-  ["🌧 Rain", "Every Soil tile gains water slowly (+0.03/s, so +0.01/s net of evaporation)."],
-  ["🏜 Drought", "Water evaporates 3× faster. Crops grow at half speed unless their tile water ≥ 0.5."],
-  ["⛈ Storm", "Growth ×1.5. Lightning strikes 3 times per storm, each destroying 1–3 random crops (the ground stays). Logged."],
-  ["get_forecast()", "The future costs: 25 ops per call (records count ops). inTicks is approximate (±20%, never exact); next is exact."],
-  ["Arena", "Arena worlds have no weather: get_weather() / get_forecast() return null there."],
+  ["Segments", "The sky can change every 1,200 world ticks (10 per second of farm time, so about 2 minutes). Your save has its own weather seed. On pause it stands still."],
+  ["☀️ Sunny", "Nothing special."],
+  ["🌧 Rain", "Soil soaks up 0.03 water per second, 0.01 more than it loses."],
+  ["🏜 Drought", "Tiles dry 3× faster, and plants on tiles below 0.5 water grow at half pace."],
+  ["⛈ Storm", "Everything grows 1.5× faster, but three lightning strikes take 1–3 plants each. The ground is unharmed; the Output tab tells you."],
+  ["get_forecast()", "Looking ahead has a price: 25 ops a call, and records count ops. The weather it names is certain, the time is not (±20%)."],
+  ["Arena", "There is no weather in races; both calls give null there."],
 ];
 
 const RULES = [
-  ["Grass 🌱", "1 s, regrows by itself on empty Grassland → 1 Hay × (Grass level + 1)."],
-  ["Bush 🌿", "4 s, any ground → 1 Wood × Trees level."],
-  ["Tree 🌳", "7 s, ×2 slower per adjacent tree (checkerboard!) → 5 Wood × Trees level."],
-  ["Carrot 🥕", "6 s, Soil, seed 1 Wood + 1 Hay → 1 Carrot × Carrots level."],
+  ["Grass 🌱", "1 s. Comes back by itself on bare Grassland. 1 Hay × (Meadow Mix level + 1)."],
+  ["Bush 🌿", "4 s on any ground. 1 Wood × Woodlot level."],
+  ["Tree 🌳", "7 s, doubled for each tree directly beside it, so leave gaps. 5 Wood × Woodlot level."],
+  ["Carrot 🥕", "6 s on Soil, seed 1 Wood + 1 Hay. 1 Carrot × Plough Blade level."],
   [
     "Pumpkin 🎃",
-    "3 s, Soil, seed 1 Carrot. 20% rot into Dead_Pumpkin (harvest just clears it). Harvesting a ripe pumpkin clears its whole connected group of ripe pumpkins: a solid k×k square gives k³, any other shape gives its size. × Pumpkins level.",
+    "3 s on Soil, seed 1 Carrot. One in five spoils (Dead_Pumpkin; harvest() clears it). Cutting a ripe one takes every ripe pumpkin connected to it: k³ when they form a full k×k block, otherwise one each. × Pumpkin Patch level.",
   ],
   [
     "Sunflower 🌻",
-    "5 s, Soil, seed 1 Carrot → Power = ⌊√(sunflowers on farm)⌋, ×8 if ≥ 10 sunflowers and this one has the most petals.",
+    "5 s on Soil, seed 1 Carrot. Power = ⌊√(sunflowers on the farm)⌋, ×8 when there are at least 10 and no other has more petals than this one.",
   ],
-  [
-    "Power ⚡",
-    "While you have Power, every action costs 1 Power and runs 2× faster.",
-  ],
+  ["Power ⚡", "As long as there is some, every action burns 1 Power and takes half the time."],
   [
     "Cactus 🌵",
-    "2 s, Soil, seed 1 Pumpkin, size 0–9. Harvesting a ripe cactus harvests EVERY cactus. n = ripe cacti. If every pair of neighbouring ripe cacti is sorted (West ≤ East and South ≤ North) you get n², otherwise n. Unripe cacti are lost. × Cactus level.",
+    "2 s on Soil, seed 1 Pumpkin, size 0–9. Cutting one ripe cactus takes the whole bench; unripe ones are lost. With n ripe: n² when no neighbour is out of order (West ≤ East, South ≤ North), else n. × Cactus Bench level.",
   ],
   [
     "Rice 🌾",
-    "9 s (6 s at Rice level 2), Soil, seed 1 Carrot. A paddy crop: plant() fails unless the tile's water is ≥ 0.5. While growing it needs water ≥ 0.2: on a drier tile it stops growing, and after more than 200 dry world ticks in a row (20 s) it withers into Dead_Rice (harvest just clears it). → 3 Rice per plant (5 at level 2). Rain keeps paddies wet; Drought dries them 3× faster. trade(Items.Rice) sells 1 Rice for 2 Gold.",
+    "9 s (6 s at level 2) on Soil, seed 1 Carrot. Needs water ≥ 0.5 to plant and ≥ 0.2 to grow; more than 200 dry world ticks in a row (20 s) and it is Dead_Rice, which harvest() only clears. 3 Rice a plant, 5 at level 2, and trade(Items.Rice) pays 2 Gold each.",
   ],
-  ["Water 💧", "Growth speed × (1 + 4 × water). Water evaporates (−0.02/s). Tank: +1 every 10 s ÷ Watering level, cap 5 + 5 × level."],
-  ["Fertilizer 🧪", "Skips 2 s of growth on the plant under the drone."],
-  ["Speed ⏩", "×2 drone speed per level (on top of the speed selector)."],
-  ["Expand 🗺️", "1→2→3→4→5→6→7→8→10→12. Clears the farm."],
+  ["Water 💧", "Growth × (1 + 4 × water). Tiles lose 0.02 a second. The barrel gains 1 every 10 s ÷ level and holds 5 + 5 × level."],
+  ["Fertilizer 🧪", "2 s of growth for the plant under the bot."],
+  ["Overclock ⏩", "Each level doubles the bots' pace."],
+  ["New Acres 🗺️", "1→2→3→4→5→6→7→8→10→12 tiles a side. The farm is levelled each time."],
 ];
 
 const MAZES = [
-  ["Spawn", "Stand on a fully grown Bush and use_item(Items.Fertilizer) (Mazes unlocked). The whole farm becomes a hedge maze; the fertilizer is only used if a maze appears."],
-  ["Layout", "A perfect maze: every path tile is reachable and there is exactly one way between any two. Hedges 🟩 are walls; the farm edge is a wall too (no wrap-around in a maze). You start where you stood."],
-  ["Treasure 💰", "Sits on the path tile farthest from your start. measure() returns its direction from you: the axis with the larger distance wins (ties → East/West); null when you are on it."],
-  ["Gold 🪙", "harvest() on the treasure → Gold = farm tiles (size²) × Mazes level. The maze disappears and the farm is empty Grassland again."],
-  ["Meanwhile", "plant, till, swap and trade fail inside a maze. clear() (or Expand) removes the maze without a reward. Try example 7 (a wall follower)."],
-  ["Seed & records 🏆", "Every maze comes from a seed (printed in Output: Maze seed: …). Same seed + farm size + start tile → the same maze. Solving a maze spawned in the same run records its ticks and ops (every API call = 1 op); see the 🏆 Records window, where you can also replay a seed."],
+  ["Growing one", "Use Fertilizer on a full-grown Bush (Hedge Labyrinth built). The whole farm turns into hedges; the Fertilizer is spent only if that works."],
+  ["Layout", "Every path tile can be reached, and there is one way between any two. Hedges 🟩 and the farm's edge are solid, so no driving round the back. The bot begins where it stood."],
+  ["Treasure 💰", "On the path tile farthest from your start. measure() names the direction to it: the longer axis, East/West on a tie, null once you are there."],
+  ["Gold 🪙", "harvest() on it pays farm tiles × level. The hedges go and bare Grassland is left."],
+  ["Until then", "plant, till, swap and trade are closed. clear() or New Acres ends the labyrinth unpaid. Example 7 finds the way by touch."],
+  ["Seeds 🏆", "The Output tab prints each labyrinth's seed. Same seed, farm size and start tile: same hedges. One that you grow and solve in a single run enters the Almanac with ticks and ops (every API call is 1 op), where a seed can also be set for the next one."],
 ];
 
 const DINOSAURS = [
-  ["Hatch", "plant(Entities.Dinosaur) on an empty (or grass) tile, Dinosaurs unlocked, 10 Gold. It starts 1 tile long. One dinosaur per farm."],
-  ["Roaming", "Every 0.3 s of game time its head steps to a random free neighbour: empty ground, grass (trampled) or an apple. Never into its own body, a hedge or a crop, never across the edge; boxed in, it waits. The drone flies over it."],
-  ["Apples 🍎", "While it lives, an apple appears every 1.5 s on a random empty/grass tile (at most 1 per 16 tiles, min 1). Walking onto one eats it: +1 length. You can't harvest, plant on, till or swap apples."],
-  ["Bone 🦴", "harvest() on a segment cuts off it and everything behind it: Bone = (segments removed)² × Dinosaurs level. The head takes the whole dinosaur (length²), the tail tip pays 1. When it's gone (apples vanish too) you can hatch a new one."],
-  ["Meanwhile", "get_entity_type() is Entities.Dinosaur on every segment; the info strip shows which one (head 1/5…). Spawning a maze, clear() or Expand removes the dinosaur and apples. Try example 8."],
+  ["The egg", "plant(Entities.Dinosaur) on an empty or grass tile for 10 Gold (Dinosaur Egg built). One tile long, one per farm."],
+  ["Wandering", "Every 0.3 s of game time the head picks a free tile next door: bare ground, grass (it is trampled) or an apple. Not its own body, a hedge, a crop or the edge. Hemmed in, it waits. Bots straddle it."],
+  ["Apples 🍎", "While it lives, one appears every 1.5 s on a free tile, up to one per 16 tiles (at least 1). Each one eaten adds a tile. Bots can't gather them or work their tile."],
+  ["Bone 🦴", "Cutting a segment takes everything behind it as well: (segments)² × level. The head means all of it, the tail tip means 1. When nothing is left, so are the apples, and you can set another egg."],
+  ["Good to know", "Every segment reads as Entities.Dinosaur, and the strip above the farm says which one. A labyrinth, clear() or New Acres ends it. See example 8."],
 ];
 
 const CONTRACTS = [
-  ["Daily", "Every day (local midnight) brings 3 delivery orders from the day's seed: the same for every player with the same unlocks and farm size. Open them with the 📜 button."],
-  ["Pool", "Only items you can already produce: Hay and Wood always, Carrot / Pumpkin / Rice / Cactus with their unlock, Gold with Mazes, Bone with Dinosaurs. Amounts grow with your farm."],
-  ["Reward", "≈ amount × item value × 1.5, paid in Gold (Bone for Gold and Bone contracts). Deliver with the button or deliver_contract(id); totals show in 🏆 Records."],
-  ["Deadline", "Each contract has a tick budget on the farm clock, which runs only while your programs run (the same ticks as get_tick_count). Past it, or at the next day, an unfinished contract expires."],
+  ["Every day", "Three orders at local midnight, drawn from the date: players with the same upgrades and farm size get the same three."],
+  ["What", "Only things you can make: Hay and Wood; Carrot, Pumpkin, Rice and Cactus once unlocked; Gold with the labyrinth; Bone with the egg. The amounts follow your farm's size."],
+  ["Reward", "About 1.5 × what the goods are worth, in Gold (orders for Gold or Bone pay Bone). Deliver with the button or deliver_contract(id). The Almanac keeps the total."],
+  ["Deadline", "Counted in ticks your programs use, the same as get_tick_count(). When they or the day run out, so does the order."],
 ];
 
 const ARENA = [
-  ["Match", "The ⚔️ window races one of your files against a bot. Each side gets its own fresh 8×8 farm from the same seed and runs headless on one shared virtual clock, so a match takes seconds, not minutes."],
-  ["Arena farm", "Everything up to Megafarm unlocked at level 1 (8 drones possible), Speed 0, no Mazes, Dinosaurs or Rice, no contracts, empty inventory. unlock() works as usual."],
-  ["Goals", "First to hold 500 Hay, 800 Wood or 300 Pumpkin wins. At 200,000 ticks (1 tick = 1 ms of game time, an action is 200) the bigger amount wins; equal is a draw."],
-  ["Rules", "An error loses at once. A loop that never acts is throttled and runs into the tick cap. Same seed + same programs → the same result: Math.random() is seeded too."],
-  ["Bots", "Rookie 800, Pro 1200, Ace 1600: plain programs (their code is in the window). Your rating starts at 1000; standard ELO, K = 32. The last 20 matches are kept in your save."],
+  ["The race", "One of your files against a rival. Each gets its own fresh 8×8 farm from the same seed, on one virtual clock, so it is over in seconds."],
+  ["The farm", "All upgrades up to Bot Crew at level 1 (8 bots), Overclock 0, no labyrinth, egg or rice, no orders, an empty store room. unlock() works."],
+  ["The goal", "First to hold 500 Hay, 800 Wood or 300 Pumpkin. After 200,000 ticks (1 tick = 1 ms, an action 200) the larger amount wins, and equal is a draw."],
+  ["Fair play", "An error loses on the spot. A loop without actions is slowed down and runs out of time. Math.random() is seeded too, so the same seed and programs give the same race."],
+  ["Rivals", "Rookie 800, Pro 1200, Ace 1600: ordinary programs you can read in the window. You begin at 1000 (ELO, K = 32); the save keeps your last 20 races."],
 ];
 
 const MEGAFARM = [
-  ["Spawn", "spawn_drone() (Megafarm unlocked) puts a new drone on the caller's tile. It takes 200 ticks and returns true, or false when locked, at the cap, or outside a running program."],
-  ["Same program", "The new drone runs the SAME program from the top, the file you pressed ▶ on, in parallel with the others. So branch on where you are or on num_drones() to give each drone its own job (example 9)."],
-  ["Cap", "max_drones() = the farm's side length (12 on 12×12, 1 on 1×1): one drone per column. num_drones() counts every drone on the farm, including drones whose program already ended."],
-  ["Shared", "All drones share the farm, the inventory and the unlocks. Every function acts on the drone that calls it (position, harvest, plant, measure, mazes, dinosaurs). Drones fly, so several can share a tile; the first harvest wins, the others find it empty."],
-  ["Stop & errors", "❚❚ / ■ pause and stop every drone. An error stops only the drone that threw it (the Log says which: \"Drone 2: …\"); the others keep going. Each new Run starts with drone 0 alone; leftover drones (also from a save) wait idle until then."],
+  ["One more", "spawn_bot() (Bot Crew built) puts a bot on the tile of the one that calls it. 200 ticks; false without the upgrade, with everyone out, or outside a run."],
+  ["One plan", "Each bot runs the SAME file from line 1, at the same time. Give them different work by where they stand or by num_bots() (example 9)."],
+  ["How many", "max_bots() is the farm's width, one per column (12 on 12×12). num_bots() also counts those whose program is over."],
+  ["Together", "Farm, store room and upgrades are shared; a call acts on the bot that makes it. Several fit on one tile, but only the first to cut a plant gets it."],
+  ["Trouble", "Pause and Stop hold for the crew. An error ends only the bot that made it (\"Bot 2: …\" in Output). The next Run starts with bot 0 alone; the others, also those from a save, go home."],
 ];
 
 export default function DocsPanel({ game, onLoadExample, targetName = "the editor" }) {
@@ -141,7 +138,7 @@ export default function DocsPanel({ game, onLoadExample, targetName = "the edito
     <div className="p-3 space-y-4 text-xs">
       <div className="flex items-center gap-2">
         <label htmlFor="farmer-example" className="text-gray-400 font-semibold shrink-0">
-          Examples
+          Example programs
         </label>
         <select
           id="farmer-example"
@@ -152,47 +149,41 @@ export default function DocsPanel({ game, onLoadExample, targetName = "the edito
           }}
           className="flex-1 min-w-0 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-gray-200 text-xs"
         >
-          <option value="">Load an example into “{targetName}”…</option>
+          <option value="">Load one into “{targetName}”…</option>
           {EXAMPLES.map((ex) => {
             const missing = ex.needs.filter((u) => !W.isUnlocked(game, u));
             return (
               <option key={ex.id} value={ex.id}>
                 {ex.name}
-                {missing.length ? ` — 🔒 ${missing.join(", ")}` : ""}
+                {missing.length ? ` — 🔒 ${missing.map((u) => UNLOCK_BY_ID[u].name).join(", ")}` : ""}
               </option>
             );
           })}
         </select>
       </div>
-      <p className="text-gray-500 leading-relaxed">
-        Write plain JavaScript — no <code className="text-gray-300">await</code> needed. Your own
-        functions can call drone actions. Callbacks like <code className="text-gray-300">forEach</code>{" "}
-        don&apos;t wait for actions: use <code className="text-gray-300">for…of</code> loops instead.
+      <p className="text-gray-400 leading-relaxed">
+        Your bot (บอทไร่) does what its file says, in plain JavaScript. Actions wait for themselves, in your own functions too. One exception:
+        callbacks such as <code className="text-gray-300">forEach</code> can&apos;t wait, so write a <code className="text-gray-300">for…of</code> loop. The light on the
+        bot&apos;s mast is green while it works, amber on pause and red after an error.
       </p>
 
       <section>
         <h3 className="text-[11px] uppercase tracking-wider font-semibold text-gray-500 mb-1.5">Files &amp; windows</h3>
         <ul className="space-y-1 text-gray-400 leading-relaxed list-disc pl-4">
           <li>
-            Each code window is a file. <span className="text-gray-200">▶</span> runs <em>that</em> file (or{" "}
-            <code className="text-gray-300">Ctrl+Enter</code> inside it). Starting a run stops the previous one.
+            A window is a file. <span className="text-gray-200">Run</span> (or <code className="text-gray-300">Ctrl+Enter</code> in the editor) starts that one
+            and ends whatever ran before.
           </li>
           <li>
-            Every <em>other</em> file contributes only its <span className="text-gray-200">top-level functions</span>{" "}
-            (<code className="text-gray-300">function f() {"{…}"}</code>,{" "}
-            <code className="text-gray-300">const f = (…) =&gt; …</code>,{" "}
-            <code className="text-gray-300">const f = function …</code>) — like <code className="text-gray-300">from f0 import *</code>.
-            Their other top-level code (loops, calls, variables) is ignored.
+            The <span className="text-gray-200">top-level functions</span> of the other files can be called from it:{" "}
+            <code className="text-gray-300">function f() {"{…}"}</code>, <code className="text-gray-300">const f = (…) =&gt; …</code> or{" "}
+            <code className="text-gray-300">const f = function …</code>. Nothing else in those files runs.
           </li>
+          <li>Two functions with one name: the running file&apos;s wins, then the file higher up in the Files list.</li>
           <li>
-            Name clash: the running file&apos;s own top-level name wins; between helper files, the first file in the
-            Files list wins.
+            <span className="text-gray-200">Pause</span> holds the program and the farm, so nothing grows meanwhile.
           </li>
-          <li>
-            <span className="text-gray-200">❚❚</span> pauses the program <em>and</em> the farm (no growth); ▶ resumes.{" "}
-            <span className="text-gray-200">■</span> stops.
-          </li>
-          <li>Drag a window by its title bar, resize from the bottom-right corner, — minimizes, ✕ closes (reopen via +).</li>
+          <li>Drag a window by its title, size it from the lower right corner. Closed files are waiting under Files.</li>
         </ul>
       </section>
 
@@ -211,7 +202,7 @@ export default function DocsPanel({ game, onLoadExample, targetName = "the edito
       ))}
 
       <section>
-        <h3 className="text-[11px] uppercase tracking-wider font-semibold text-gray-500 mb-1.5">Mazes 🧩</h3>
+        <h3 className="text-[11px] uppercase tracking-wider font-semibold text-gray-500 mb-1.5">Hedge labyrinths 🧩</h3>
         <dl className="space-y-1">
           {MAZES.map(([name, desc]) => (
             <div key={name} className="grid grid-cols-[minmax(0,6.5rem)_1fr] gap-2">
@@ -223,7 +214,7 @@ export default function DocsPanel({ game, onLoadExample, targetName = "the edito
       </section>
 
       <section>
-        <h3 className="text-[11px] uppercase tracking-wider font-semibold text-gray-500 mb-1.5">Dinosaurs 🦕</h3>
+        <h3 className="text-[11px] uppercase tracking-wider font-semibold text-gray-500 mb-1.5">The dinosaur 🦕</h3>
         <dl className="space-y-1">
           {DINOSAURS.map(([name, desc]) => (
             <div key={name} className="grid grid-cols-[minmax(0,6.5rem)_1fr] gap-2">
@@ -235,7 +226,7 @@ export default function DocsPanel({ game, onLoadExample, targetName = "the edito
       </section>
 
       <section>
-        <h3 className="text-[11px] uppercase tracking-wider font-semibold text-gray-500 mb-1.5">Megafarm 🏭</h3>
+        <h3 className="text-[11px] uppercase tracking-wider font-semibold text-gray-500 mb-1.5">Bot crew 🏭</h3>
         <dl className="space-y-1">
           {MEGAFARM.map(([name, desc]) => (
             <div key={name} className="grid grid-cols-[minmax(0,6.5rem)_1fr] gap-2">
@@ -283,7 +274,7 @@ export default function DocsPanel({ game, onLoadExample, targetName = "the edito
       </section>
 
       <section>
-        <h3 className="text-[11px] uppercase tracking-wider font-semibold text-gray-500 mb-1.5">Farming rules</h3>
+        <h3 className="text-[11px] uppercase tracking-wider font-semibold text-gray-500 mb-1.5">What grows and how</h3>
         <dl className="space-y-1">
           {RULES.map(([name, desc]) => (
             <div key={name} className="grid grid-cols-[minmax(0,6.5rem)_1fr] gap-2">

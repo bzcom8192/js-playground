@@ -2,9 +2,10 @@
 // stacked panel on small screens (floating = false).
 import { useRef, useState } from "react";
 import { clampRect, HEADER_H, MIN_H, MIN_W } from "./useFarmerFiles.js";
-import { Glyph, OLIVE } from "./farmerUi.jsx";
+import { Glyph, MARIGOLD, TEAL } from "./farmerUi.jsx";
 
-export function SquareButton({ color = OLIVE, title, onClick, children, size = 24, className = "" }) {
+/** Labelled pill: the main action(s) of a window. */
+export function PillButton({ color = TEAL, title, onClick, children }) {
   return (
     <button
       type="button"
@@ -12,8 +13,24 @@ export function SquareButton({ color = OLIVE, title, onClick, children, size = 2
       aria-label={title}
       onClick={onClick}
       onPointerDown={(e) => e.stopPropagation()}
-      className={`shrink-0 flex items-center justify-center rounded-[5px] text-white shadow-[0_1px_2px_rgba(0,0,0,.35),inset_0_1px_0_rgba(255,255,255,.25)] hover:brightness-115 active:brightness-95 transition-[filter] ${className}`}
-      style={{ background: color, width: size, height: size }}
+      className="shrink-0 flex items-center gap-1.5 h-6 px-2.5 rounded-full text-[12px] font-semibold text-white hover:brightness-110 active:brightness-95 transition-[filter]"
+      style={{ background: color }}
+    >
+      {children}
+    </button>
+  );
+}
+
+/** Quiet round icon button (minimize, close). */
+export function GhostButton({ title, onClick, children }) {
+  return (
+    <button
+      type="button"
+      title={title}
+      aria-label={title}
+      onClick={onClick}
+      onPointerDown={(e) => e.stopPropagation()}
+      className="shrink-0 w-6 h-6 flex items-center justify-center rounded-full text-[#75627a] hover:text-[#2e2438] hover:bg-[#ecdcc8] transition-colors"
     >
       {children}
     </button>
@@ -22,7 +39,8 @@ export function SquareButton({ color = OLIVE, title, onClick, children, size = 2
 
 /**
  * Props: title, rect {x,y,w,h,z,minimized}, floating, onFocus, onRect(rect),
- * onMinimize, onClose, left (header-left nodes), children, bodyClass, label
+ * onMinimize, onClose, actions (header buttons), accent (spine colour), children,
+ * bodyClass, label
  */
 export default function FloatingWindow({
   title,
@@ -32,9 +50,10 @@ export default function FloatingWindow({
   onRect,
   onMinimize,
   onClose,
-  left,
+  actions,
+  accent = MARIGOLD,
   children,
-  bodyClass = "bg-[#1b1b1b]",
+  bodyClass = "bg-[#1e1e1e]",
   mobileBodyClass = "h-80",
   label,
   closeTitle = "Close",
@@ -90,14 +109,14 @@ export default function FloatingWindow({
   return (
     <section
       aria-label={label || title}
-      className={`flex flex-col rounded-xl overflow-hidden border border-black/25 shadow-[0_18px_44px_-6px_rgba(18,38,58,.55),0_2px_6px_rgba(0,0,0,.25)] ${
+      className={`flex flex-col rounded-md overflow-hidden border border-[#2e2438] border-l-[6px] shadow-[0_14px_34px_-10px_rgba(70,36,60,.5)] ${
         floating ? "" : "relative w-full"
       }`}
-      style={style}
+      style={{ ...style, borderLeftColor: accent }}
       onPointerDownCapture={() => onFocus?.()}
     >
       <header
-        className={`shrink-0 flex items-center gap-1.5 px-1.5 bg-gradient-to-b from-[#a7adb0] to-[#939a9e] border-b border-black/20 ${
+        className={`shrink-0 flex items-center gap-1.5 pl-3 pr-1.5 bg-[#fdf6ea] border-b border-[#e3d3c0] ${
           floating ? "cursor-grab active:cursor-grabbing touch-none" : ""
         }`}
         style={{ height: HEADER_H }}
@@ -109,17 +128,17 @@ export default function FloatingWindow({
           if (!e.target.closest("button,input,select")) onMinimize?.();
         }}
       >
-        {left}
-        <span className="farmer-title ml-1 flex-1 min-w-0 truncate text-[15px] font-bold text-white select-none">{title}</span>
+        <span className="flex-1 min-w-0 truncate text-[13px] font-semibold text-[#2e2438] select-none">{title}</span>
+        {actions}
         {onMinimize && (
-          <SquareButton title={minimized ? "Restore" : "Minimize"} onClick={onMinimize}>
+          <GhostButton title={minimized ? "Restore" : "Minimize"} onClick={onMinimize}>
             {minimized ? Glyph.restore : Glyph.minimize}
-          </SquareButton>
+          </GhostButton>
         )}
         {onClose && (
-          <SquareButton title={closeTitle} onClick={onClose}>
+          <GhostButton title={closeTitle} onClick={onClose}>
             {Glyph.close}
-          </SquareButton>
+          </GhostButton>
         )}
       </header>
       {/* Kept mounted while minimized so editors keep their undo history. */}
@@ -134,7 +153,7 @@ export default function FloatingWindow({
               onPointerUp={end}
               onPointerCancel={end}
             >
-              <svg viewBox="0 0 16 16" className="w-full h-full text-white/35" aria-hidden="true">
+              <svg viewBox="0 0 16 16" className="w-full h-full text-[#978295]" aria-hidden="true">
                 <path d="M15 6 L6 15 M15 11 L11 15" stroke="currentColor" strokeWidth="1.5" />
               </svg>
             </div>

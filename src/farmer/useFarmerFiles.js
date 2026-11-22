@@ -1,8 +1,8 @@
 // Code files + floating-window layout for the Farmer page.
 //  farmer_files_v1 : { v: 1, nextId, files: [{ id, name, code }] }
 //  farmer_ui_v1    : { v: 1, zTop, active, windows: { [fileId | "info" | "unlocks" | "records" | "contracts" | "arena" | "online"]: { x, y, w, h, z, minimized, open } } }
-//  farmer_code     : kept as a mirror of the FIRST file (the migrated/seeded
-//                    "crops" file), for backward compatibility.
+//  farmer_code     : kept as a mirror of the FIRST file (seeded as
+//                    "morning"; migrated v1 code keeps the name "crops"), for backward compatibility.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { DEFAULT_CODE, HELPER_CODE } from "./examples.js";
 
@@ -12,6 +12,7 @@ export const CODE_KEY = "farmer_code";
 export const MIN_W = 320;
 export const MIN_H = 200;
 export const HEADER_H = 36;
+export const TOP_BAR_H = 48; // the page's top bar; floating windows stay below it
 
 const read = (k) => {
   try {
@@ -33,8 +34,8 @@ export function seedFiles() {
   return {
     nextId: 3,
     files: [
-      { id: 1, name: "crops", code: DEFAULT_CODE },
-      { id: 2, name: "f0", code: HELPER_CODE },
+      { id: 1, name: "morning", code: DEFAULT_CODE },
+      { id: 2, name: "toolshed", code: HELPER_CODE },
     ],
   };
 }
@@ -67,13 +68,13 @@ const viewport = () => ({
 
 export function clampRect(r, { vw, vh } = viewport()) {
   const w = Math.max(MIN_W, Math.min(r.w, vw));
-  const h = Math.max(MIN_H, Math.min(r.h, vh));
+  const h = Math.max(MIN_H, Math.min(r.h, vh - TOP_BAR_H));
   return {
     ...r,
     w,
     h,
     x: Math.round(Math.max(0, Math.min(r.x, vw - w))),
-    y: Math.round(Math.max(0, Math.min(r.y, vh - HEADER_H))),
+    y: Math.round(Math.max(TOP_BAR_H, Math.min(r.y, vh - HEADER_H))),
   };
 }
 
@@ -83,14 +84,15 @@ export function defaultRect(key, files, vp = viewport()) {
   const first = files[0]?.id;
   const second = files[1]?.id;
   let r;
-  if (key === "info") r = { x: vw * 0.06, y: vh * 0.13, w: Math.min(560, vw * 0.42), h: vh * 0.72, open: false };
-  else if (key === "unlocks") r = { x: vw * 0.36, y: vh * 0.1, w: Math.min(440, vw * 0.34), h: vh * 0.76, open: false };
-  else if (key === "records") r = { x: vw * 0.4, y: vh * 0.12, w: Math.min(420, vw * 0.32), h: vh * 0.7, open: false };
-  else if (key === "contracts") r = { x: vw * 0.44, y: vh * 0.14, w: Math.min(400, vw * 0.3), h: vh * 0.56, open: false };
-  else if (key === "arena") r = { x: vw * 0.48, y: vh * 0.12, w: Math.min(420, vw * 0.32), h: vh * 0.72, open: false };
-  else if (key === "online") r = { x: vw * 0.5, y: vh * 0.1, w: Math.min(420, vw * 0.32), h: vh * 0.76, open: false };
-  else if (String(key) === String(first)) r = { x: vw * 0.52, y: vh * 0.18, w: vw * 0.46, h: vh * 0.62, open: true };
-  else if (String(key) === String(second)) r = { x: vw * 0.62, y: vh * 0.78, w: vw * 0.26, h: vh * 0.2, open: true };
+  // Code on the right (plan above, toolshed below); panels open over the farm.
+  if (key === "info") r = { x: vw * 0.1, y: vh * 0.1, w: Math.min(580, vw * 0.42), h: vh * 0.8, open: false };
+  else if (key === "unlocks") r = { x: vw * 0.13, y: vh * 0.1, w: Math.min(460, vw * 0.36), h: vh * 0.8, open: false };
+  else if (key === "records") r = { x: vw * 0.16, y: vh * 0.12, w: Math.min(420, vw * 0.32), h: vh * 0.7, open: false };
+  else if (key === "contracts") r = { x: vw * 0.19, y: vh * 0.14, w: Math.min(400, vw * 0.3), h: vh * 0.56, open: false };
+  else if (key === "arena") r = { x: vw * 0.22, y: vh * 0.12, w: Math.min(420, vw * 0.32), h: vh * 0.74, open: false };
+  else if (key === "online") r = { x: vw * 0.25, y: vh * 0.1, w: Math.min(420, vw * 0.32), h: vh * 0.8, open: false };
+  else if (String(key) === String(first)) r = { x: vw * 0.56, y: TOP_BAR_H + 16, w: vw * 0.43, h: vh * 0.6, open: true };
+  else if (String(key) === String(second)) r = { x: vw * 0.56, y: TOP_BAR_H + 32 + vh * 0.6, w: vw * 0.43, h: Math.max(MIN_H, vh * 0.4 - TOP_BAR_H - 48), open: true };
   else {
     const i = Math.max(0, files.findIndex((f) => String(f.id) === String(key)));
     r = { x: vw * 0.3 + 28 * (i % 6), y: vh * 0.16 + 28 * (i % 6), w: vw * 0.36, h: vh * 0.42, open: true };
@@ -223,9 +225,10 @@ export default function useFarmerFiles() {
   const newFile = useCallback(() => {
     const id = nextIdRef.current++;
     const fs = filesRef.current;
-    let n = 0;
-    while (fs.some((f) => f.name === `f${n}`)) n++;
-    const file = { id, name: `f${n}`, code: `// ${`f${n}`} — helper file.\n// Its top-level functions can be used from any other file.\n` };
+    let n = 1;
+    while (fs.some((f) => f.name === `plan${n}`)) n++;
+    const name = `plan${n}`;
+    const file = { id, name, code: `// ${name}\n` };
     const next = [...fs, file];
     setFiles(next);
     setUi((u) => {

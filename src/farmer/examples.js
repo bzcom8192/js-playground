@@ -1,42 +1,47 @@
-// Starter programs for the Docs panel. Each one only uses what its header
+// Starter programs for the Field Guide. Each one only uses what its header
 // comment says it needs, and is exercised by the node engine tests.
 
-export const DEFAULT_CODE = `// Welcome to JS Farmer! Press Run (Ctrl+Enter).
-// The drone does exactly what your code says — nothing more.
-// Collect Hay, then buy upgrades in the Unlocks tab.
-// Tip: after unlocking Senses, try: if (can_harvest()) harvest();
+export const DEFAULT_CODE = `// Good morning from Semicolon Acres! This file is your bot's whole plan.
+// Run starts it (Ctrl+Enter), Stop ends it, and you can edit it any time.
+// This plan: cut the grass, turn once while it grows back, cut it again.
+// The Hay pays for your first upgrade in the Workshop.
+let rounds = 0;
 while (true) {
   harvest();
-  do_a_flip();
+  spin_in_place();
+  rounds += 1;
+  if (rounds % 10 === 0) {
+    print("Round", rounds, "- Hay in the store room:", num_items(Items.Hay));
+  }
 }
 `;
 
-// Seeded second file ("f0"): a small helper module, like the reference's second window.
-export const HELPER_CODE = `// f0 — helper functions.
-// Top-level functions in this file can be called from any other file
-// (like Python's "from f0 import *"). Other top-level code here is
-// ignored when another file runs.
+// Seeded second file: the player's shared functions.
+export const HELPER_CODE = `// toolshed — functions every other file can borrow.
+// Whatever file you run, the functions written here are ready to call in it.
+// Only functions are shared; loose statements in this file are skipped then.
 
-// Fly back to (0, 0). Needs: Senses.
-function go_home() {
-  while (get_pos_x() > 0) move(West);
+// Park in the South-West corner. Needs: Sensor Mast (Senses).
+function park() {
   while (get_pos_y() > 0) move(South);
+  while (get_pos_x() > 0) move(West);
 }
 `;
 
 export const EXAMPLES = [
   {
     id: "first-harvest",
-    name: "1. First Harvest",
+    name: "1. Mow and turn",
     needs: [],
     code: DEFAULT_CODE,
   },
   {
     id: "snake",
-    name: "2. Snake the Field",
+    name: "2. Walk the rows",
     needs: ["Expand"],
-    code: `// Snake the Field — needs: Expand.
-// Visits every tile column by column (movement wraps around the edges).
+    code: `// Walk the rows — needs: New Acres (Expand).
+// Up one column, one step East, up the next. Driving off the North edge puts
+// the bot back on the South edge, so every column ends where it began.
 while (true) {
   for (let x = 0; x < get_world_size(); x++) {
     for (let y = 0; y < get_world_size(); y++) {
@@ -50,10 +55,10 @@ while (true) {
   },
   {
     id: "bushes",
-    name: "3. Bushes for Wood",
+    name: "3. Firewood hedge",
     needs: ["Plant", "Senses"],
-    code: `// Bushes for Wood — needs: Plant, Senses.
-// Harvests ripe plants and keeps a bush on every tile.
+    code: `// Firewood hedge — needs: Seed Hopper (Plant), Sensor Mast (Senses).
+// Cut what is ripe and put a bush wherever there is none yet.
 while (true) {
   for (let x = 0; x < get_world_size(); x++) {
     for (let y = 0; y < get_world_size(); y++) {
@@ -72,11 +77,11 @@ while (true) {
   },
   {
     id: "carrots",
-    name: "4. Carrot Rows",
+    name: "4. Root cellar",
     needs: ["Carrots", "Senses"],
-    code: `// Carrot Rows — needs: Carrots, Senses.
-// Each carrot seed costs 1 Wood + 1 Hay, so keep some in stock.
-function farm_tile() {
+    code: `// Root cellar — needs: Plough Blade (Carrots), Sensor Mast (Senses).
+// One carrot seed takes 1 Wood + 1 Hay from the store room: stock up first.
+function tend_tile() {
   if (get_ground_type() !== Grounds.Soil) {
     till();
   }
@@ -91,7 +96,7 @@ function farm_tile() {
 while (true) {
   for (let x = 0; x < get_world_size(); x++) {
     for (let y = 0; y < get_world_size(); y++) {
-      farm_tile();
+      tend_tile();
       move(North);
     }
     move(East);
@@ -101,11 +106,11 @@ while (true) {
   },
   {
     id: "pumpkins",
-    name: "5. Pumpkin Square",
+    name: "5. One big pumpkin",
     needs: ["Pumpkins", "Senses"],
-    code: `// Pumpkin Square — needs: Pumpkins, Senses.
-// Fill the whole farm with pumpkins. A solid k×k square of ripe
-// pumpkins harvests all at once for k³ pumpkins.
+    code: `// One big pumpkin — needs: Pumpkin Patch (Pumpkins), Sensor Mast (Senses).
+// Plant the farm edge to edge and replant the spoiled ones until none is
+// missing. Then the whole k×k block comes off in one go and pays k³.
 const n = get_world_size();
 
 while (true) {
@@ -118,7 +123,7 @@ while (true) {
           till();
         }
         if (get_entity_type() === Entities.Dead_Pumpkin) {
-          harvest(); // clear the rotten one
+          harvest(); // spoiled: make room
         }
         if (get_entity_type() !== Entities.Pumpkin) {
           plant(Entities.Pumpkin);
@@ -131,18 +136,18 @@ while (true) {
       move(East);
     }
   }
-  harvest(); // one harvest clears the whole square
+  harvest(); // takes the entire block
   print("Pumpkins:", num_items(Items.Pumpkin));
 }
 `,
   },
   {
     id: "cactus",
-    name: "6. Cactus Sort",
+    name: "6. Tidy cactus bench",
     needs: ["Cactus", "Senses"],
-    code: `// Cactus Sort — needs: Cactus, Senses.
-// Rows are sorted West→East, then columns South→North (bubble sort with
-// swap()). A sorted farm yields n² cactus for n cacti.
+    code: `// Tidy cactus bench — needs: Cactus Bench (Cactus), Sensor Mast (Senses).
+// Small to the West and South, tall to the East and North. First every row,
+// then every column, trading neighbours that stand the wrong way round.
 const n = get_world_size();
 
 function go_to(x, y) {
@@ -197,29 +202,29 @@ while (true) {
     for (let y = 0; y < n; y++) {
       go_to(x, y);
       while (!can_harvest()) {
-        do_a_flip(); // wait for it to ripen
+        spin_in_place(); // not ripe yet
       }
     }
   }
-  harvest(); // harvests every cactus on the farm
+  harvest(); // the whole bench at once
   print("Cactus:", num_items(Items.Cactus));
 }
 `,
   },
   {
     id: "maze",
-    name: "7. Maze Runner",
+    name: "7. Hand on the hedge",
     needs: ["Mazes", "Fertilizer", "Plant", "Senses"],
-    code: `// Maze Runner — needs: Mazes, Fertilizer, Plant, Senses.
-// Grows a bush, turns it into a maze with fertilizer, then walks the maze
-// with the right-hand rule (keep a hand on the hedge to your right) until it
-// stands on the treasure. measure() points at the treasure inside a maze.
+    code: `// Hand on the hedge — needs: Hedge Labyrinth (Mazes), Compost Press
+// (Fertilizer), Seed Hopper (Plant), Sensor Mast (Senses).
+// Grow a bush, feed it until it becomes a labyrinth, then follow the hedge on
+// the right-hand side. A labyrinth without loops always gives way like that.
 const RIGHT = { North: East, East: South, South: West, West: North };
 const LEFT = { North: West, West: South, South: East, East: North };
 const BACK = { North: South, East: West, South: North, West: East };
 
 function in_maze() {
-  // Inside a maze measure() returns a direction (a string), or null on the treasure.
+  // In a labyrinth measure() answers with a direction, on the treasure with null.
   return typeof measure() === "string" || get_entity_type() === Entities.Treasure;
 }
 
@@ -229,7 +234,7 @@ function spawn_maze() {
     plant(Entities.Bush);
   }
   while (!can_harvest()) {
-    do_a_flip(); // wait for the bush to grow
+    spin_in_place(); // the bush needs a moment
   }
   if (num_items(Items.Fertilizer) < 1) {
     trade(Items.Fertilizer);
@@ -238,10 +243,10 @@ function spawn_maze() {
 }
 
 function solve_maze() {
-  let dir = measure() || North; // start by facing the treasure
+  let dir = measure() || North; // set off towards the treasure
   while (get_entity_type() !== Entities.Treasure) {
-    // Right-hand rule: try right, straight, left, then turn back.
-    // move() returns false into a hedge (can_move(d) would check for free).
+    // Right if we can, else ahead, else left, else back the way we came.
+    // move() into a hedge is simply false (can_move() would ask first).
     for (const d of [RIGHT[dir], dir, LEFT[dir], BACK[dir]]) {
       if (move(d)) {
         dir = d;
@@ -249,7 +254,7 @@ function solve_maze() {
       }
     }
   }
-  harvest(); // treasure → Gold, the maze disappears
+  harvest(); // Gold! and the hedges are gone
 }
 
 while (true) {
@@ -257,7 +262,7 @@ while (true) {
     spawn_maze();
   }
   if (!in_maze()) {
-    print("No maze — need Fertilizer (or Pumpkins to trade for it).");
+    print("No labyrinth today: out of Fertilizer, and of Pumpkins to buy it with.");
     break;
   }
   solve_maze();
@@ -267,19 +272,19 @@ while (true) {
   },
   {
     id: "dinosaur",
-    name: "8. Bone Farm",
+    name: "8. Apple trail",
     needs: ["Dinosaurs", "Plant", "Senses"],
-    code: `// Bone Farm — needs: Dinosaurs, Plant, Senses (and 10 Gold per dinosaur).
-// Clears the field, hatches a dinosaur and lets it roam: it eats the apples
-// that keep appearing and grows 1 tile per apple. Then the drone sweeps the
-// farm and harvests the dinosaur wherever it meets it: that cuts off the
-// segment and the whole tail behind it for (segments removed)² Bone.
-// When nothing is left, plant() works again and a new dinosaur hatches.
+    code: `// Apple trail — needs: Dinosaur Egg (Dinosaurs), Seed Hopper (Plant), Sensor
+// Mast (Senses), and 10 Gold per egg.
+// An empty field, one egg, half a minute of apples: every apple adds a tile to
+// the animal. Then the bot drives every row and cuts wherever it bumps into
+// it. A cut takes that segment plus the tail behind it and pays the square.
+// Once all of it is cut, the next egg can go in.
 const GROW_SECONDS = 30;
 const n = get_world_size();
 
 function go_to(x, y) {
-  // Shortest way (movement wraps around the edges outside a maze).
+  // Whichever way round is shorter (the field joins up at the edges).
   while (get_pos_x() !== x) move((x - get_pos_x() + n) % n <= n / 2 ? East : West);
   while (get_pos_y() !== y) move((y - get_pos_y() + n) % n <= n / 2 ? North : South);
 }
@@ -287,12 +292,12 @@ function go_to(x, y) {
 function wait(seconds) {
   const start = get_time();
   while (get_time() - start < seconds) {
-    do_a_flip(); // the dinosaur moves on its own meanwhile
+    spin_in_place(); // the dinosaur does not wait for us
   }
 }
 
 function sweep_and_cut() {
-  // Visit every tile once, column by column, cutting the dinosaur wherever we meet it.
+  // Once over every tile, North up one column and South down the next.
   go_to(0, 0);
   for (let x = 0; x < n; x++) {
     for (let i = 0; i < n; i++) {
@@ -307,14 +312,14 @@ function sweep_and_cut() {
   }
 }
 
-clear(); // a free field: the dinosaur can't walk through crops
+clear(); // crops would be in its way
 while (true) {
   go_to(0, 0);
-  // plant() fails while the last dinosaur still roams (one per farm).
+  // Only one dinosaur fits: false while some of the last one is left.
   if (plant(Entities.Dinosaur)) {
     wait(GROW_SECONDS);
   } else if (num_items(Items.Gold) < get_cost(Entities.Dinosaur).Gold) {
-    print("Out of Gold — solve some mazes first (example 7).");
+    print("No Gold for an egg: run example 7 for a while.");
     break;
   }
   const before = num_items(Items.Bone);
@@ -327,30 +332,29 @@ while (true) {
   },
   {
     id: "megafarm",
-    name: "9. Drone Squad",
+    name: "9. A bot per column",
     needs: ["Megafarm", "Senses"],
-    code: `// Drone Squad — needs: Megafarm, Senses.
-// spawn_drone() starts a new drone on this tile, and the new drone runs
-// THIS SAME FILE from the top. So every drone first hands the column east
-// of it to a new helper, then farms its own column forever. The result is
-// one drone per column. The cap, max_drones(), is the farm size, so it fits
-// exactly.
+    code: `// A bot per column — needs: Bot Crew (Megafarm), Sensor Mast (Senses).
+// Each new bot begins THIS FILE at line 1, on the tile where it was put down.
+// So the plan is a relay: drop a bot one column East, go back, farm your own
+// column for good. The last column has nobody to its East and the relay ends.
+// max_bots() is the farm's width, so there is a bot for every column.
 const n = get_world_size();
 
-if (num_drones() === 1) {
-  // Only the very first drone (a Run starts with one): go to the West edge.
+if (num_bots() === 1) {
+  // Alone, so this is the bot Run started with: begin at the West edge.
   while (get_pos_x() > 0) move(West);
 }
 
 if (get_pos_x() < n - 1) {
   move(East);
-  if (!spawn_drone()) print("No helper for column", get_pos_x(), "(Megafarm locked or at the cap)");
+  if (!spawn_bot()) print("Nobody for column", get_pos_x(), "(no Bot Crew, or everyone is out)");
   move(West);
 } else {
-  print(num_drones(), "drones farming,", n, "columns");
+  print(num_bots(), "bots at work,", n, "columns");
 }
 
-// My column: harvest whatever is ripe, walking North (wraps at the edge).
+// My column: North and round again, cutting whatever is ripe.
 while (true) {
   if (can_harvest()) {
     harvest();
@@ -361,13 +365,13 @@ while (true) {
   },
   {
     id: "rice",
-    name: "10. Rice Paddy",
+    name: "10. Rice to market",
     needs: ["Rice", "Watering", "Senses"],
-    code: `// Rice Paddy — needs: Rice, Watering, Senses (Rice needs Carrots for till()).
-// Rice lives in water: plant() needs the tile's water ≥ 0.5, and growing
-// rice stops below 0.2 and withers after 20 s dry. So every pass tops each
-// paddy up to 0.5 (buying Water for Carrots when the tank is low), plants,
-// harvests ripe rice (3 each, 5 at Rice level 2) and sells it: 1 Rice → 2 Gold.
+    code: `// Rice to market — needs: Flooded Paddy (Rice), Rain Barrel (Watering), Sensor
+// Mast (Senses), and the Plough Blade for till().
+// Flood a tile to 0.5, plant, and keep the young rice clear of the 0.2 line;
+// a dry spell of 20 s would ruin it. A short barrel is topped up with Water
+// bought for Carrots, and each round ends at the market: 2 Gold per Rice.
 const n = get_world_size();
 
 function wet_paddy() {
@@ -386,7 +390,7 @@ while (true) {
       }
       if (get_ground_type() !== Grounds.Soil) till();
       if (get_entity_type() === Entities.Rice) {
-        if (get_water() < 0.25) wet_paddy(); // keep growing rice off the 0.2 line
+        if (get_water() < 0.25) wet_paddy(); // well above the 0.2 line
       } else if (wet_paddy()) {
         plant(Entities.Rice);
       }
@@ -396,7 +400,7 @@ while (true) {
   }
   const rice = num_items(Items.Rice);
   if (rice > 0) trade(Items.Rice, rice);
-  print("Sold", rice, "Rice. Gold:", num_items(Items.Gold));
+  print("Market day:", rice, "Rice sold, Gold now", num_items(Items.Gold));
 }
 `,
   },

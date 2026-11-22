@@ -3,7 +3,7 @@
 //
 //  sync(game)        diff the (mutable) game state against what is shown and
 //                    rebuild only the tiles/giants whose model changed
-//  update(dt, opts)  per-frame work: growth scaling, pops, drone glide/bob
+//  update(dt, opts)  per-frame work: growth scaling, pops, the bots driving
 //  fit(w, h)         fixed camera framing for the current farm size
 import * as THREE from "three";
 import { findGiantPumpkins } from "../boardModel.js";
@@ -23,11 +23,10 @@ import {
 
 export const CAMERA_ELEVATION_DEG = 55;
 const CAMERA_FOV = 22;
-const HOVER = 0.95; // drone height above the tile tops
 const POP_S = 0.28;
 const DIE_S = 0.24;
-const WHEAT_GREEN = new THREE.Color("#7fb23e");
-const WHEAT_GOLD = new THREE.Color("#e6ad3c");
+const WHEAT_GREEN = new THREE.Color("#5cae8c");
+const WHEAT_GOLD = new THREE.Color("#f2cd86");
 
 /** Segment shape: head, tail tip, or body (every other body segment has feet). */
 export function dinoPartFor(i, len) {
@@ -61,10 +60,10 @@ export class FarmScene {
     this.board = new THREE.Group();
     this.scene.add(this.board);
 
-    // Warm sun from the upper left + soft sky/ground ambient.
-    this.hemi = new THREE.HemisphereLight("#d8e8f5", "#8a5f33", 1.35);
+    // Low morning sun from the upper left + a soft peach/lilac ambient.
+    this.hemi = new THREE.HemisphereLight("#fff1e2", "#7d6a96", 1.5);
     this.scene.add(this.hemi);
-    this.sun = new THREE.DirectionalLight("#ffcf8c", 3.1);
+    this.sun = new THREE.DirectionalLight("#ffdcb8", 2.7);
     this.sun.castShadow = true;
     this.sun.shadow.bias = -0.0004;
     this.sun.shadow.normalBias = 0.02;
@@ -85,14 +84,14 @@ export class FarmScene {
     this.animT = 0;
     this.builds = 0; // entity models built (tests / perf checks)
 
-    // Drone 0 (the original). Megafarm helpers live in extraDrones
+    // Bot 0. Megafarm helpers live in extraDrones
     // (extraDrones[k − 1] shows game.drones[k]), built on demand.
     this.drone = this._makeDrone(0);
     this.extraDrones = [];
   }
 
   _makeDrone(i) {
-    const d = this.kit.buildDrone(droneBand(i));
+    const d = this.kit.buildBot(droneBand(i));
     this.scene.add(d.root);
     this.scene.add(d.shadow);
     return {
@@ -100,12 +99,15 @@ export class FarmScene {
       index: i,
       x: 0,
       z: 0,
+      rx: 0, // last frame (wheel roll)
+      rz: 0,
       tx: null,
       ty: null,
       yawAngle: 0,
       flips: null,
       flipStart: -1,
       flipDur: 0.6,
+      status: null,
     };
   }
 
@@ -402,10 +404,10 @@ export class FarmScene {
   // ---------- per frame ----------
 
   /**
-   * Per-frame animation. `paused` freezes growth and the drone (pops still
-   * finish). Returns true while something is moving (a render is needed).
+   * Per-frame animation. `paused` freezes growth and the bots (pops still
+   * finish). `status` (idle / running / error / …) sets the bots' lights. Returns true while something is moving (a render is needed).
    */
-  update(dt, { paused = false, moveMs = 150 } = {}) {
+  update(dt, { paused = false, moveMs = 150, status = "idle" } = {}) {
     const game = this.game;
     if (!game) return false;
     dt = Math.min(dt, 0.1);
@@ -456,6 +458,7 @@ export class FarmScene {
 
     if (this._updateDino(dt, paused)) moving = true;
     if (this._updateDrones(dt, paused, moveMs)) moving = true;
+    if (this._updateLights(paused ? "paused" : status)) moving = true;
     return moving;
   }
 
@@ -472,6 +475,18 @@ export class FarmScene {
       if (this._updateDrone(this.extraDrones[k - 1], list[k], dt, paused, moveMs)) moving = true;
     }
     return moving;
+  }
+
+  /** Status light of every bot. Returns true when a colour changed. */
+  _updateLights(status) {
+    let changed = false;
+    for (const d of this.droneRecs) {
+      if (d.status === status) continue;
+      d.status = status;
+      d.setStatus(status);
+      changed = true;
+    }
+    return changed;
   }
 
   _updateDrone(d, drone, dt, paused, moveMs) {
@@ -508,34 +523,42 @@ export class FarmScene {
       d.flipStart = this.animT;
       d.flipDur = Math.max(0.08, flipMs / 1000);
     }
-    let flipAngle = 0;
-    let flipLift = 0;
+    let spinAngle = 0;
+    let hop = 0;
     if (d.flipStart >= 0) {
       const u = (this.animT - d.flipStart) / d.flipDur;
       if (u >= 1) d.flipStart = -1;
       else {
         const e = u < 0.5 ? 2 * u * u : 1 - Math.pow(-2 * u + 2, 2) / 2;
-        flipAngle = e * Math.PI * 2;
-        flipLift = Math.sin(u * Math.PI) * 0.25;
+        spinAngle = e * Math.PI * 2;
+        hop = Math.sin(u * Math.PI) * 0.06;
         moving = true;
       }
     }
 
-    // Helpers bob out of phase with drone 0, so a stack on one tile still reads as several.
-    const bob = Math.sin(this.animT * 3.4 + d.index * 1.9) * 0.045;
-    // ~1.2 tiles wide on normal farms (like the reference), smaller on tiny ones.
-    const scale = n <= 2 ? 0.62 : Math.min(1.45, 0.95 + 0.07 * n);
-    d.root.position.set(d.x, HOVER + bob + flipLift, d.z);
+    // Idling engine: a tiny suspension bounce, out of phase between bots.
+    const bob = Math.abs(Math.sin(this.animT * 3.4 + d.index * 1.9)) * 0.018;
+    // The wheels stand near the tile's corners on normal farms.
+    const scale = n <= 2 ? 1.05 : Math.min(1.4, 1.05 + 0.04 * n);
+    // Bots sharing a tile stand a little apart, so a stack still reads as several.
+    const off = d.index ? 0.07 : 0;
+    const ang = d.index * 2.4;
+    const px = d.x + Math.cos(ang) * off;
+    const pz = d.z + Math.sin(ang) * off;
+    d.root.position.set(px, bob + hop, pz);
     d.root.scale.setScalar(scale);
     d.yaw.rotation.y = d.yawAngle;
-    d.flip.rotation.x = flipAngle;
-    d.shadow.position.set(d.x, 0.016, d.z);
-    const sh = (1 - bob * 2.2 - flipLift * 0.8) * scale;
-    d.shadow.scale.set(sh, 1, sh);
+    d.spin.rotation.y = spinAngle;
+    d.shadow.position.set(px, 0.016, pz);
+    d.shadow.scale.set(scale, 1, scale);
     if (!paused) {
-      for (let k = 0; k < d.rotors.length; k++) d.rotors[k].rotation.y += dt * (k % 2 ? -26 : 26);
+      // Roll with the distance covered (wheel radius 0.085 at scale 1).
+      const roll = Math.hypot(d.x - d.rx, d.z - d.rz) / (0.085 * scale);
+      if (roll > 0 && roll < 20) for (const w of d.wheels) w.rotation.x += roll;
       moving = true;
     }
+    d.rx = d.x;
+    d.rz = d.z;
     return moving;
   }
 

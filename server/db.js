@@ -1,4 +1,4 @@
-// JS Farmer Online — SQLite storage (one file, default server/data/farmer-online.db).
+// Semicolon Acres Online — SQLite storage (one file, default server/data/farmer-online.db).
 // Uses the built-in `node:sqlite` (Node ≥ 22.5); falls back to `better-sqlite3`
 // if this runtime has no node:sqlite and that package is installed. Only the
 // API subset both share is used: exec(), prepare().run/get/all with `?` params.

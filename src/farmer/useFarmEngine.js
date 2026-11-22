@@ -1,6 +1,7 @@
 // React glue for the farm: world state, real-time game loop, code runtime,
 // log buffering and persistence (localStorage key `farmer_save_v1`).
 import { useCallback, useEffect, useRef, useState } from "react";
+import { UNLOCK_BY_ID } from "./constants.js";
 import * as W from "./world.js";
 import { createRuntime } from "./runtime.js";
 import { createDemoGame, isDemoHash } from "./demo.js";
@@ -218,7 +219,7 @@ export default function useFarmEngine() {
     if (typeof window !== "undefined" && isDemoHash(window.location.hash)) {
       window.history.replaceState(null, "", "#/farmer");
     }
-    pushLog("info", "Left the demo farm, back to your saved farm.");
+    pushLog("info", "Back on your own farm.");
     return true;
   }, [pushLog]);
 
@@ -332,7 +333,7 @@ export default function useFarmEngine() {
       exitDemo();
       const res = W.buyUnlock(gameRef.current, id);
       if (res.ok) {
-        pushLog("info", `🔓 ${id} → level ${gameRef.current.unlocks[id]}`);
+        pushLog("info", `🔧 ${UNLOCK_BY_ID[id].name} → level ${gameRef.current.unlocks[id]}`);
         save();
       } else if (res.msg) {
         pushLog("warn", res.msg);

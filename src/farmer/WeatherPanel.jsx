@@ -21,10 +21,10 @@ import {
 const sameOrNull = (a, b) => (a === null || b === null ? a === b : sameFields(a, b));
 
 const WEATHER_EFFECT_TEXT = {
-  Sunny: "Normal growth and evaporation.",
-  Rain: `Soil tiles slowly gain water (+${RAIN_WATER_PER_SEC}/s, net +${(RAIN_WATER_PER_SEC - WATER_DECAY_PER_SEC).toFixed(2)}/s after evaporation).`,
-  Storm: `Growth ×${STORM_GROWTH}, but lightning strikes ${STORM_STRIKES}× per storm, destroying 1–${STORM_MAX_TILES} crops each time (the ground stays).`,
-  Drought: `Water evaporates ${DROUGHT_EVAPORATION}× faster; growth ×${DROUGHT_DRY_GROWTH} on tiles with water < ${DROUGHT_WET_WATER}.`,
+  Sunny: "Nothing special.",
+  Rain: `Soil soaks up water (+${RAIN_WATER_PER_SEC}/s, net +${(RAIN_WATER_PER_SEC - WATER_DECAY_PER_SEC).toFixed(2)}/s after drying).`,
+  Storm: `Growth ×${STORM_GROWTH}, but ${STORM_STRIKES} lightning strikes per storm take 1–${STORM_MAX_TILES} plants each (the ground is unharmed).`,
+  Drought: `Tiles dry ${DROUGHT_EVAPORATION}× faster; growth ×${DROUGHT_DRY_GROWTH} on tiles below ${DROUGHT_WET_WATER} water.`,
 };
 
 export default function WeatherPanel({ game }) {
@@ -43,7 +43,7 @@ export default function WeatherPanel({ game }) {
               <div className="text-gray-400">{WEATHER_EFFECT_TEXT[f.now]}</div>
             </div>
           </div>
-          <div className="rounded border border-gray-800 bg-[#1d1d1d] px-3 py-2">
+          <div className="rounded border border-gray-800 bg-[#33273d] px-3 py-2">
             <div className="text-[11px] uppercase tracking-wider font-semibold text-gray-500 mb-1">Forecast (approximate)</div>
             <div className="text-gray-200">
               Next: {WEATHER_ICONS[f.next]} {f.next}

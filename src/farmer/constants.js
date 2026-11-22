@@ -1,4 +1,4 @@
-// JS Farmer — game constants and data tables.
+// Semicolon Acres — game constants and data tables.
 // Pure data, no DOM dependencies (imported by node tests too).
 
 export const Entities = Object.freeze({
@@ -161,7 +161,7 @@ export const ENTITY_INFO = {
   Dead_Rice: { icon: "🌾", growTime: 0, unlock: null, soil: true, cost: null },
 };
 
-// World sizes per Expand level (TFWR-like progression, max 12×12).
+// World sizes per Expand level (max 12×12).
 export const WORLD_SIZES = [1, 2, 3, 4, 5, 6, 7, 8, 10, 12];
 
 // Tuning knobs.
@@ -187,24 +187,25 @@ export const appleCap = (size) => Math.max(1, Math.floor((size * size) / 16));
 
 const scale = (base, factor, level) => Math.round(base * factor ** level);
 
-// UNLOCKS — single data-driven table.
+// UNLOCKS — single data-driven table. `id` is what programs, saves and the
+// server use (never rename it); `name` and `desc` are what the Workshop shows.
 // cost(level) returns the cost to go from `level` to `level + 1`.
 // requires: other unlock id that must be at level ≥ 1 first.
 export const UNLOCKS = [
   {
     id: "Speed",
-    name: "Speed",
+    name: "Overclock",
     icon: "⏩",
-    desc: "Each level doubles drone execution speed.",
+    desc: "A faster clock for the whole crew: every level doubles the bots' pace.",
     requires: null,
     maxLevel: 5,
     cost: (l) => ({ Hay: scale(20, 3, l) }),
   },
   {
     id: "Expand",
-    name: "Expand",
+    name: "New Acres",
     icon: "🗺️",
-    desc: "Grows the farm (1→2→3→4→5→6→7→8→10→12). Clears the farm.",
+    desc: "Buy the land next door. Farm side: 1→2→3→4→5→6→7→8→10→12. The surveyors flatten everything that was growing.",
     requires: null,
     maxLevel: WORLD_SIZES.length - 1,
     cost: (l) =>
@@ -222,36 +223,36 @@ export const UNLOCKS = [
   },
   {
     id: "Plant",
-    name: "Plant",
+    name: "Seed Hopper",
     icon: "🌿",
-    desc: "Unlocks plant() and Bushes (→ Wood).",
+    desc: "Fits the bot with a planter: plant(), and Bushes to cut for Wood.",
     requires: null,
     maxLevel: 1,
     cost: () => ({ Hay: 10 }),
   },
   {
     id: "Senses",
-    name: "Senses",
+    name: "Sensor Mast",
     icon: "👁️",
-    desc: "Unlocks can_harvest(), get_entity_type(), get_ground_type(), get_pos_x/y(), measure(), get_water().",
+    desc: "Lets programs look around: can_harvest(), get_entity_type(), get_ground_type(), get_pos_x/y(), measure(), get_water().",
     requires: null,
     maxLevel: 1,
     cost: () => ({ Hay: 15 }),
   },
   {
     id: "Grass",
-    name: "Grass",
+    name: "Meadow Mix",
     icon: "🌾",
-    desc: "Hay yield ×(level + 1).",
+    desc: "Denser grass. Each cut brings ×(level + 1) Hay.",
     requires: "Plant",
     maxLevel: 5,
     cost: (l) => ({ Hay: scale(40, 3, l) }),
   },
   {
     id: "Carrots",
-    name: "Carrots",
+    name: "Plough Blade",
     icon: "🥕",
-    desc: "Unlocks till() and Carrots (Soil, seed: 1 Wood + 1 Hay). Carrot yield ×level.",
+    desc: "till() opens Soil, and Carrots go in it (seed: 1 Wood + 1 Hay). Carrot yield ×level.",
     requires: "Plant",
     maxLevel: 5,
     cost: (l) =>
@@ -261,9 +262,9 @@ export const UNLOCKS = [
   },
   {
     id: "Trees",
-    name: "Trees",
+    name: "Woodlot",
     icon: "🌳",
-    desc: "Unlocks Trees (5 Wood, grow 2× slower per adjacent tree). Wood yield ×level.",
+    desc: "Trees give 5 Wood each, but every tree standing right next door doubles the growing time. Wood yield ×level.",
     requires: "Carrots",
     maxLevel: 5,
     cost: (l) =>
@@ -273,18 +274,18 @@ export const UNLOCKS = [
   },
   {
     id: "Watering",
-    name: "Watering",
+    name: "Rain Barrel",
     icon: "💧",
-    desc: "Water tank: +1 Water every 10s/level, cap 5 + 5×level. use_item(Items.Water) speeds growth.",
+    desc: "Collects 1 Water every 10 s per level, up to 5 + 5×level. Pour it with use_item(Items.Water): wet tiles grow faster.",
     requires: "Carrots",
     maxLevel: 3,
     cost: (l) => ({ Wood: scale(100, 3, l), Carrot: scale(50, 3, l) }),
   },
   {
     id: "Pumpkins",
-    name: "Pumpkins",
+    name: "Pumpkin Patch",
     icon: "🎃",
-    desc: "Unlocks Pumpkins (Soil, seed: 1 Carrot). k×k squares yield k³. Yield ×level.",
+    desc: "Pumpkins for Soil (seed: 1 Carrot). Ripe ones in a solid k×k block fuse and pay k³. Yield ×level.",
     requires: "Carrots",
     maxLevel: 5,
     cost: (l) =>
@@ -294,36 +295,36 @@ export const UNLOCKS = [
   },
   {
     id: "Sunflowers",
-    name: "Sunflowers",
+    name: "Sunflower Chargers",
     icon: "🌻",
-    desc: "Unlocks Sunflowers (Soil, seed: 1 Carrot) → Power (actions 2× faster).",
+    desc: "Sunflowers for Soil (seed: 1 Carrot) turn daylight into Power, and a powered action takes half the time.",
     requires: "Pumpkins",
     maxLevel: 1,
     cost: () => ({ Pumpkin: 100 }),
   },
   {
     id: "Fertilizer",
-    name: "Fertilizer",
+    name: "Compost Press",
     icon: "🧪",
-    desc: "trade(Items.Fertilizer) for 1 Pumpkin; use_item() skips 2s of growth.",
+    desc: "The market sells Fertilizer: trade(Items.Fertilizer), 1 Pumpkin each. One dose is worth 2 s of growth.",
     requires: "Pumpkins",
     maxLevel: 1,
     cost: () => ({ Pumpkin: 100 }),
   },
   {
     id: "Rice",
-    name: "Rice",
+    name: "Flooded Paddy",
     icon: "🌾",
-    desc: "Unlocks Rice (Soil with water ≥ 0.5, seed: 1 Carrot): 3 Rice per plant, 5 at level 2 (and 1.5× faster growth). Kept dry (water < 0.2) for 20 s it withers. trade(Items.Rice) sells 1 Rice for 2 Gold.",
+    desc: "Rice for wet Soil (water ≥ 0.5, seed: 1 Carrot): 3 per plant, 5 at level 2, which also ripens 1.5× faster. 20 s below 0.2 water ruins it. trade(Items.Rice) pays 2 Gold each.",
     requires: "Pumpkins",
     maxLevel: 2,
     cost: (l) => (l === 0 ? { Pumpkin: 1500, Carrot: 500 } : { Pumpkin: 3000, Gold: 150 }),
   },
   {
     id: "Cactus",
-    name: "Cactus",
+    name: "Cactus Bench",
     icon: "🌵",
-    desc: "Unlocks Cactus (Soil, seed: 1 Pumpkin) and swap(). Sorted farm yields n². Yield ×level.",
+    desc: "Cactus for Soil (seed: 1 Pumpkin), and swap() to rearrange it. In perfect size order n plants pay n². Yield ×level.",
     requires: "Pumpkins",
     maxLevel: 3,
     cost: (l) =>
@@ -333,9 +334,9 @@ export const UNLOCKS = [
   },
   {
     id: "Mazes",
-    name: "Mazes",
+    name: "Hedge Labyrinth",
     icon: "🧩",
-    desc: "use_item(Items.Fertilizer) on a grown Bush turns the farm into a hedge maze. Harvest the treasure → Gold (farm tiles × level).",
+    desc: "Fertilizer on a full-grown Bush sends hedges over the whole farm. Find the treasure inside: Gold = farm tiles × level.",
     requires: "Cactus",
     maxLevel: 3,
     cost: (l) =>
@@ -345,9 +346,9 @@ export const UNLOCKS = [
   },
   {
     id: "Dinosaurs",
-    name: "Dinosaurs",
+    name: "Dinosaur Egg",
     icon: "🦕",
-    desc: "plant(Entities.Dinosaur) (10 Gold) hatches a dinosaur that roams and eats apples to grow. Harvest a segment → Bone = (segments cut off)² × level.",
+    desc: "plant(Entities.Dinosaur) for 10 Gold. It wanders, eats apples and gets longer; cut it anywhere for Bone = (segments cut)² × level.",
     requires: "Mazes",
     maxLevel: 3,
     cost: (l) =>
@@ -357,9 +358,9 @@ export const UNLOCKS = [
   },
   {
     id: "Megafarm",
-    name: "Megafarm",
+    name: "Bot Crew",
     icon: "🏭",
-    desc: "spawn_drone() starts a helper drone on your tile running the same program from the top. Up to farm-size drones (12 on 12×12), all sharing the farm and inventory.",
+    desc: "spawn_bot() puts another bot on your tile with the same program. One per farm column at most (12 on 12×12), sharing one farm and one store room.",
     requires: "Dinosaurs",
     maxLevel: 1,
     cost: () => ({ Bone: 2000, Gold: 1500 }),
@@ -369,7 +370,7 @@ export const UNLOCKS = [
 // Every planned unlock is implemented (the "Coming in v2" rows are gone).
 export const FUTURE_UNLOCKS = [];
 
-/** Megafarm drone cap: one drone per farm column (the farm's side length), at least 1. */
+/** Megafarm cap: one bot per farm column (the farm's side length), at least 1. */
 export const maxDrones = (size) => Math.max(1, Math.floor(size) || 0);
 
 export const UNLOCK_BY_ID = Object.fromEntries(UNLOCKS.map((u) => [u.id, u]));

@@ -15,147 +15,152 @@ type GroundType = keyof typeof Grounds;
 type UnlockType = keyof typeof Unlocks;
 
 /**
- * Entity types that can be on a tile. Hedge / Treasure only appear in a maze;
- * every tile of the dinosaur's body is a Dinosaur; Apples spawn while it lives.
- * Dead_Pumpkin / Dead_Rice are spoiled crops: harvest() just clears them.
+ * Everything that can stand on a tile. Hedge and Treasure exist only inside a
+ * maze, each tile of the dinosaur reads as Dinosaur, and Apples turn up while
+ * a dinosaur is alive. Dead_Pumpkin / Dead_Rice are spoiled: harvest() clears them.
  */
 declare const Entities: {
 ${names(Entities)}
 };
-/** Inventory items. */
+/** What the store room can hold. */
 declare const Items: {
 ${names(Items)}
 };
-/** Ground types. till() toggles between them. */
+/** The two kinds of ground. till() switches a tile from one to the other. */
 declare const Grounds: {
 ${names(Grounds)}
 };
-/** Upgrades you can buy in the Unlocks tab or with unlock(). */
+/** Upgrade ids for unlock(), get_cost() and num_unlocked(). The Workshop window sells the same upgrades. */
 declare const Unlocks: {
 ${names(Unlocks)}
 };
 
-/** Direction: y + 1 (up on screen). */
+/** One tile up the screen: y + 1. */
 declare const North: "North";
-/** Direction: x + 1 (right). */
+/** One tile to the right: x + 1. */
 declare const East: "East";
-/** Direction: y - 1 (down on screen). */
+/** One tile down the screen: y - 1. */
 declare const South: "South";
-/** Direction: x - 1 (left). */
+/** One tile to the left: x - 1. */
 declare const West: "West";
 
-// ---------- actions (take time, auto-awaited) ----------
+// ---------- actions (they take time; the await is added for you) ----------
 
 /**
- * Harvest the entity under the drone. Ripe plants add their yield to your
- * inventory; unripe plants are destroyed (unripe grass is left alone).
- * On the maze Treasure: Gold = farm tiles × Mazes level, and the maze is removed.
- * On a Dinosaur segment: that segment and the whole tail behind it are cut off
- * → Bone = (segments removed)² × Dinosaurs level (the head takes it all).
- * Apples can't be harvested (false). Takes 200 ticks.
- * @returns true if there was something to harvest.
+ * Gather whatever grows on the bot's tile. A ripe plant goes into the store
+ * room; an unripe one is lost (young grass is spared).
+ * Maze Treasure: pays Gold = farm tiles × Mazes level, then the maze is gone.
+ * Dinosaur: cuts this segment and all the tail behind it
+ * → Bone = (segments cut)² × Dinosaurs level (from the head: all of it).
+ * Apples stay where they are (false). Costs 200 ticks.
+ * @returns true when there was something to gather.
  */
 declare function harvest(): boolean;
 /**
- * Plant an entity under the drone. Needs the Plant unlock plus the entity's own
- * unlock; Carrots/Pumpkins/Sunflowers/Cactus/Rice need Soil. Seed cost is paid
- * automatically (see get_cost). Planting over Grass replaces it.
- * Entities.Rice (Rice unlock, 1 Carrot) also needs the tile's water ≥ 0.5.
- * Growing rice stops on a tile with water < 0.2 and withers into Dead_Rice
- * after more than 200 dry world ticks in a row (20 s). Ripe: 3 Rice (5 at L2).
- * Entities.Dinosaur (Dinosaurs unlock, 10 Gold) hatches a length-1 dinosaur
- * that roams by itself and grows by eating apples. One per farm. 200 ticks.
+ * Put a plant on the bot's tile. Needs the Plant upgrade and the plant's own.
+ * Carrots, Pumpkins, Sunflowers, Cactus and Rice want Soil. The seed is paid
+ * for on the spot (see get_cost). Grass on the tile makes room.
+ * Entities.Rice (Rice upgrade, 1 Carrot): the tile's water must be ≥ 0.5.
+ * Below 0.2 it stops growing, and more than 200 dry world ticks in a row
+ * (20 s) turn it into Dead_Rice. Ripe: 3 Rice (5 at level 2).
+ * Entities.Dinosaur (Dinosaurs upgrade, 10 Gold): a dinosaur one tile long. It
+ * wanders on its own and gets longer with each apple. One per farm. 200 ticks.
  */
 declare function plant(entity: EntityType): boolean;
 /**
- * Move one tile. Wraps around the edges of the farm. Hedges are walls: moving
- * into one returns false and the drone stays. Inside a maze the farm edge is a
- * wall too (no wrap). 200 ticks.
+ * Drive one tile. Leaving one side of the farm enters on the opposite side. A
+ * Hedge stops the bot: it stays put and you get false. Inside a maze the farm
+ * edge stops it too. 200 ticks.
  */
 declare function move(direction: Direction): boolean;
-/** Could move(direction) succeed? Always true in an open field; false into a Hedge or across a maze's edge. */
+/** Is the way free? On the open farm always; not into a Hedge or over a maze's outer edge. */
 declare function can_move(direction: Direction): boolean;
-/** Toggle Grassland ⇄ Soil under the drone and remove its entity. Needs Carrots. Fails inside a maze and on the dinosaur / an apple. 200 ticks. */
+/** Turn Grassland into Soil or back; whatever stood on the tile is removed. Needs Carrots. Not inside a maze, not on the dinosaur or an apple. 200 ticks. */
 declare function till(): boolean;
-/** Reset every tile to empty Grassland (also removes a maze and the dinosaur) and move the drone to (0, 0). 200 ticks. */
+/** Start over with a bare Grassland farm (a maze or dinosaur goes too) and bring this bot to (0, 0). 200 ticks. */
 declare function clear(): boolean;
 /**
- * Swap the entity under the drone with its neighbour (growth, petals, size move
- * with it). Does not wrap: false at the edge. Needs Cactus. Fails inside a maze
- * and when either tile is the dinosaur or an apple. 200 ticks.
+ * Trade places between this tile's plant and the neighbour's; growth, petals
+ * and size travel along. Never across the farm edge (false). Needs Cactus. Not
+ * inside a maze, not with the dinosaur or an apple. 200 ticks.
  */
 declare function swap(direction: Direction): boolean;
 /**
- * Use an item on the tile under the drone.
- * Items.Water: +0.25 water (growth ×(1 + 4×water)).
- * Items.Fertilizer: skip 2 s of growth per item. On a fully grown Bush with
- * Mazes unlocked it instead turns the whole farm into a hedge maze (the
- * dinosaur and its apples disappear with the old farm).
+ * Apply items to the bot's tile.
+ * Items.Water: +0.25 water each (growth ×(1 + 4×water)).
+ * Items.Fertilizer: 2 s of growth each. On a full-grown Bush, with Mazes, it
+ * grows a hedge maze over the entire farm instead (a dinosaur and its apples
+ * vanish with the old field).
  */
 declare function use_item(item: ItemType, n?: number): boolean;
 /**
- * Trade n times. Buy: Items.Fertilizer costs 1 Pumpkin, Items.Water costs 1
- * Carrot. Sell: Items.Rice pays 2 Gold per Rice (Rice unlock).
- * Fails inside a maze. 200 ticks.
+ * Deal with the market n times. It sells Fertilizer (1 Pumpkin) and Water
+ * (1 Carrot), and buys Items.Rice for 2 Gold each (Rice upgrade).
+ * Closed while you are in a maze. 200 ticks.
  */
 declare function trade(item: ItemType, n?: number): boolean;
-/** Buy the next level of an unlock, if affordable. 200 ticks. */
+/** Buy the next level of an upgrade if the store room covers it. 200 ticks. */
 declare function unlock(unlock: UnlockType): boolean;
-/** The drone does a flip. 600 ticks. Purely for style. */
+/** The bot turns once around itself. 600 ticks: a handy way to wait. */
+declare function spin_in_place(): boolean;
+/** Same as spin_in_place(). */
 declare function do_a_flip(): boolean;
 
-// ---------- senses (instant, 1 tick) ----------
+// ---------- sensors (no waiting, 1 tick) ----------
 
-/** true if the entity under the drone is fully grown (a dinosaur always is; an apple never). Needs Senses. */
+/** Is the plant here full-grown? (The dinosaur always counts, an apple never does.) Needs Senses. */
 declare function can_harvest(): boolean | null;
-/** Type of the entity under the drone, or null. Needs Senses. */
+/** What stands on this tile, or null. Needs Senses. */
 declare function get_entity_type(): EntityType | null;
-/** Ground type under the drone. Needs Senses. */
+/** Grassland or Soil? Needs Senses. */
 declare function get_ground_type(): GroundType | null;
-/** Drone x position (0 = West edge). Needs Senses. */
+/** The bot's column; 0 is the West edge. Needs Senses. */
 declare function get_pos_x(): number | null;
-/** Drone y position (0 = South edge). Needs Senses. */
+/** The bot's row; 0 is the South edge. Needs Senses. */
 declare function get_pos_y(): number | null;
-/** Water level 0…1 under the drone. Needs Senses. */
+/** How wet this tile is, 0…1. Needs Senses. */
 declare function get_water(): number | null;
 /**
- * Sunflower petals (7–15) or cactus size (0–9) under the drone, or of the
- * neighbour in \`direction\`. null for anything else. Needs Senses.
- * Inside a maze: the Direction of the Treasure from here (or from the
- * neighbour): the axis with the larger distance wins, ties go East/West;
- * null on the Treasure itself.
+ * A Sunflower's petals (7–15) or a Cactus's size (0–9), here or one tile over
+ * in \`direction\`; null for other plants. Needs Senses.
+ * Inside a maze: the Direction towards the Treasure from that tile. The longer
+ * axis decides and a tie goes East/West; null on the Treasure.
  */
 declare function measure(direction?: Direction): number | Direction | null;
-/** Side length of the square farm. */
+/** Tiles along one side of the farm. */
 declare function get_world_size(): number;
-/** How many of an item you have. */
+/** How much of an item is in the store room. */
 declare function num_items(item: ItemType): number;
 /**
- * Cost of the next level of an unlock, or the seed cost of an entity, e.g.
- * { Wood: 1, Hay: 1 }. null if maxed / free. Shared names (Cactus, Grass,
- * Rice) resolve to the unlock.
+ * Price of an upgrade's next level, or of one seed, e.g. { Wood: 1, Hay: 1 }.
+ * null when there is none. Cactus, Grass and Rice mean the upgrade.
  */
 declare function get_cost(thing: UnlockType | EntityType): Partial<Record<ItemType, number>> | null;
-/** Current level of an unlock (0 = locked). Entities map to their unlock. */
+/** Level of an upgrade, 0 = not bought. For a plant: the upgrade it belongs to. */
 declare function num_unlocked(thing: UnlockType | EntityType): number;
-/** Seconds since this run started (the same clock for every drone). */
+/** Seconds since Run was pressed; every bot reads the same clock. */
 declare function get_time(): number;
-/** Ticks used by this drone in this run (actions 200, flips 600, senses 1). */
+/** Ticks this bot has used in this run (an action 200, a spin 600, a sensor 1). */
 declare function get_tick_count(): number;
 
-// ---------- Megafarm ----------
+// ---------- Megafarm: a crew of bots ----------
 
 /**
- * Megafarm: spawn a new drone on this drone's tile. The new drone runs THIS
- * SAME program from the top, at the same time as the others, sharing the farm
- * and the inventory. Every function acts on the drone that calls it.
- * Returns false when Megafarm is locked or max_drones() drones already exist.
- * Takes 200 ticks.
+ * Put one more bot on this tile (Megafarm upgrade). It runs THIS SAME program
+ * from its first line, side by side with the rest of the crew; farm and store
+ * room are shared, and each call acts on the bot that makes it.
+ * false without Megafarm or when max_bots() are out already. 200 ticks.
  */
+declare function spawn_bot(): boolean;
+/** Bots on the farm right now (1 without Megafarm). */
+declare function num_bots(): number;
+/** Most bots allowed: one per farm column with Megafarm (12 on 12×12), else 1. */
+declare function max_bots(): number;
+/** Same as spawn_bot(). */
 declare function spawn_drone(): boolean;
-/** How many drones are on the farm (1 without Megafarm). */
+/** Same as num_bots(). */
 declare function num_drones(): number;
-/** The drone cap: the farm's side length once Megafarm is unlocked (12 on 12×12), else 1. */
+/** Same as max_bots(). */
 declare function max_drones(): number;
 
 // ---------- contracts ----------
@@ -177,9 +182,9 @@ interface Contract {
   status: "active" | "done" | "expired";
 }
 /**
- * Today's 3 daily contracts (same for every player on the same date, with the
- * same unlocks and farm size). The deadline counts down on the farm clock:
- * the ticks your programs spend (actions 200, senses 1). 1 tick.
+ * The 3 orders of the day. Players with the same upgrades and farm size get
+ * the same ones. Deadlines run on the farm clock: the ticks your programs use
+ * (actions 200, sensors 1). 1 tick.
  */
 declare function get_contracts(): Contract[];
 /**
@@ -219,7 +224,7 @@ declare function get_forecast(): { next: WeatherType; inTicks: number } | null;
 
 // ---------- output ----------
 
-/** Print to the log panel. */
+/** Write a line to the Output tab. */
 declare function print(...values: any[]): void;
 /** Same as print. */
 declare function quick_print(...values: any[]): void;
@@ -245,6 +250,7 @@ export const FARMER_GLOBALS = Object.fromEntries(
     "use_item",
     "trade",
     "unlock",
+    "spin_in_place",
     "do_a_flip",
     "can_harvest",
     "get_entity_type",
@@ -259,6 +265,9 @@ export const FARMER_GLOBALS = Object.fromEntries(
     "num_unlocked",
     "get_time",
     "get_tick_count",
+    "spawn_bot",
+    "num_bots",
+    "max_bots",
     "spawn_drone",
     "num_drones",
     "max_drones",

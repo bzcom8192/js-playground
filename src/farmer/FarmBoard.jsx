@@ -1,17 +1,18 @@
-// The farm board: a thick earth slab tilted in perspective, with lush,
-// slightly oversized crops, giant pumpkins for k×k groups and a hovering drone.
+// The 2D farm board (fallback without WebGL): a planter box tilted in
+// perspective, with slightly oversized crops, one big pumpkin per k×k group
+// and the field bots standing over their tiles.
 // Original art: emoji + CSS + small inline SVGs.
 import { memo, useEffect, useId, useRef, useState } from "react";
 import { findGiantPumpkins } from "./boardModel.js";
-import { DRONE_BAND_0, droneBand } from "./droneBands.js";
+import { DRONE_BAND_0, droneBand, statusLight } from "./droneBands.js";
 
 // ---------- small inline SVG art ----------
 
 export function PumpkinSvg({ dead = false, className = "", style }) {
   const id = useId().replace(/:/g, "");
   const [c0, c1, line, stem] = dead
-    ? ["#b9b4a8", "#7d776c", "#5e594f", "#5b5546"]
-    : ["#ffc25a", "#e5791a", "#b4560d", "#5d7a22"];
+    ? ["#b5adb8", "#776f7d", "#5a5260", "#4f4854"]
+    : ["#f3b8a5", "#bf6470", "#8e4250", "#3f7a5c"];
   return (
     <svg viewBox="0 0 100 82" className={className} style={style} aria-hidden="true">
       <defs>
@@ -36,40 +37,35 @@ export function PumpkinSvg({ dead = false, className = "", style }) {
   );
 }
 
-function DroneSvg({ band = DRONE_BAND_0 }) {
-  const id = useId().replace(/:/g, "");
+function BotSvg({ band = DRONE_BAND_0, status = "idle" }) {
   return (
-    <svg viewBox="0 0 120 92" className="w-full h-auto overflow-visible" aria-hidden="true">
-      <defs>
-        <radialGradient id={`db${id}`} cx="38%" cy="32%" r="75%">
-          <stop offset="0" stopColor="#ffd27a" />
-          <stop offset=".55" stopColor="#f39a2b" />
-          <stop offset="1" stopColor="#c8650f" />
-        </radialGradient>
-      </defs>
-      {/* arms */}
-      <path d="M16 44 L46 52 M104 44 L74 52" stroke="#4b4f55" strokeWidth="5" strokeLinecap="round" />
-      {/* propellers (spin via CSS) */}
-      {[16, 104].map((cx) => (
+    <svg viewBox="0 0 120 110" className="w-full h-auto overflow-visible" aria-hidden="true">
+      {/* far legs, then near legs on wheels */}
+      <path d="M36 58 V88 M84 58 V88" stroke="#b9a996" strokeWidth="5" />
+      <path d="M22 56 V96 M98 56 V96" stroke="#f6ead6" strokeWidth="7" />
+      <path d="M16 56 H104" stroke="#3a2c44" strokeWidth="6" strokeLinecap="round" />
+      {[22, 98].map((cx) => (
         <g key={cx}>
-          <rect x={cx - 3} y="38" width="6" height="8" rx="2" fill="#3a3d42" />
-          <g className="farmer-prop">
-            <rect x={cx - 17} y="35" width="34" height="4" rx="2" fill="#2f3237" opacity=".85" />
-          </g>
+          <circle cx={cx} cy="97" r="11" fill="#2a2130" />
+          <circle cx={cx} cy="97" r="4" fill="#f0b03f" />
         </g>
       ))}
-      {/* body */}
-      <circle cx="60" cy="58" r="25" fill={`url(#db${id})`} stroke="#a85410" strokeWidth="1.5" />
-      <path d="M48 36 C42 48 42 68 48 80 M72 36 C78 48 78 68 72 80 M60 33 L60 83" stroke="#c4640f" strokeWidth="1.4" fill="none" opacity=".7" />
-      {/* eyes */}
-      <circle cx="52" cy="58" r="3" fill="#3a2410" />
-      <circle cx="68" cy="58" r="3" fill="#3a2410" />
-      <circle cx="53" cy="57" r="1" fill="#fff" />
-      <circle cx="69" cy="57" r="1" fill="#fff" />
-      {/* straw hat */}
-      <ellipse cx="60" cy="36" rx="30" ry="7" fill="#d9b25a" stroke="#a9842f" strokeWidth="1.2" />
-      <path d="M45 35 C45 21 75 21 75 35 Z" fill="#ecc96f" stroke="#a9842f" strokeWidth="1.2" />
-      <path d="M45.5 32 C52 34.5 68 34.5 74.5 32 L75 35 C68 37.5 52 37.5 45 35 Z" fill={band} />
+      {/* seed probe */}
+      <path d="M56 58 H64 L62 72 L60 79 L58 72 Z" fill="#f0b03f" />
+      {/* body + identity stripe */}
+      <rect x="30" y="24" width="60" height="34" rx="4" fill="#f6ead6" stroke="#3a2c44" strokeWidth="2" />
+      <rect x="28" y="30" width="64" height="8" rx="2" fill={band} />
+      {/* lens + grille */}
+      <rect x="38" y="41" width="26" height="14" rx="3" fill="#3a2c44" />
+      <circle cx="51" cy="48" r="6" fill="#7fe3ea" />
+      <circle cx="51" cy="48" r="2.6" fill="#16353d" />
+      <path d="M72 45 H83 M72 49 H83 M72 53 H83" stroke="#3a2c44" strokeWidth="1.6" />
+      {/* solar roof */}
+      <path d="M24 24 L32 10 H88 L96 24 Z" fill="#2f69a8" stroke="#3a2c44" strokeWidth="2.5" strokeLinejoin="round" />
+      <path d="M28 17 H92 M50 10 L47 24 M70 10 L73 24" stroke="#16304f" strokeWidth="1.6" />
+      {/* status mast */}
+      <path d="M90 12 V-6" stroke="#3a2c44" strokeWidth="2.5" />
+      <circle cx="90" cy="-9" r="6" fill={statusLight(status)} stroke="#3a2c44" strokeWidth="1.5" />
     </svg>
   );
 }
@@ -110,7 +106,7 @@ function Plant({ t, scale = 1, bottom = 0.14, z, children, className = "" }) {
 // Positions are relative to a t×t box whose bottom edge is the plant's base.
 const at = (t, x, b, extra = {}) => ({ left: t * x, bottom: t * b, ...extra });
 
-/** One dinosaur segment (2D): the head is 🦖 facing its way, body/tail are green blobs. */
+/** One dinosaur segment (2D): the head is 🦖 facing its way, body/tail are violet blobs. */
 function DinoSegment({ part, dir, t, z }) {
   if (part === "head") {
     // The emoji looks West; mirror it when heading East. North/South keep the side view.
@@ -132,7 +128,7 @@ function DinoSegment({ part, dir, t, z }) {
           ...at(t, (1 - w) / 2, 0.06),
           width: t * w,
           height: t * w * 0.72,
-          background: "radial-gradient(circle at 40% 30%, #8fd45a 0%, #4f9a2f 55%, #2f6b1d 100%)",
+          background: "radial-gradient(circle at 40% 30%, #b29ce0 0%, #8b6fc0 55%, #5a4390 100%)",
           boxShadow: "inset 0 -3px 0 rgba(0,0,0,.2), 0 2px 3px rgba(0,0,0,.3)",
         }}
       />
@@ -147,7 +143,7 @@ function DinoSegment({ part, dir, t, z }) {
               height: 0,
               borderLeft: `${t * 0.05}px solid transparent`,
               borderRight: `${t * 0.05}px solid transparent`,
-              borderBottom: `${t * 0.1}px solid #e9a23b`,
+              borderBottom: `${t * 0.1}px solid #ff9d7a`,
             }}
           />
         ))}
@@ -235,9 +231,9 @@ function Crop({ type, p, t, z, dinoPart, dinoDir }) {
     case "Sunflower":
       return (
         <Plant t={t} scale={grow} z={z} bottom={0.1}>
-          <span className="absolute rounded-full bg-[#4f8a24]" style={{ ...at(t, 0.47, 0), width: t * 0.07, height: t * 0.72 }} />
-          <span className="absolute rounded-[50%] bg-[#5f9e2c] rotate-[-35deg]" style={{ ...at(t, 0.28, 0.22), width: t * 0.22, height: t * 0.1 }} />
-          <span className="absolute rounded-[50%] bg-[#5f9e2c] rotate-[35deg]" style={{ ...at(t, 0.52, 0.32), width: t * 0.22, height: t * 0.1 }} />
+          <span className="absolute rounded-full bg-[#3a8a68]" style={{ ...at(t, 0.47, 0), width: t * 0.07, height: t * 0.72 }} />
+          <span className="absolute rounded-[50%] bg-[#4fa07c] rotate-[-35deg]" style={{ ...at(t, 0.28, 0.22), width: t * 0.22, height: t * 0.1 }} />
+          <span className="absolute rounded-[50%] bg-[#4fa07c] rotate-[35deg]" style={{ ...at(t, 0.52, 0.32), width: t * 0.22, height: t * 0.1 }} />
           <E size={t * 0.62} style={at(t, 0.19, 0.6)}>🌻</E>
         </Plant>
       );
@@ -281,8 +277,8 @@ function Crop({ type, p, t, z, dinoPart, dinoDir }) {
             inset: -1,
             bottom: t * 0.04,
             zIndex: z,
-            background: "linear-gradient(180deg, #3f8a30 0%, #2d6a22 45%, #1f4d17 100%)",
-            boxShadow: "inset 0 2px 0 rgba(160,220,120,.35), inset 0 -3px 0 rgba(0,0,0,.25), 0 3px 4px rgba(0,0,0,.3)",
+            background: "linear-gradient(180deg, #3c8078 0%, #2a5f5a 45%, #1d4743 100%)",
+            boxShadow: "inset 0 2px 0 rgba(170,225,205,.35), inset 0 -3px 0 rgba(0,0,0,.25), 0 3px 4px rgba(0,0,0,.3)",
             transform: `translateY(${-t * 0.12}px)`,
           }}
           title="Hedge"
@@ -317,11 +313,11 @@ const Tile = memo(function Tile({ ground, type, p, water, t, z, hideCrop, dinoPa
   );
 });
 
-// ---------- drones ----------
+// ---------- bots ----------
 
-// One hovering drone. Drone 0 is the original; Megafarm helpers (index ≥ 1)
-// get a coloured hat band and bob out of phase.
-function DroneSprite({ drone, index, n, t, step, moveMs, paused }) {
+// One field bot standing over its tile. Megafarm helpers (index ≥ 1) wear
+// their own stripe and idle out of phase.
+function BotSprite({ drone, index, n, t, step, moveMs, paused, status }) {
   const { x, y, flips = 0, flipMs = 600 } = drone;
   // No slide across a wrap-around jump.
   const [prevPos, setPrevPos] = useState({ x, y });
@@ -331,7 +327,7 @@ function DroneSprite({ drone, index, n, t, step, moveMs, paused }) {
     setPrevPos({ x, y });
   }
   const slide = jump ? "none" : `left ${moveMs}ms linear, top ${moveMs}ms linear`;
-  const droneW = Math.max(40, Math.min(110, t * 1.35));
+  const botW = Math.max(38, Math.min(110, t * 1.05));
   return (
     <div
       className="absolute pointer-events-none"
@@ -343,16 +339,13 @@ function DroneSprite({ drone, index, n, t, step, moveMs, paused }) {
         transition: slide,
         zIndex: 1000 + index,
       }}
-      aria-label={index ? `Drone ${index} at ${x}, ${y}` : `Drone at ${x}, ${y}`}
+      aria-label={index ? `Bot ${index} at ${x}, ${y}` : `Bot at ${x}, ${y}`}
     >
-      <div className={`farmer-drone-shadow ${paused ? "is-paused" : ""}`} style={{ width: Math.min(t * 0.6, droneW * 0.8), height: Math.min(t * 0.22, droneW * 0.3) }} />
-      <div
-        className="absolute"
-        style={{ left: t * 0.5 + Math.min(t * 0.14, droneW * 0.2), top: t * 0.5 - Math.min(t * 0.55, droneW * 0.8), width: droneW, marginLeft: -droneW / 2, marginTop: -droneW / 2 }}
-      >
-        <div className={`farmer-bob ${paused ? "is-paused" : ""}`} style={index ? { animationDelay: `${-index * 0.37}s` } : undefined}>
-          <div key={flips} className={flips ? "farmer-flip" : ""} style={{ animationDuration: `${Math.max(80, flipMs)}ms` }}>
-            <DroneSvg band={droneBand(index)} />
+      <div className="farmer-bot-shadow" style={{ width: botW * 0.85, height: botW * 0.2 }} />
+      <div className="absolute" style={{ left: t * 0.5 - botW / 2 + (index ? t * 0.06 : 0), bottom: t * 0.06, width: botW }}>
+        <div className={`farmer-idle ${paused ? "is-paused" : ""}`} style={index ? { animationDelay: `${-index * 0.37}s` } : undefined}>
+          <div key={flips} className={flips ? "farmer-spin" : ""} style={{ animationDuration: `${Math.max(80, flipMs)}ms` }}>
+            <BotSvg band={droneBand(index)} status={paused ? "paused" : status} />
           </div>
         </div>
       </div>
@@ -364,7 +357,7 @@ function DroneSprite({ drone, index, n, t, step, moveMs, paused }) {
 
 const TILT_DEG = 13;
 
-export default function FarmBoard({ game, moveMs, paused }) {
+export default function FarmBoard({ game, moveMs, paused, status }) {
   const wrapRef = useRef(null);
   const [areaPx, setAreaPx] = useState(0);
 
@@ -380,10 +373,10 @@ export default function FarmBoard({ game, moveMs, paused }) {
   }, []);
 
   const n = game.size;
-  // The board grows with the farm (like TFWR): a 1×1 farm is a small plot,
+  // The board grows with the farm: a 1×1 farm is a small plot,
   // 6×6 and up use all the room there is.
   const boardPx = Math.min(areaPx, 170 + 95 * n);
-  // Drone 0 is always game.drone (= drones[0]); Megafarm adds helpers.
+  // Bot 0 is always game.drone (= drones[0]); Megafarm adds helpers.
   const drones = Array.isArray(game.drones) && game.drones.length ? game.drones : [game.drone];
 
   const pad = Math.max(6, Math.round(boardPx * 0.018));
@@ -463,9 +456,9 @@ export default function FarmBoard({ game, moveMs, paused }) {
                   );
                 })}
 
-                {/* Drones: the shadow marks the tile; the body hovers above and to the right. */}
+                {/* Bots: the wheels stand on the tile, the body is above the crop. */}
                 {drones.map((d, i) => (
-                  <DroneSprite key={i} drone={i === 0 ? game.drone : d} index={i} n={n} t={t} step={step} moveMs={moveMs} paused={paused} />
+                  <BotSprite key={i} drone={i === 0 ? game.drone : d} index={i} n={n} t={t} step={step} moveMs={moveMs} paused={paused} status={status} />
                 ))}
               </div>
             </div>

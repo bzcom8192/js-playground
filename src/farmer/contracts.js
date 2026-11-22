@@ -1,4 +1,4 @@
-// JS Farmer — daily seeded contracts (pure, no DOM). v3 phase 2.
+// Semicolon Acres — daily seeded contracts (pure, no DOM). v3 phase 2.
 //
 // A contract is a delivery order: "deliver N of item X within T ticks → earn a
 // bonus". Every day brings CONTRACTS_PER_DAY of them, generated from a DAILY

@@ -1,4 +1,4 @@
-// JS Farmer Online — one replay verification, inside a worker_thread (see
+// Semicolon Acres Online — one replay verification, inside a worker_thread (see
 // verifier.js). workerData = the job; posts { ok: true, result } or
 // { ok: false, error } once, then the parent terminates the thread.
 //

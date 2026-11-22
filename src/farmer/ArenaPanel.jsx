@@ -1,4 +1,4 @@
-// Arena window (v3 phase 3): race one of your files against a built-in bot on
+// Arena window (v3 phase 3): race one of your files against a built-in rival on
 // two identical fresh 8×8 farms, headless and deterministic (see arena.js),
 // then update your ELO rating. Pick a file, an opponent and a goal, press
 // Run Match; the result, the rating change and the last 20 matches follow.
@@ -8,7 +8,7 @@ import { playMatch } from "./arenaClient.js";
 import { ITEM_ICONS } from "./constants.js";
 import { parseSeed } from "./maze.js";
 import { buildProgram } from "./program.js";
-import { OLIVE } from "./farmerUi.jsx";
+import { TEAL } from "./farmerUi.jsx";
 
 const fmt = (n) => Number(n || 0).toLocaleString("en-US");
 
@@ -68,8 +68,8 @@ function Progress({ p, goal, botName }) {
           {fmt(p.ticks)} / {fmt(p.cap)} ticks
         </span>
       </div>
-      {bar("You", p.you, OLIVE)}
-      {bar(botName, p.bot, "#b45309")}
+      {bar("You", p.you, TEAL)}
+      {bar(botName, p.bot, "#b83a5e")}
     </div>
   );
 }
@@ -85,7 +85,7 @@ function ResultCard({ r, onRematch, disabled }) {
       </span>
       <span className="text-[10px] uppercase tracking-wider text-stone-400 truncate max-w-full">
         {label}
-        {side.drones > 1 ? ` · ${side.drones} drones` : ""}
+        {side.drones > 1 ? ` · ${side.drones} bots` : ""}
       </span>
     </div>
   );
@@ -204,11 +204,11 @@ export default function ArenaPanel({ game, files, activeId, demo, onRecord, onEx
   if (demo) {
     return (
       <div className="p-4 space-y-3 text-sm text-stone-700">
-        <p className="font-semibold">⚔️ The arena is off on the demo farm.</p>
+        <p className="font-semibold">No races on the demo farm.</p>
         <p className="text-xs text-stone-500 leading-relaxed">
           Matches change your rating, and the rating lives in your own save, which the demo never writes. Go back to your farm to play rated matches.
         </p>
-        <button onClick={onExitDemo} className="px-3 py-1.5 rounded text-xs font-semibold text-white hover:brightness-110" style={{ background: OLIVE }}>
+        <button onClick={onExitDemo} className="px-3 py-1.5 rounded text-xs font-semibold text-white hover:brightness-110" style={{ background: TEAL }}>
           Back to my farm
         </button>
       </div>
@@ -228,14 +228,14 @@ export default function ArenaPanel({ game, files, activeId, demo, onRecord, onEx
           <div>
             vs {bot.name} ({bot.rating})
           </div>
-          <div className="font-mono tabular-nums" title="Rating change for a win / draw / loss against this bot">
+          <div className="font-mono tabular-nums" title="Rating change for a win / draw / loss against this rival">
             W {preview(eloDelta(arena.rating, bot.rating, "win"))} · D {preview(eloDelta(arena.rating, bot.rating, "draw"))} · L{" "}
             {preview(eloDelta(arena.rating, bot.rating, "loss"))}
           </div>
         </div>
       </div>
 
-      <Section title="New match">
+      <Section title="New race">
         <div className="grid grid-cols-3 gap-1.5">
           <Select label="Your file" value={String(file.id)} onChange={setFileId} disabled={running}>
             {files.map((f) => (
@@ -244,7 +244,7 @@ export default function ArenaPanel({ game, files, activeId, demo, onRecord, onEx
               </option>
             ))}
           </Select>
-          <Select label="Opponent" value={botId} onChange={setBotId} disabled={running}>
+          <Select label="Rival" value={botId} onChange={setBotId} disabled={running}>
             {BOT_IDS.map((id) => (
               <option key={id} value={id}>
                 {BOTS[id].name} ({BOTS[id].rating})
@@ -273,15 +273,15 @@ export default function ArenaPanel({ game, files, activeId, demo, onRecord, onEx
             onClick={() => start()}
             disabled={running || seedBad}
             className="px-3 py-1 rounded text-xs font-semibold text-white hover:brightness-110 disabled:opacity-50"
-            style={{ background: OLIVE }}
+            style={{ background: TEAL }}
           >
-            {running ? "Running…" : "⚔️ Run Match"}
+            {running ? "Running…" : "Start race"}
           </button>
         </div>
         <p className="text-[10px] text-stone-400 leading-relaxed">
           {bot.desc} Both farms are fresh 8×8 fields from the same seed with the arena unlocks (everything up to Megafarm; Speed 0; no Mazes,
           Dinosaurs or Rice). First to hold {goal.label} wins; after {fmt(TICK_CAP)} ticks the bigger amount wins. An error loses. Your file runs with its
-          helper files, like ▶. <code>get_arena_goal()</code> tells your program the goal.
+          helper files, as with Run. <code>get_arena_goal()</code> tells your program the goal.
         </p>
         <details className="text-[11px] text-stone-500">
           <summary className="cursor-pointer select-none">{bot.name}&apos;s code</summary>

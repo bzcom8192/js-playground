@@ -43,13 +43,15 @@ A modern, interactive JavaScript playground built with React, Vite, and Monaco E
 - Captures `console.log`, `console.warn`, `console.error`, `console.info`
 - Clear console with `console.clear()`
 
-### 🚜 **JS Farmer** (second page: `#/farmer`)
-A programming farm game in the spirit of *The Farmer Was Replaced*: write plain
-JavaScript (no `await`) to drive a drone that tills, plants and harvests a growing
-farm, then spend the harvest on unlocks. Open it from the **🚜 Farmer** link in the
-header, or go to `/#/farmer`. The in-game **Docs** tab has the full API and examples.
-See [RESULT.md](RESULT.md) for the design, and [AUDIT.md](AUDIT.md) for the
-editor/keyboard-shortcut audit.
+### 🤖 **Semicolon Acres** (second page: `#/farmer`)
+A farming-automation game. Write plain JavaScript (no `await`) as the plan for a
+solar-powered field bot: it ploughs, plants and harvests, the harvest pays for
+upgrades in the Workshop, and later a whole crew of bots works the farm from one
+program. With weather, daily contracts, hedge labyrinths, an arena and an optional
+online leaderboard with replay-verified runs. Open it from the **Semicolon Acres**
+link in the header, or go to `/#/farmer` (`/#/farmer?demo=1` shows a grown farm).
+The in-game **Field Guide** has the full API and example programs.
+The editor/keyboard-shortcut audit is in [AUDIT.md](AUDIT.md).
 
 ## Getting Started
 
@@ -73,13 +75,13 @@ npm run build
 npm run preview
 ```
 
-### Tests (JS Farmer engine)
+### Tests (Semicolon Acres engine)
 ```bash
 npm run test:farmer   # node --test, no extra dependencies
 npm run test:server   # the Online server
 ```
 
-### Online server (JS Farmer)
+### Online server (Semicolon Acres)
 ```bash
 npm run build && npm run server   # game + API on http://127.0.0.1:4188
 ```
@@ -121,7 +123,7 @@ js-playground/
 │   ├── utils/
 │   │   ├── eslintConfig.js        # ESLint rules configuration
 │   │   └── linter.js              # Browser-based linting logic
-│   ├── farmer/                    # JS Farmer page (game engine, transform, UI, tests)
+│   ├── farmer/                    # Semicolon Acres page (game engine, transform, UI, tests)
 │   ├── hooks/usePageShortcuts.js  # Page-level keyboard shortcuts
 │   ├── App.jsx                    # Playground page
 │   ├── Root.jsx / router.js       # Tiny hash router (#/ and #/farmer)
@@ -159,8 +161,8 @@ Every console output is enhanced:
 
 Press **⌨** in the header (or `?` when not typing) for the full list.
 
-- **Ctrl/Cmd + Enter**: Run code (JS Farmer: Run / Stop)
-- **Ctrl/Cmd + S**: Save snapshot (JS Farmer: save code + farm)
+- **Ctrl/Cmd + Enter**: Run code (Semicolon Acres: Run / Stop)
+- **Ctrl/Cmd + S**: Save snapshot (Semicolon Acres: save code + farm)
 - **Esc**: Close History / dialogs
 - **Tab** (in autocomplete): Accept suggestion
 - Standard Monaco shortcuts (Ctrl+F find, Ctrl+H replace, Shift+Alt+F format, Ctrl+/ comment, F1 command palette, …)

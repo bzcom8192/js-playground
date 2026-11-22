@@ -1,4 +1,4 @@
-// JS Farmer Online server: `npm run server` (= node server/index.js).
+// Semicolon Acres Online server: `npm run server` (= node server/index.js).
 //
 // Serves the built game from dist/ and the JSON API under /api/ on one port.
 // Env: PORT (default 4188), HOST (default 127.0.0.1: in production Apache is
@@ -74,7 +74,7 @@ if (isMain) {
       ...(env.VERIFY_WORKERS ? { maxConcurrent: Number(env.VERIFY_WORKERS) } : {}),
     },
   });
-  console.log(`JS Farmer Online listening on ${s.url} (db ${env.FARMER_DB || DEFAULT_DB})`);
+  console.log(`Semicolon Acres Online listening on ${s.url} (db ${env.FARMER_DB || DEFAULT_DB})`);
   const shutdown = () => s.close().then(() => process.exit(0));
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);

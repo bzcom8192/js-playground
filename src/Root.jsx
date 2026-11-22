@@ -8,7 +8,7 @@ export default function Root() {
   const route = useHashRoute();
 
   useEffect(() => {
-    document.title = route === "farmer" ? "JS Farmer" : "JS Playground";
+    document.title = route === "farmer" ? "Semicolon Acres" : "JS Playground";
   }, [route]);
 
   if (route === "farmer") {

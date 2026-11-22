@@ -186,7 +186,7 @@ test("an erroring program loses at once, with the reason recorded", async () => 
     1,
   );
   assert.equal(drone.result, "loss");
-  assert.match(drone.sides.you.error, /Drone 1: .*undefined_thing/);
+  assert.match(drone.sides.you.error, /Bot 1: .*undefined_thing/);
 });
 
 test("an infinite loop is capped by the tick cap; an op flood by the op budget", async () => {

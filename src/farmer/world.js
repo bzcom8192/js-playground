@@ -1,4 +1,4 @@
-// JS Farmer — pure world logic (no DOM, no timers). Unit-tested in node.
+// Semicolon Acres — pure world logic (no DOM, no timers). Unit-tested in node.
 //
 // Coordinates: x grows East, y grows North. tiles[y * size + x].
 // Every mutating function returns either `true`/`false` (simple success) or a
@@ -115,7 +115,7 @@ export function createGame() {
     // creates its saves with newFarm(), which draws the weather seed once.
     weather: null,
   };
-  // TFWR start: a single grassland tile with grass on it.
+  // A new farm: a single grassland tile with grass on it.
   state.tiles[0].entity = makeEntity("Grass", Math.random, 1);
   return state;
 }
@@ -430,7 +430,7 @@ export function harvest(state) {
     // Deviation: unripe Grass is left alone (returns false) so the very first
     // `while (true) { harvest(); }` program works at any speed.
     if (e.type === "Grass") return false;
-    // TFWR: harvesting any other unripe plant just destroys it.
+    // Harvesting any other unripe plant just destroys it.
     removeEntity(tile);
     return true;
   }
@@ -622,14 +622,14 @@ export function buyUnlock(state, id) {
   if (!u) return fail(`Unknown unlock ${String(id)}`);
   const status = unlockStatus(state, id);
   if (status === "maxed") return fail(`${u.name} is maxed`);
-  if (status === "blocked") return fail(`${u.name} needs ${u.requires} first`, u.requires);
+  if (status === "blocked") return fail(`${u.name} needs ${UNLOCK_BY_ID[u.requires].name} first`, u.requires);
   const cost = u.cost(level(state, id));
   if (!canAfford(state, cost)) return fail(`Not enough items for ${u.name} (${costText(cost)})`);
   pay(state, cost);
   state.unlocks[id] = level(state, id) + 1;
   if (id === "Expand") {
     state.size = WORLD_SIZES[state.unlocks.Expand];
-    clearFarm(state); // TFWR: expanding clears the farm
+    clearFarm(state); // expanding clears the farm
   }
   return ok;
 }
@@ -687,10 +687,10 @@ export const droneCap = (state) => maxDrones(state.size);
  * Returns { ok, drone, index } or a failure (locked / at the cap).
  */
 export function spawnDrone(state) {
-  if (!isUnlocked(state, "Megafarm")) return fail("spawn_drone() is locked", "Megafarm");
+  if (!isUnlocked(state, "Megafarm")) return fail("spawn_bot() is locked", "Megafarm");
   const drones = ensureDrones(state);
   const cap = droneCap(state);
-  if (drones.length >= cap) return fail(`already ${drones.length} drones — the cap is ${cap} on a ${state.size}×${state.size} farm`);
+  if (drones.length >= cap) return fail(`already ${drones.length} bots — the cap is ${cap} on a ${state.size}×${state.size} farm`);
   const d = newDrone(state.drone.x, state.drone.y);
   drones.push(d);
   return { ok: true, drone: d, index: drones.length - 1 };

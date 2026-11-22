@@ -1,6 +1,6 @@
-// JS Farmer — source transform (pure string → string, unit-tested in node).
+// Semicolon Acres — source transform (pure string → string, unit-tested in node).
 //
-// Lets the player write TFWR-style blocking code without `await`:
+// Lets the player write plain blocking code without `await`:
 //
 //   while (true) { if (can_harvest()) harvest(); move(North); }
 //
@@ -10,7 +10,7 @@
 //
 // Rules (token-aware: strings, template literals, comments and regex literals
 // are never touched):
-//  1. Calls to drone ACTIONS (harvest, plant, move, …) get `await `.
+//  1. Calls to bot ACTIONS (harvest, plant, move, …) get `await `.
 //  2. A function (declaration, expression, arrow, or object/class method)
 //     becomes `async` when it needs to: it calls an action or another async
 //     user function, contains a user-written `await`, or — for *named*
@@ -40,9 +40,13 @@ export const ACTIONS = [
   "use_item",
   "trade",
   "unlock",
+  "spin_in_place",
+  "spawn_bot",
+  "deliver_contract",
+  // Earlier names of spin_in_place / spawn_bot: they keep working, so saved
+  // programs and stored replays run unchanged.
   "do_a_flip",
   "spawn_drone",
-  "deliver_contract",
 ];
 const ACTION_SET = new Set(ACTIONS);
 
@@ -591,7 +595,7 @@ export function transform(src) {
 // ---------- multi-file programs: top-level declarations ----------
 //
 // Running file F runs F's code; every other file contributes ONLY its
-// top-level function declarations (like TFWR's `from helper import *`):
+// top-level function declarations (the rest of the file is left out):
 //   function name(…) { … }            (also async / generator)
 //   const|let|var name = (…) => …     (also `x => …`, `async (…) => …`)
 //   const|let|var name = function …   (also async)

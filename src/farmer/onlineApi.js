@@ -1,4 +1,4 @@
-// JS Farmer Online (v4 phase 1) — the game's client for the Node server in
+// Semicolon Acres Online (v4 phase 1) — the game's client for the Node server in
 // server/ (same-origin /api by default). No React here: plain functions the
 // Online window, the engine's auto-submit and the tests use.
 //
@@ -77,18 +77,18 @@ export function buildIdentityExport({ name, token }) {
 }
 
 /** Download name; anything but letters, marks, digits, - and _ becomes "_". */
-export const identityFileName = (name) => `js-farmer-identity-${String(name).replace(/[^\p{L}\p{M}\p{N}_-]+/gu, "_")}.json`;
+export const identityFileName = (name) => `semicolon-acres-identity-${String(name).replace(/[^\p{L}\p{M}\p{N}_-]+/gu, "_")}.json`;
 
 /** An identity file's text → { ok, name, token } | { ok: false, error }. */
 export function parseIdentityImport(text) {
-  if (typeof text !== "string" || text.length > IDENTITY_FILE_MAX) return { ok: false, error: "That file is not a JS Farmer identity." };
+  if (typeof text !== "string" || text.length > IDENTITY_FILE_MAX) return { ok: false, error: "That file is not a Semicolon Acres identity." };
   let d;
   try {
     d = JSON.parse(text);
   } catch {
     return { ok: false, error: "That file is not valid JSON." };
   }
-  if (!d || d.format !== IDENTITY_FORMAT) return { ok: false, error: "That file is not a JS Farmer identity." };
+  if (!d || d.format !== IDENTITY_FORMAT) return { ok: false, error: "That file is not a Semicolon Acres identity." };
   if (d.v !== IDENTITY_VERSION) return { ok: false, error: "That identity file has an unknown version." };
   const name = validateName(d.name);
   if (!name.ok || typeof d.token !== "string" || !TOKEN_RE.test(d.token)) return { ok: false, error: "That identity file is damaged." };
