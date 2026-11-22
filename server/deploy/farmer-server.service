@@ -1,0 +1,66 @@
+# JS Farmer Online — systemd unit (see server/README.md).
+#
+#   sudo cp server/deploy/farmer-server.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now farmer-server
+#
+# Adjust before installing:
+#   User / Group       the unprivileged service user (placeholder: farmer)
+#   WorkingDirectory   the repo checkout, readable by that user, not under /home
+#   ExecStart          where node is (`command -v node`), Node 22.15 or newer
+
+[Unit]
+Description=JS Farmer Online (game + API behind Apache)
+Documentation=file:/opt/js-farmer/server/README.md
+After=network.target
+
+[Service]
+Type=simple
+User=farmer
+Group=farmer
+WorkingDirectory=/opt/js-farmer
+ExecStart=/usr/bin/node server/index.js
+
+# Localhost only: Apache is the public entry (apache-vhost.example.conf).
+Environment=HOST=127.0.0.1 PORT=4188
+# The SQLite file lives outside the checkout, so updates and rollbacks never
+# touch it. Must be inside StateDirectory below (the only writable path).
+Environment=FARMER_DB=/var/lib/js-farmer/farmer-online.db
+# Optional: count register attempts per visitor instead of all together. Only
+# safe behind a proxy that overwrites X-Forwarded-For, as the example vhost does.
+#Environment=TRUST_PROXY=1
+
+Restart=on-failure
+RestartSec=5
+
+# --- hardening ---
+# /var/lib/js-farmer: created on start, owned by User=, and kept writable under
+# ProtectSystem=strict (everything else is read-only).
+StateDirectory=js-farmer
+StateDirectoryMode=0750
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+# The server runs players' programs (in sandboxed worker threads). It needs no
+# outgoing network, only Apache on this machine. Remove these two lines if HOST
+# is not a loopback address.
+IPAddressDeny=any
+IPAddressAllow=localhost
+# Backstop for the replay workers (2 x 288 MB of heap, plus the server itself).
+MemoryMax=1G
+TasksMax=128
+# Not set on purpose: MemoryDenyWriteExecute (V8's JIT needs W+X memory).
+
+[Install]
+WantedBy=multi-user.target

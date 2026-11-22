@@ -23,6 +23,10 @@ export const ELO_START = 1000;
 export const ELO_K = 32;
 export const LEADERBOARD_LIMIT = 50;
 export const CHALLENGE_LIST_LIMIT = 50;
+/** v5: an unanswered challenge expires 7 days after it was created. */
+export const CHALLENGE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+/** v5: events in GET /api/players/me/history. */
+export const HISTORY_LIMIT = 20;
 /** Longest program (characters) a challenge / result may carry. */
 export const CODE_MAX = 100_000;
 

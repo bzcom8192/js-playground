@@ -11,8 +11,9 @@
 // Identity: localStorage `farmer_online_v1` = { v: 1, playerId, name, token }.
 // It holds a credential, so it is NOT part of Save Data / Import Data
 // (saveData.js only exports farmer_save_v1 + farmer_files_v1) and Reset Save
-// does not touch it either.
-import { MAZE_LEVELS, validateScore } from "./onlineRules.js";
+// does not touch it either. v5: it has its own export / import file (the
+// Online window's "ส่งออกบัญชี" / "นำเข้าบัญชี"), see below.
+import { MAZE_LEVELS, validateName, validateScore } from "./onlineRules.js";
 
 export const IDENTITY_KEY = "farmer_online_v1";
 export const OFFLINE_MESSAGE = "เซิร์ฟเวอร์ไม่ตอบสนอง";
@@ -30,13 +31,15 @@ export class OnlineError extends Error {
 
 // ---------- identity ----------
 
+const TOKEN_RE = /^[0-9a-f]{64}$/;
+
 const defaultStorage = () => (typeof localStorage !== "undefined" ? localStorage : null);
 
 /** The stored identity, or null (none, unreadable or damaged). */
 export function loadIdentity(storage = defaultStorage()) {
   try {
     const d = JSON.parse(storage?.getItem(IDENTITY_KEY) ?? "null");
-    if (!d || d.v !== 1 || !Number.isInteger(d.playerId) || typeof d.name !== "string" || !/^[0-9a-f]{64}$/.test(d.token)) return null;
+    if (!d || d.v !== 1 || !Number.isInteger(d.playerId) || typeof d.name !== "string" || !TOKEN_RE.test(d.token)) return null;
     return { playerId: d.playerId, name: d.name, token: d.token };
   } catch {
     return null;
@@ -58,6 +61,58 @@ export function clearIdentity(storage = defaultStorage()) {
   } catch {
     // ignore
   }
+}
+
+// ---------- identity export / import (v5) ----------
+// A file of its own: { format: "js-farmer-identity", v: 1, name, token }. The
+// token IS the account (there is no password), so the file is a credential.
+
+export const IDENTITY_FORMAT = "js-farmer-identity";
+export const IDENTITY_VERSION = 1;
+/** A real file is under 250 bytes; anything far bigger is not one. */
+export const IDENTITY_FILE_MAX = 4096;
+
+export function buildIdentityExport({ name, token }) {
+  return { format: IDENTITY_FORMAT, v: IDENTITY_VERSION, name, token };
+}
+
+/** Download name; anything but letters, marks, digits, - and _ becomes "_". */
+export const identityFileName = (name) => `js-farmer-identity-${String(name).replace(/[^\p{L}\p{M}\p{N}_-]+/gu, "_")}.json`;
+
+/** An identity file's text → { ok, name, token } | { ok: false, error }. */
+export function parseIdentityImport(text) {
+  if (typeof text !== "string" || text.length > IDENTITY_FILE_MAX) return { ok: false, error: "That file is not a JS Farmer identity." };
+  let d;
+  try {
+    d = JSON.parse(text);
+  } catch {
+    return { ok: false, error: "That file is not valid JSON." };
+  }
+  if (!d || d.format !== IDENTITY_FORMAT) return { ok: false, error: "That file is not a JS Farmer identity." };
+  if (d.v !== IDENTITY_VERSION) return { ok: false, error: "That identity file has an unknown version." };
+  const name = validateName(d.name);
+  if (!name.ok || typeof d.token !== "string" || !TOKEN_RE.test(d.token)) return { ok: false, error: "That identity file is damaged." };
+  return { ok: true, name: name.name, token: d.token };
+}
+
+/**
+ * Check an identity file against the server → { identity, profile }. Saves
+ * nothing: the caller confirms first. The server's id and name count (the
+ * file's name is only a label). Rejects with an OnlineError: a bad file, a
+ * token the server does not know (401) or offline.
+ */
+export async function verifyIdentityImport(text, api = onlineApi) {
+  const parsed = parseIdentityImport(text);
+  if (!parsed.ok) throw new OnlineError(parsed.error);
+  let me;
+  try {
+    me = await api.me(parsed.token);
+  } catch (err) {
+    if (err?.status === 401) throw new OnlineError("The server does not know this identity, so it was not imported.", { status: 401 });
+    throw err;
+  }
+  if (!Number.isInteger(me?.playerId) || typeof me.name !== "string") throw new OnlineError("The server's answer was not understood; nothing was imported.");
+  return { identity: { playerId: me.playerId, name: me.name, token: parsed.token }, profile: me };
 }
 
 // ---------- HTTP ----------
@@ -116,13 +171,16 @@ export function createOnlineApi({ fetchFn, base = DEFAULT_BASE, timeoutMs = DEFA
     register: (name) => request("POST", "/auth/register", { body: { name } }),
     /** → { playerId, name, elo, createdAt } */
     me: (token) => request("GET", "/players/me", { token }),
+    /** → { events: [{ challengeId, role, opponentId, opponentName, goal, seed, myTicks, myOps, opponentTicks,
+     *  opponentOps, outcome: "win" | "lose" | "draw" | "expired", eloDelta, createdAt, closedAt }] } (latest 20) */
+    history: (token) => request("GET", "/players/me/history", { token }),
     /** → { category, level, entries: [{ rank, playerId, name, ticks, ops, value, seed, size, sx, sy, createdAt, verified }] } */
     leaderboard: (category, level = null) =>
       request("GET", `/leaderboard?category=${enc(category)}${level === null || level === undefined ? "" : `&level=${enc(level)}`}`),
     /** maze: { category, level, ticks, ops, seed, size, sx, sy, code } → the stored
      *  score with the SERVER's ticks / ops (+ claimed, corrected, verified). */
     submitScore: (token, score) => request("POST", "/scores", { body: score, token }),
-    /** → { challenges: [{ id, authorId, authorName, authorElo, goal, seed, authorTicks, authorOps, createdAt }] } */
+    /** → { challenges: [{ id, authorId, authorName, authorElo, goal, seed, authorTicks, authorOps, createdAt, expiresAt, verified }] } */
     listChallenges: () => request("GET", "/challenges"),
     getChallenge: (id) => request("GET", `/challenges/${enc(id)}`),
     /** body: { goal, seed, code, authorTicks?, authorOps? } (the claims are ignored:

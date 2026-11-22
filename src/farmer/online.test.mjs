@@ -10,17 +10,23 @@ import { createRuntime } from "./runtime.js";
 import { mulberry32 } from "./maze.js";
 import { BOT_CODE } from "./arenaBots.js";
 import { TICK_CAP, runMatch, runSolo } from "./arena.js";
-import { buildExport } from "./saveData.js";
+import { buildExport, parseImport } from "./saveData.js";
+import { historyRow, historyRows, signed, ticksText, timeText } from "./onlineHistory.js";
 import {
+  IDENTITY_FILE_MAX,
   IDENTITY_KEY,
   OFFLINE_MESSAGE,
   OnlineError,
+  buildIdentityExport,
   clearIdentity,
   createOnlineApi,
+  identityFileName,
   loadIdentity,
+  parseIdentityImport,
   saveIdentity,
   scoreForRecord,
   submitRecord,
+  verifyIdentityImport,
 } from "./onlineApi.js";
 import {
   DINO_MAX_BONE,
@@ -70,6 +76,7 @@ test("api client: request shapes (method, URL, auth header, JSON body)", async (
   const api = createOnlineApi({ fetchFn: fn, base: "/api/" });
   await api.register("Somchai");
   await api.me(TOKEN);
+  await api.history(TOKEN);
   await api.leaderboard("maze", 2);
   await api.leaderboard("dino");
   await api.submitScore(TOKEN, { category: "maze", level: 1, ticks: 900, ops: 9 });
@@ -82,6 +89,7 @@ test("api client: request shapes (method, URL, auth header, JSON body)", async (
   assert.deepEqual(shape, [
     ["POST", "/api/auth/register", null, { name: "Somchai" }],
     ["GET", "/api/players/me", auth, null],
+    ["GET", "/api/players/me/history", auth, null],
     ["GET", "/api/leaderboard?category=maze&level=2", null, null],
     ["GET", "/api/leaderboard?category=dino", null, null],
     ["POST", "/api/scores", auth, { category: "maze", level: 1, ticks: 900, ops: 9 }],
@@ -173,6 +181,112 @@ test("identity is not part of the Save Data export", () => {
   const exp = buildExport({ save: { v: 1 }, files: { v: 1, nextId: 2, files: [] } });
   assert.deepEqual(Object.keys(exp).sort(), ["exportedAt", "files", "format", "save", "v"]);
   assert.ok(!JSON.stringify(exp).includes(IDENTITY_KEY));
+});
+
+// ---------- identity export / import (v5) ----------
+
+const identityText = (patch = {}) => JSON.stringify({ format: "js-farmer-identity", v: 1, name: "Nok", token: TOKEN, ...patch });
+
+test("identity file: exactly { format, v, name, token }, and it round-trips", () => {
+  const out = buildIdentityExport({ playerId: 3, name: "ชาวนา", token: TOKEN });
+  assert.deepEqual(out, { format: "js-farmer-identity", v: 1, name: "ชาวนา", token: TOKEN });
+  for (const text of [JSON.stringify(out), JSON.stringify(out, null, 2)]) {
+    assert.deepEqual(parseIdentityImport(text), { ok: true, name: "ชาวนา", token: TOKEN });
+  }
+  assert.equal(identityFileName("ชาวนา 1"), "js-farmer-identity-ชาวนา_1.json");
+  assert.equal(identityFileName("../a:b"), "js-farmer-identity-_a_b.json");
+});
+
+test("identity file: bad files are rejected", () => {
+  const bad = [
+    ["", /not valid JSON/],
+    ["{", /not valid JSON/],
+    ["null", /not a JS Farmer identity/],
+    ["42", /not a JS Farmer identity/],
+    ["[]", /not a JS Farmer identity/],
+    [JSON.stringify(buildExport({ save: { v: 1 } })), /not a JS Farmer identity/], // a game save
+    [JSON.stringify({ v: 1, playerId: 1, name: "Nok", token: TOKEN }), /not a JS Farmer identity/], // the localStorage form
+    [identityText({ format: "js-farmer-save" }), /not a JS Farmer identity/],
+    [identityText({ v: 2 }), /unknown version/],
+    [identityText({ v: "1" }), /unknown version/],
+    [identityText({ name: "" }), /damaged/],
+    [identityText({ name: 5 }), /damaged/],
+    [identityText({ name: "x".repeat(25) }), /damaged/],
+    [identityText({ token: undefined }), /damaged/],
+    [identityText({ token: "short" }), /damaged/],
+    [identityText({ token: `${TOKEN}\n` }), /damaged/],
+    [identityText({ token: "z".repeat(64) }), /damaged/],
+    [identityText({ token: [TOKEN] }), /damaged/],
+    [identityText() + " ".repeat(IDENTITY_FILE_MAX), /not a JS Farmer identity/],
+    [null, /not a JS Farmer identity/], // the panel passes null for an oversized file
+  ];
+  for (const [text, re] of bad) {
+    const r = parseIdentityImport(text);
+    assert.equal(r.ok, false, String(text).slice(0, 80));
+    assert.match(r.error, re, String(text).slice(0, 80));
+  }
+});
+
+test("identity file and game save are separate: neither importer takes the other's file", () => {
+  assert.equal(parseImport(identityText()).ok, false);
+  assert.equal(parseIdentityImport(JSON.stringify(buildExport({ save: { v: 1 }, files: null }))).ok, false);
+});
+
+test("identity import: the token is checked with GET /players/me; the server's id and name count", async () => {
+  const me = { playerId: 12, name: "Nok", elo: 1016, createdAt: 5 };
+  const { fn, calls } = mockFetch(() => ({ status: 200, json: me }));
+  const r = await verifyIdentityImport(identityText({ name: "Old Label" }), createOnlineApi({ fetchFn: fn }));
+  assert.deepEqual(r, { identity: { playerId: 12, name: "Nok", token: TOKEN }, profile: me });
+  assert.deepEqual([calls.length, calls[0].method, calls[0].url, calls[0].headers.Authorization], [1, "GET", "/api/players/me", `Bearer ${TOKEN}`]);
+  // What it returns is storable and loads back.
+  const st = memStorage();
+  assert.ok(saveIdentity(r.identity, st));
+  assert.deepEqual(loadIdentity(st), r.identity);
+});
+
+test("identity import: bad file → no request; unknown token, offline and odd answers → rejected", async () => {
+  const { fn, calls } = mockFetch();
+  await assert.rejects(verifyIdentityImport("{", createOnlineApi({ fetchFn: fn })), { name: "OnlineError", message: /not valid JSON/, offline: false });
+  assert.equal(calls.length, 0);
+  const apiFor = (reply) => createOnlineApi({ fetchFn: mockFetch(reply).fn });
+  await assert.rejects(verifyIdentityImport(identityText(), apiFor(() => ({ status: 401, json: { error: "unknown token" } }))), { status: 401, message: /does not know/ });
+  await assert.rejects(verifyIdentityImport(identityText(), apiFor(() => new TypeError("Failed to fetch"))), { offline: true, message: OFFLINE_MESSAGE });
+  await assert.rejects(verifyIdentityImport(identityText(), apiFor(() => ({ status: 500, json: { error: "internal server error" } }))), { status: 500, offline: false });
+  await assert.rejects(verifyIdentityImport(identityText(), apiFor(() => ({ status: 200, json: { ok: true } }))), /not understood/);
+});
+
+// ---------- match history (v5) ----------
+
+const histEv = (patch = {}) => ({
+  challengeId: 7, role: "author", opponentId: 2, opponentName: "Somsri", goal: "hay500", seed: 1, myTicks: 50_000, myOps: 300,
+  opponentTicks: 40_000, opponentOps: 250, outcome: "lose", eloDelta: -16, createdAt: 1000, closedAt: 2000, ...patch,
+});
+
+test("history rows: outcome labels, ticks, ELO, times", () => {
+  const row = historyRow(histEv());
+  assert.deepEqual(row, {
+    key: 7, outcome: "lose", label: "แพ้", tone: "bad", authored: true, opponent: "Somsri", goal: row.goal,
+    ticks: "50,000t / 40,000t", elo: "−16", eloTone: "bad", when: timeText(2000), created: timeText(1000),
+  });
+  assert.match(row.goal, /Hay/);
+  const win = historyRow(histEv({ role: "challenger", outcome: "win", eloDelta: 16, opponentTicks: DNF_TICKS }));
+  assert.deepEqual([win.label, win.authored, win.ticks, win.elo, win.eloTone], ["ชนะ", false, "50,000t / DNF", "+16", "good"]);
+  const draw = historyRow(histEv({ outcome: "draw", eloDelta: 0 }));
+  assert.deepEqual([draw.label, draw.elo, draw.eloTone], ["เสมอ", "±0", "even"]);
+  const drawUp = historyRow(histEv({ outcome: "draw", eloDelta: 1 }));
+  assert.deepEqual([drawUp.elo, drawUp.eloTone], ["+1", "good"]);
+  const exp = historyRow(histEv({ outcome: "expired", opponentId: null, opponentName: null, opponentTicks: null, opponentOps: null, eloDelta: 0 }));
+  assert.deepEqual([exp.label, exp.opponent, exp.ticks, exp.elo, exp.tone], ["หมดอายุ", null, "50,000t", "—", "muted"]);
+});
+
+test("history rows: unknown goals and broken answers never throw", () => {
+  assert.equal(historyRow(histEv({ goal: "future9" })).goal, "future9");
+  assert.deepEqual(historyRows({ events: [histEv(), null, {}, histEv({ outcome: "toString" }), histEv({ challengeId: "8" }), histEv({ challengeId: 9 })] }).map((r) => r.key), [7, 9]);
+  for (const bad of [null, undefined, {}, { events: "x" }]) assert.deepEqual(historyRows(bad), []);
+  assert.deepEqual([ticksText(null), ticksText(TICK_CAP), ticksText(TICK_CAP + 1)], ["—", "200,000t", "DNF"]);
+  assert.deepEqual([signed(3), signed(-3), signed(0)], ["+3", "−3", "±0"]);
+  assert.match(timeText(Date.UTC(2026, 10, 22)), /^2026-11-2[123] \d\d:\d\d$/);
+  assert.deepEqual([timeText(null), timeText(undefined), timeText(NaN)], ["", "", ""]);
 });
 
 // ---------- auto-submit ----------

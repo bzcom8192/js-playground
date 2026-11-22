@@ -19,6 +19,7 @@ import { GOALS } from "../src/farmer/arena.js";
 import { MAZE_VERIFY_TICK_CAP } from "../src/farmer/verify.js";
 import {
   ARENA_TICK_CAP,
+  CHALLENGE_TTL_MS,
   DNF_TICKS,
   eloUpdate,
   outcomeOf,
@@ -151,9 +152,37 @@ function challengeOut(c) {
     authorTicks: c.author_ticks,
     authorOps: c.author_ops,
     createdAt: c.created_at,
+    expiresAt: c.created_at + CHALLENGE_TTL_MS,
     verified: !!c.verified,
   };
 }
+
+// One finished challenge from the asking player's side. An expired challenge
+// has no opponent and changes no ELO; closedAt is then its expiry time.
+const historyOut = (h) => ({
+  challengeId: h.challenge_id,
+  role: h.role, // "author" | "challenger"
+  opponentId: h.opponent_id,
+  opponentName: h.opponent_name,
+  goal: h.goal,
+  seed: h.seed,
+  myTicks: h.my_ticks,
+  myOps: h.my_ops,
+  opponentTicks: h.opponent_ticks,
+  opponentOps: h.opponent_ops,
+  outcome: h.outcome, // "win" | "lose" | "draw" | "expired"
+  eloDelta: h.elo_delta,
+  createdAt: h.created_at,
+  closedAt: h.closed_at,
+});
+
+/** Why a challenge takes no (more) results. */
+const closedError = (code) =>
+  code === "missing"
+    ? new HttpError(404, "no such challenge")
+    : code === "expired"
+      ? new HttpError(410, "this challenge has expired")
+      : new HttpError(409, "this challenge already has a result");
 
 // A stored score as answered (the program is not echoed back).
 const withoutCode = (s) => Object.fromEntries(Object.entries(s).filter(([k]) => k !== "code"));
@@ -267,6 +296,11 @@ export function createApp({ db, distDir = null, rateLimit = {}, trustProxy = fal
       return sendJson(res, 200, playerOut(auth(req)));
     }
 
+    if (path === "/api/players/me/history") {
+      allow("GET");
+      return sendJson(res, 200, { events: db.history(auth(req).id).map(historyOut) });
+    }
+
     if (path === "/api/leaderboard") {
       allow("GET");
       const level = url.searchParams.get("level");
@@ -357,7 +391,7 @@ export function createApp({ db, distDir = null, rateLimit = {}, trustProxy = fal
         code: c.code,
         status: c.status,
         result: r
-          ? { playerId: r.player_id, name: r.name, ticks: r.ticks, ops: r.ops, outcome: r.outcome, eloDelta: r.elo_delta, createdAt: r.created_at, verified: !!r.verified }
+          ? { playerId: r.player_id, name: r.name, ticks: r.ticks, ops: r.ops, outcome: r.outcome, eloDelta: r.elo_delta, authorEloDelta: r.author_elo_delta, createdAt: r.created_at, verified: !!r.verified }
           : null,
       });
     }
@@ -370,7 +404,7 @@ export function createApp({ db, distDir = null, rateLimit = {}, trustProxy = fal
       const c = id === null ? null : db.challenge(id);
       if (!c) throw new HttpError(404, "no such challenge");
       if (c.author_id === player.id) throw new HttpError(403, "you cannot answer your own challenge");
-      if (c.status !== "open") throw new HttpError(409, "this challenge already has a result");
+      if (c.status !== "open") throw closedError(c.status);
       const body = await readJson(req);
       const v = validateResult(body);
       if (!v.ok) throw new HttpError(400, v.error);
@@ -383,7 +417,7 @@ export function createApp({ db, distDir = null, rateLimit = {}, trustProxy = fal
         const e = eloUpdate(challenger.elo, author.elo, score);
         return { outcome: outcomeOf(score), deltaChallenger: e.deltaA, deltaAuthor: e.deltaB };
       });
-      if (!r.ok) throw r.code === "missing" ? new HttpError(404, "no such challenge") : new HttpError(409, "this challenge already has a result");
+      if (!r.ok) throw closedError(r.code); // answered or expired while the replay ran
       return sendJson(res, 201, {
         challengeId: c.id,
         result: r.outcome, // for the challenger: "win" | "loss" | "draw"

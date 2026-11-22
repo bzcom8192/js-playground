@@ -76,7 +76,15 @@ npm run preview
 ### Tests (JS Farmer engine)
 ```bash
 npm run test:farmer   # node --test, no extra dependencies
+npm run test:server   # the Online server
 ```
+
+### Online server (JS Farmer)
+```bash
+npm run build && npm run server   # game + API on http://127.0.0.1:4188
+```
+See [server/README.md](server/README.md) for the settings, the production install
+(systemd + Apache) and backups.
 
 ## Linter Configuration
 

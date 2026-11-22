@@ -10,16 +10,19 @@
 //    that hit them. It goes through exactly the same routes and storage.
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { request } from "node:http";
 import { DatabaseSync } from "node:sqlite";
 import { startServer } from "./index.js";
 import { createRateLimiter } from "./app.js";
 import { hashToken, openDb } from "./db.js";
 import { createVerifier } from "./verifier.js";
-import { DINO_MAX_BONE, DNF_TICKS, eloUpdate } from "../src/farmer/onlineRules.js";
+import { CHALLENGE_TTL_MS, DINO_MAX_BONE, DNF_TICKS, HISTORY_LIMIT, eloUpdate } from "../src/farmer/onlineRules.js";
 import * as W from "../src/farmer/world.js";
 import { WORLD_SIZES } from "../src/farmer/constants.js";
 import { createRuntime } from "../src/farmer/runtime.js";
@@ -267,8 +270,8 @@ test("leaderboard is capped at 50 entries", async () => {
 
 const CODE = stubCode(50_000, 300);
 
-async function makeChallenge(author, { ticks = 50_000, ops = 300, goal = "hay500", seed = 1234 } = {}) {
-  const r = await call("POST", "/api/challenges", { body: { goal, seed, code: stubCode(ticks, ops) }, token: author.token });
+async function makeChallenge(author, { ticks = 50_000, ops = 300, goal = "hay500", seed = 1234, at = base } = {}) {
+  const r = await call("POST", "/api/challenges", { body: { goal, seed, code: stubCode(ticks, ops) }, token: author.token, at });
   assert.equal(r.status, 201, r.text);
   return r.json;
 }
@@ -746,7 +749,7 @@ test("a phase-1 DB file is upgraded in place (old rows count as unverified)", as
     INSERT INTO challenges (author_id, goal, seed, code, author_ticks, author_ops, created_at) VALUES (1, 'hay500', 1, 'x', 1, 1, 1);
   `);
   old.close();
-  const db = await openDb(file);
+  const db = await openDb(file, { now: () => 2 }); // (its challenge is from time 1: not expired yet)
   try {
     assert.deepEqual(db.leaderboard("maze", 1), [], "the trust-based maze row is not on the verified board");
     assert.equal(db.openChallenges()[0].verified, 0);
@@ -772,4 +775,278 @@ test("a full verifier queue answers 429 + Retry-After (not 503, which the client
   } finally {
     await sub.close();
   }
+});
+
+// ---------- v5: expiry, history, deploy config ----------
+
+const DAY = 24 * 60 * 60 * 1000;
+const T0 = Date.UTC(2026, 10, 1);
+
+/** A stub-verifier server with a clock the test moves: fn({ at, clock, db, post, history }). */
+async function withClock(name, fn, verifier = stubVerifier()) {
+  const clock = { t: T0 };
+  const sub = await startServer({ port: 0, dbPath: join(dir, `${name}.db`), distDir: null, rateLimit: { max: 10_000 }, verifier, now: () => clock.t });
+  const at = sub.url;
+  const post = (p, id, ticks, ops = 300) => call("POST", `/api/challenges/${id}/results`, { body: answer(ticks, ops), token: p.token, at });
+  const history = async (p) => {
+    const r = await call("GET", "/api/players/me/history", { token: p.token, at });
+    assert.equal(r.status, 200, r.text);
+    return r.json.events;
+  };
+  try {
+    await fn({ at, clock, db: sub.db, post, history });
+  } finally {
+    await sub.close();
+  }
+}
+
+test("challenge expiry: an 8-day-old challenge is unlisted, rejects results (410) and is 'expired' in the author's history", () =>
+  withClock("expiry", async ({ at, clock, post, history }) => {
+    const a = await register("Exp-A", at);
+    const b = await register("Exp-B", at);
+    const ch = await makeChallenge(a, { at });
+    assert.equal(ch.expiresAt, T0 + 7 * DAY);
+    const listed = async () => (await call("GET", "/api/challenges", { at })).json.challenges.some((c) => c.id === ch.id);
+
+    clock.t = T0 + 7 * DAY - 1; // the last millisecond
+    assert.equal(await listed(), true);
+    assert.deepEqual(await history(a), [], "an open challenge is not a finished event");
+    clock.t = T0 + 7 * DAY; // exactly 7 days: expired
+    assert.equal(await listed(), false);
+
+    clock.t = T0 + 8 * DAY;
+    assert.equal(await listed(), false);
+    const full = await call("GET", `/api/challenges/${ch.id}`, { at });
+    assert.equal(full.json.status, "expired");
+    assert.equal(full.json.result, null);
+    const r = await post(b, ch.id, 1);
+    assert.equal(r.status, 410);
+    assert.match(r.json.error, /expired/);
+    for (const p of [a, b]) assert.equal((await call("GET", "/api/players/me", { token: p.token, at })).json.elo, 1000);
+
+    const [ev, ...rest] = await history(a);
+    assert.deepEqual(rest, []);
+    assert.deepEqual(ev, {
+      challengeId: ch.id,
+      role: "author",
+      opponentId: null,
+      opponentName: null,
+      goal: "hay500",
+      seed: 1234,
+      myTicks: 50_000,
+      myOps: 300,
+      opponentTicks: null,
+      opponentOps: null,
+      outcome: "expired",
+      eloDelta: 0,
+      createdAt: T0,
+      closedAt: T0 + 7 * DAY,
+    });
+    assert.deepEqual(await history(b), [], "only the author sees it");
+  }));
+
+test("challenge expiry: an answered challenge stays closed (409), never expired", () =>
+  withClock("expiry2", async ({ at, clock, post, history }) => {
+    const a = await register("Exp-C", at);
+    const b = await register("Exp-D", at);
+    const ch = await makeChallenge(a, { at });
+    clock.t = T0 + 7 * DAY - 1;
+    assert.equal((await post(b, ch.id, 40_000)).status, 201, "still answerable in the last millisecond");
+    clock.t = T0 + 30 * DAY;
+    assert.equal((await call("GET", `/api/challenges/${ch.id}`, { at })).json.status, "closed");
+    assert.equal((await post(await register("Exp-E", at), ch.id, 1)).status, 409);
+    assert.deepEqual((await history(a)).map((e) => e.outcome), ["lose"]);
+  }));
+
+test("challenge expiry: expiring while the replay runs rejects the result too (checked again in the write)", () => {
+  const stubbed = stubVerifier();
+  const hook = { on: null };
+  const verifier = {
+    verify: async (job) => {
+      hook.on?.();
+      return stubbed.verify(job);
+    },
+    close: async () => {},
+  };
+  return withClock("expiry3", async ({ at, clock, db, post }) => {
+    const a = await register("Exp-F", at);
+    const b = await register("Exp-G", at);
+    const ch = await makeChallenge(a, { at });
+    clock.t = T0 + 7 * DAY - 1;
+    hook.on = () => (clock.t = T0 + 7 * DAY);
+    const r = await post(b, ch.id, 1);
+    assert.equal(r.status, 410, r.text);
+    assert.equal(db.resultFor(ch.id), null);
+    assert.equal(db.playerById(b.playerId).elo, 1000);
+  }, verifier);
+});
+
+test("history: shape, both sides, and the ELO deltas of win / lose / draw", () =>
+  withClock("history", async ({ at, clock, db, post, history }) => {
+    const a = await register("His-A", at);
+    const b = await register("His-B", at);
+    const play = async (ticks) => {
+      const ch = await makeChallenge(a, { at, goal: "wood800", seed: 9 });
+      clock.t += 1000;
+      const r = await post(b, ch.id, ticks);
+      assert.equal(r.status, 201, r.text);
+      clock.t += 1000;
+      return { ch, r: r.json };
+    };
+    // b (challenger): win, lose (DNF), draw. Expected deltas from the ratings at that moment.
+    const ratings = { a: 1000, b: 1000 };
+    const expected = [];
+    const games = [];
+    for (const [ticks, score] of [[40_000, 1], [DNF_TICKS, 0], [50_000, 0.5]]) {
+      const e = eloUpdate(ratings.b, ratings.a, score);
+      expected.push({ b: e.deltaA, a: e.deltaB });
+      ratings.b = e.ratingA;
+      ratings.a = e.ratingB;
+      games.push(await play(ticks));
+    }
+    assert.deepEqual(expected[0], { b: 16, a: -16 });
+    assert.ok(expected[1].b < -16, "a 1016 player loses more to a 984 one");
+
+    const ha = await history(a);
+    const hb = await history(b);
+    // newest first
+    assert.deepEqual(ha.map((e) => e.challengeId), games.map((g) => g.ch.id).reverse());
+    assert.deepEqual(ha.map((e) => e.outcome), ["draw", "win", "lose"]);
+    assert.deepEqual(hb.map((e) => e.outcome), ["draw", "lose", "win"]);
+    assert.deepEqual(ha.map((e) => e.eloDelta), expected.map((e) => e.a).reverse());
+    assert.deepEqual(hb.map((e) => e.eloDelta), expected.map((e) => e.b).reverse());
+    // The deltas add up to the stored ratings, and match what the answer said.
+    const sum = (h) => h.reduce((n, e) => n + e.eloDelta, 0);
+    assert.equal(db.playerById(a.playerId).elo, 1000 + sum(ha));
+    assert.equal(db.playerById(b.playerId).elo, 1000 + sum(hb));
+    assert.deepEqual(hb.map((e) => e.eloDelta), games.map((g) => g.r.you.delta).reverse());
+    assert.deepEqual(ha.map((e) => e.eloDelta), games.map((g) => g.r.author.delta).reverse());
+
+    // Full shape, from both sides (the DNF game).
+    const g = games[1].ch;
+    const common = { challengeId: g.id, goal: "wood800", seed: 9, createdAt: g.createdAt, closedAt: g.createdAt + 1000 };
+    assert.deepEqual(ha[1], {
+      ...common, role: "author", opponentId: b.playerId, opponentName: "His-B",
+      myTicks: 50_000, myOps: 300, opponentTicks: DNF_TICKS, opponentOps: 300, outcome: "win", eloDelta: expected[1].a,
+    });
+    assert.deepEqual(hb[1], {
+      ...common, role: "challenger", opponentId: a.playerId, opponentName: "His-A",
+      myTicks: DNF_TICKS, myOps: 300, opponentTicks: 50_000, opponentOps: 300, outcome: "lose", eloDelta: expected[1].b,
+    });
+
+    // The result row carries both deltas.
+    const full = (await call("GET", `/api/challenges/${g.id}`, { at })).json.result;
+    assert.deepEqual([full.eloDelta, full.authorEloDelta], [expected[1].b, expected[1].a]);
+  }));
+
+test("history: auth required, GET only, only your own events, latest 20 by closing time", () =>
+  withClock("history2", async ({ at, clock, post, history }) => {
+    const none = await call("GET", "/api/players/me/history", { at });
+    assert.equal(none.status, 401);
+    assert.equal(typeof none.json.error, "string");
+    assert.equal((await call("GET", "/api/players/me/history", { token: "a".repeat(64), at })).status, 401);
+    const a = await register("Lim-A", at);
+    const b = await register("Lim-B", at);
+    const c = await register("Lim-C", at);
+    assert.equal((await call("POST", "/api/players/me/history", { body: {}, token: a.token, at })).status, 405);
+    assert.deepEqual(await history(a), []);
+
+    const old = await makeChallenge(a, { at }); // posted first, will expire in between
+    const late = await makeChallenge(a, { at, seed: 2 }); // answered last, although posted early
+    const ids = [];
+    clock.t = T0 + 6 * DAY;
+    for (let i = 0; i < HISTORY_LIMIT + 3; i++) {
+      const ch = await makeChallenge(a, { at });
+      ids.push(ch.id);
+    }
+    assert.equal((await post(b, late.id, 40_000)).status, 201);
+    clock.t = T0 + 6 * DAY + 1;
+    for (const id of ids) {
+      clock.t += 1;
+      assert.equal((await post(b, id, 40_000)).status, 201);
+    }
+    clock.t = T0 + 8 * DAY; // `old` expired at T0 + 7 d, after all the answers
+    const h = await history(a);
+    assert.equal(h.length, HISTORY_LIMIT);
+    assert.deepEqual(h.map((e) => e.challengeId), [old.id, ...ids.reverse().slice(0, HISTORY_LIMIT - 1)]);
+    assert.equal(h[0].outcome, "expired");
+    assert.ok((await history(b)).every((e) => e.role === "challenger" && e.opponentName === "Lim-A" && e.outcome === "win"));
+    assert.deepEqual(await history(c), []);
+    assert.equal(CHALLENGE_TTL_MS, 7 * DAY);
+  }));
+
+test("a v4 DB file is upgraded in place: the author's ELO delta of old results is filled in", async () => {
+  const file = join(dir, "v4.db");
+  const old = new DatabaseSync(file);
+  old.exec(`
+    CREATE TABLE players (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE, token_hash TEXT NOT NULL UNIQUE, elo INTEGER NOT NULL DEFAULT 1000, created_at INTEGER NOT NULL);
+    CREATE TABLE challenges (id INTEGER PRIMARY KEY, author_id INTEGER NOT NULL REFERENCES players(id), goal TEXT NOT NULL, seed INTEGER NOT NULL, code TEXT NOT NULL, author_ticks INTEGER NOT NULL, author_ops INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'open', created_at INTEGER NOT NULL, verified INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE challenge_results (id INTEGER PRIMARY KEY, challenge_id INTEGER NOT NULL UNIQUE REFERENCES challenges(id), player_id INTEGER NOT NULL REFERENCES players(id), ticks INTEGER NOT NULL, ops INTEGER NOT NULL, code TEXT NOT NULL, outcome TEXT NOT NULL, elo_delta INTEGER NOT NULL, created_at INTEGER NOT NULL, verified INTEGER NOT NULL DEFAULT 0);
+    INSERT INTO players (name, token_hash, elo, created_at) VALUES ('Au', 'h1', 984, 1), ('Ch', 'h2', 1016, 1);
+    INSERT INTO challenges (author_id, goal, seed, code, author_ticks, author_ops, status, created_at) VALUES (1, 'hay500', 1, 'x', 900, 9, 'closed', 5);
+  `);
+  const insert = "INSERT INTO challenge_results (challenge_id, player_id, ticks, ops, code, outcome, elo_delta, created_at) VALUES (?, 2, 800, 8, 'x', 'win', 16, ?)";
+  old.prepare(insert).run(1, 6);
+  old.close();
+  let db = await openDb(file);
+  try {
+    assert.deepEqual(db.history(1).map((e) => [e.outcome, e.elo_delta]), [["lose", -16]]);
+    assert.deepEqual(db.history(2).map((e) => [e.outcome, e.elo_delta]), [["win", 16]]);
+    // Rollback: the v4 server's INSERT (no author_elo_delta) still works on this file …
+    db.raw.exec("INSERT INTO challenges (author_id, goal, seed, code, author_ticks, author_ops, status, created_at) VALUES (1, 'hay500', 1, 'x', 900, 9, 'closed', 7)");
+    db.raw.prepare(insert).run(2, 8);
+  } finally {
+    db.close();
+  }
+  // … and the next v5 start fills those rows in too.
+  db = await openDb(file);
+  try {
+    assert.deepEqual(db.history(1).map((e) => e.elo_delta), [-16, -16]);
+  } finally {
+    db.close();
+  }
+});
+
+test("`node server/index.js`: FARMER_DB and PORT are respected, HOST defaults to 127.0.0.1, SIGTERM exits 0", async () => {
+  const dbPath = join(dir, "fresh", "data", "env.db"); // the directories do not exist yet
+  const run = async (env, fn) => {
+    const base = Object.fromEntries(Object.entries(process.env).filter(([k]) => !["HOST", "PORT", "FARMER_DB", "FARMER_DIST", "TRUST_PROXY", "NODE_TEST_CONTEXT"].includes(k)));
+    const child = spawn(process.execPath, [fileURLToPath(new URL("./index.js", import.meta.url))], {
+      cwd: dir,
+      env: { ...base, PORT: "0", FARMER_DB: dbPath, ...env },
+      stdio: ["ignore", "pipe", "inherit"],
+    });
+    try {
+      let out = "";
+      for await (const chunk of child.stdout) {
+        out += chunk;
+        if (out.includes("\n")) break;
+      }
+      const m = /listening on (http:\/\/([^:]+):(\d+)) \(db (.+)\)/.exec(out);
+      assert.ok(m, out);
+      await fn({ url: m[1], host: m[2], port: Number(m[3]), db: m[4] });
+      const exited = once(child, "exit");
+      child.kill("SIGTERM");
+      assert.deepEqual(await exited, [0, null]);
+    } finally {
+      child.kill("SIGKILL");
+    }
+  };
+  let token;
+  await run({}, async ({ url, host, db }) => {
+    assert.equal(host, "127.0.0.1");
+    assert.equal(db, dbPath);
+    assert.equal((await call("GET", "/api/health", { at: url })).json.ok, true);
+    token = (await register("Env-Player", url)).token;
+    assert.ok(existsSync(dbPath));
+  });
+  // Same file, all interfaces: the player is still there.
+  await run({ HOST: "0.0.0.0" }, async ({ url, host, port }) => {
+    assert.equal(host, "localhost");
+    assert.equal((await call("GET", "/api/players/me", { token, at: url })).json.name, "Env-Player");
+    assert.equal((await call("GET", "/api/health", { at: `http://127.0.0.1:${port}` })).status, 200);
+  });
+  const raw = new DatabaseSync(dbPath);
+  assert.equal(raw.prepare("SELECT COUNT(*) AS n FROM players").get().n, 1);
+  raw.close();
 });

@@ -5,7 +5,7 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
-import { ELO_START, LEADERBOARD_LIMIT, CHALLENGE_LIST_LIMIT } from "../src/farmer/onlineRules.js";
+import { CHALLENGE_LIST_LIMIT, CHALLENGE_TTL_MS, ELO_START, HISTORY_LIMIT, LEADERBOARD_LIMIT } from "../src/farmer/onlineRules.js";
 
 async function openRaw(file) {
   try {
@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS challenges (
   verified INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS challenges_open ON challenges(status, id);
+CREATE INDEX IF NOT EXISTS challenges_author ON challenges(author_id, id);
 CREATE TABLE IF NOT EXISTS challenge_results (
   id INTEGER PRIMARY KEY,
   challenge_id INTEGER NOT NULL UNIQUE REFERENCES challenges(id),
@@ -67,16 +68,20 @@ CREATE TABLE IF NOT EXISTS challenge_results (
   outcome TEXT NOT NULL,
   elo_delta INTEGER NOT NULL,
   created_at INTEGER NOT NULL,
-  verified INTEGER NOT NULL DEFAULT 0
+  verified INTEGER NOT NULL DEFAULT 0,
+  author_elo_delta INTEGER
 );
+CREATE INDEX IF NOT EXISTS challenge_results_player ON challenge_results(player_id, id);
 `;
 
-// v4 phase 2 columns, added to a phase-1 DB file in place (old rows keep
-// verified = 0: they were trust-based). New tables get them from SCHEMA.
+// Columns added to an older DB file in place (new tables get them from SCHEMA).
+// v4 phase 2: old rows keep verified = 0 (they were trust-based).
+// v5: author_elo_delta (elo_delta is the challenger's). Nullable on purpose, so
+// a rolled-back (older) server can keep inserting rows without it.
 const ADDED_COLUMNS = {
   scores: ["verified INTEGER NOT NULL DEFAULT 0", "size INTEGER", "sx INTEGER", "sy INTEGER", "code TEXT"],
   challenges: ["verified INTEGER NOT NULL DEFAULT 0"],
-  challenge_results: ["verified INTEGER NOT NULL DEFAULT 0"],
+  challenge_results: ["verified INTEGER NOT NULL DEFAULT 0", "author_elo_delta INTEGER"],
 };
 
 function migrate(db) {
@@ -84,6 +89,9 @@ function migrate(db) {
     const have = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name));
     for (const col of cols) if (!have.has(col.split(" ")[0])) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col}`);
   }
+  // Results stored before v5: ELO has always been zero-sum, so the author's
+  // change is the challenger's, negated.
+  db.exec("UPDATE challenge_results SET author_elo_delta = -elo_delta WHERE author_elo_delta IS NULL");
 }
 
 export const hashToken = (token) => createHash("sha256").update(String(token)).digest("hex");
@@ -132,17 +140,49 @@ export async function openDb(file, { now = Date.now } = {}) {
     openChallenges: db.prepare(`
       SELECT c.id, c.author_id, p.name AS author_name, p.elo AS author_elo, c.goal, c.seed, c.author_ticks, c.author_ops, c.created_at, c.verified
       FROM challenges c JOIN players p ON p.id = c.author_id
-      WHERE c.status = 'open' ORDER BY c.id DESC LIMIT ${CHALLENGE_LIST_LIMIT}`),
+      WHERE c.status = 'open' AND c.created_at > ? ORDER BY c.id DESC LIMIT ${CHALLENGE_LIST_LIMIT}`),
     challenge: db.prepare(`
       SELECT c.*, p.name AS author_name, p.elo AS author_elo
       FROM challenges c JOIN players p ON p.id = c.author_id WHERE c.id = ?`),
     resultFor: db.prepare(`
-      SELECT r.player_id, p.name, r.ticks, r.ops, r.outcome, r.elo_delta, r.created_at, r.verified
+      SELECT r.player_id, p.name, r.ticks, r.ops, r.outcome, r.elo_delta, r.author_elo_delta, r.created_at, r.verified
       FROM challenge_results r JOIN players p ON p.id = r.player_id WHERE r.challenge_id = ?`),
     closeChallenge: db.prepare("UPDATE challenges SET status = 'closed' WHERE id = ? AND status = 'open'"),
     insertResult: db.prepare(
-      "INSERT INTO challenge_results (challenge_id, player_id, ticks, ops, code, outcome, elo_delta, created_at, verified) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO challenge_results (challenge_id, player_id, ticks, ops, code, outcome, elo_delta, author_elo_delta, created_at, verified) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     ),
+    // One player's finished challenges, from their side: authored + answered,
+    // authored + expired (never answered), answered. Newest end first.
+    // Params: author id | TTL, author id, expiry cutoff | challenger id.
+    history: db.prepare(`
+      SELECT * FROM (
+        SELECT c.id AS challenge_id, 'author' AS role, p.id AS opponent_id, p.name AS opponent_name, c.goal, c.seed,
+               c.author_ticks AS my_ticks, c.author_ops AS my_ops, r.ticks AS opponent_ticks, r.ops AS opponent_ops,
+               CASE r.outcome WHEN 'win' THEN 'lose' WHEN 'loss' THEN 'win' ELSE 'draw' END AS outcome,
+               r.author_elo_delta AS elo_delta, c.created_at, r.created_at AS closed_at
+        FROM challenges c JOIN challenge_results r ON r.challenge_id = c.id JOIN players p ON p.id = r.player_id
+        WHERE c.author_id = ?
+        UNION ALL
+        SELECT c.id, 'author', NULL, NULL, c.goal, c.seed, c.author_ticks, c.author_ops, NULL, NULL,
+               'expired', 0, c.created_at, c.created_at + ?
+        FROM challenges c
+        WHERE c.author_id = ? AND c.status = 'open' AND c.created_at <= ?
+        UNION ALL
+        SELECT c.id, 'challenger', p.id, p.name, c.goal, c.seed, r.ticks, r.ops, c.author_ticks, c.author_ops,
+               CASE r.outcome WHEN 'win' THEN 'win' WHEN 'loss' THEN 'lose' ELSE 'draw' END,
+               r.elo_delta, c.created_at, r.created_at
+        FROM challenge_results r JOIN challenges c ON c.id = r.challenge_id JOIN players p ON p.id = c.author_id
+        WHERE r.player_id = ?
+      ) ORDER BY closed_at DESC, challenge_id DESC LIMIT ${HISTORY_LIMIT}`),
+  };
+
+  // Challenge expiry is lazy (no cron, the stored status stays 'open'): an open
+  // challenge older than the TTL reads as status 'expired' everywhere.
+  const expiryCutoff = () => now() - CHALLENGE_TTL_MS;
+  const readChallenge = (id) => {
+    const c = q.challenge.get(id);
+    if (!c) return null;
+    return c.status === "open" && c.created_at <= expiryCutoff() ? { ...c, status: "expired" } : c;
   };
 
   const tx = (fn) => {
@@ -191,26 +231,30 @@ export async function openDb(file, { now = Date.now } = {}) {
       const r = q.insertChallenge.run(authorId, c.goal, c.seed, c.code, c.authorTicks, c.authorOps, now(), c.verified ? 1 : 0);
       return Number(r.lastInsertRowid);
     },
-    openChallenges: () => q.openChallenges.all(),
-    challenge: (id) => q.challenge.get(id) ?? null,
+    openChallenges: () => q.openChallenges.all(expiryCutoff()),
+    /** status: 'open' | 'closed' | 'expired' (open for longer than the TTL). */
+    challenge: readChallenge,
     resultFor: (id) => q.resultFor.get(id) ?? null,
+    /** The player's latest finished challenges (answered, or expired unanswered). */
+    history: (playerId) => q.history.all(playerId, CHALLENGE_TTL_MS, playerId, expiryCutoff(), playerId),
 
     /**
      * Close challenge `id` with a result, atomically: the open check, the
      * result row, the status flip and both players' ELO in one transaction.
      * decide(challengeRow, authorRow, challengerRow) → { outcome, deltaChallenger, deltaAuthor }.
-     * → { ok, ... } | { ok: false, code: "missing" | "closed" }
+     * → { ok, ... } | { ok: false, code: "missing" | "closed" | "expired" }
      */
     closeChallenge(id, playerId, result, decide) {
       return tx(() => {
-        const c = q.challenge.get(id);
+        const c = readChallenge(id);
         if (!c) return { ok: false, code: "missing" };
+        if (c.status === "expired") return { ok: false, code: "expired" };
         if (c.status !== "open") return { ok: false, code: "closed" };
         const author = q.playerById.get(c.author_id);
         const challenger = q.playerById.get(playerId);
         const d = decide(c, author, challenger);
         if (q.closeChallenge.run(id).changes !== 1) return { ok: false, code: "closed" };
-        q.insertResult.run(id, playerId, result.ticks, result.ops, result.code, d.outcome, d.deltaChallenger, now(), result.verified ? 1 : 0);
+        q.insertResult.run(id, playerId, result.ticks, result.ops, result.code, d.outcome, d.deltaChallenger, d.deltaAuthor, now(), result.verified ? 1 : 0);
         q.setElo.run(author.elo + d.deltaAuthor, author.id);
         q.setElo.run(challenger.elo + d.deltaChallenger, challenger.id);
         return {

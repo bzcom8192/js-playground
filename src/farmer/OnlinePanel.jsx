@@ -5,6 +5,8 @@
 // demo farm can look but not register, submit or race.
 // v4 phase 2: maze rows and friend challenges are replay-verified by the
 // server (✓); dino rows are not replayable and say so (ยังไม่ยืนยัน).
+// v5: identity export / import (its own file, not Save Data), challenges
+// expire after 7 days, and a match history (ประวัติ) with the ELO changes.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { GOALS, GOAL_IDS, TICK_CAP } from "./arena.js";
 import { playSolo } from "./arenaClient.js";
@@ -13,10 +15,20 @@ import { randomSeed } from "./maze.js";
 import { buildProgram } from "./program.js";
 import { OLIVE } from "./farmerUi.jsx";
 import { CODE_MAX, NAME_MAX } from "./onlineRules.js";
-import { OFFLINE_MESSAGE, clearIdentity, loadIdentity, onlineApi, saveIdentity } from "./onlineApi.js";
+import {
+  IDENTITY_FILE_MAX,
+  OFFLINE_MESSAGE,
+  buildIdentityExport,
+  clearIdentity,
+  identityFileName,
+  loadIdentity,
+  onlineApi,
+  saveIdentity,
+  verifyIdentityImport,
+} from "./onlineApi.js";
+import { historyRows, signed, timeText } from "./onlineHistory.js";
 
 const fmt = (n) => Number(n || 0).toLocaleString("en-US");
-const signed = (d) => (d > 0 ? `+${d}` : d < 0 ? `−${-d}` : "±0");
 
 const TABS = [
   { id: "maze1", label: "Maze L1", category: "maze", level: 1 },
@@ -101,6 +113,39 @@ function Leaderboard({ tab, board, meId }) {
   );
 }
 
+const smallBtn = "px-2 py-0.5 rounded text-[11px] font-semibold border border-stone-300 bg-white text-stone-600 hover:border-stone-500 disabled:opacity-50 disabled:hover:border-stone-300";
+const TONE = { good: "text-lime-700", bad: "text-red-600", even: "text-stone-500", muted: "text-stone-400" };
+
+function History({ rows }) {
+  if (rows === null) return <p className="text-center text-stone-400 text-xs py-2">Loading…</p>;
+  if (!rows) return <p className="text-center text-stone-400 text-xs py-2">The history could not be loaded.</p>;
+  if (!rows.length) return <p className="text-center text-stone-400 text-xs py-2">No finished challenges yet.</p>;
+  return (
+    <ul className="space-y-0.5">
+      {rows.map((r) => (
+        <li key={r.key} className="px-1.5 py-1 rounded text-[11px] odd:bg-white even:bg-stone-50" title={`Challenge #${r.key} · created ${r.created} · ended ${r.when}`}>
+          <div className="flex items-center gap-2">
+            <span className={`w-14 shrink-0 font-bold ${TONE[r.tone]}`}>{r.label}</span>
+            <span className="flex-1 min-w-0 truncate text-stone-700">
+              {r.opponent === null ? <span className="text-stone-400">no one answered</span> : <span className="font-semibold">{r.opponent}</span>}
+              <span className="text-stone-400"> · {r.goal}</span>
+            </span>
+            <span className={`shrink-0 font-mono font-bold tabular-nums ${TONE[r.eloTone]}`} title="ELO change">
+              {r.elo}
+            </span>
+          </div>
+          <div className="flex justify-between gap-2 text-[10px] text-stone-400 font-mono tabular-nums">
+            <span className="truncate" title="Your ticks / the opponent's ticks (measured by the server)">
+              {r.authored ? "posted" : "answered"} · {r.ticks}
+            </span>
+            <span className="shrink-0">{r.when}</span>
+          </div>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 function SoloProgress({ p, goal }) {
   const pct = Math.min(100, ((p.you || 0) / goal.amount) * 100);
   return (
@@ -182,8 +227,10 @@ export default function OnlinePanel({ files, activeId, demo, onlineSeq = 0, push
   const [tabId, setTabId] = useState("maze1");
   const [board, setBoard] = useState(null);
   const [challenges, setChallenges] = useState(null);
+  const [history, setHistory] = useState(null); // null: loading, false: not available, else rows
   const [nameText, setNameText] = useState("");
-  const [busy, setBusy] = useState(null); // "register" | "create" | `accept:<id>`
+  const [busy, setBusy] = useState(null); // "register" | "import" | "create" | `accept:<id>`
+  const [idMsg, setIdMsg] = useState(null); // { ok, text }: the outcome of an export / import
   const [progress, setProgress] = useState(null);
   const [goalId, setGoalId] = useState("hay500");
   const [answer, setAnswer] = useState(null);
@@ -191,6 +238,7 @@ export default function OnlinePanel({ files, activeId, demo, onlineSeq = 0, push
   const [error, setError] = useState(null);
   const [reloadSeq, setReloadSeq] = useState(0);
   const busyRef = useRef(false);
+  const importRef = useRef(null);
 
   const tab = TABS.find((t) => t.id === tabId) || TABS[0];
   const file = files.find((f) => f.id === activeId) || files[0];
@@ -208,7 +256,7 @@ export default function OnlinePanel({ files, activeId, demo, onlineSeq = 0, push
     let alive = true;
     (async () => {
       try {
-        const [lb, list, me] = await Promise.all([
+        const [lb, list, me, hist] = await Promise.all([
           api.leaderboard(tab.category, tab.level),
           api.listChallenges(),
           token
@@ -217,11 +265,18 @@ export default function OnlinePanel({ files, activeId, demo, onlineSeq = 0, push
                 throw err;
               })
             : Promise.resolve(undefined),
+          token
+            ? api.history(token).then(historyRows, (err) => {
+                if (err?.offline) throw err;
+                return false; // unknown token, or a server without the endpoint: the rest still works
+              })
+            : Promise.resolve(null),
         ]);
         if (!alive) return;
         setOffline(false);
         setBoard(lb);
         setChallenges(list.challenges || []);
+        setHistory(hist);
         if (me !== undefined) {
           setProfile(me);
           setBadIdentity(me === null);
@@ -246,6 +301,7 @@ export default function OnlinePanel({ files, activeId, demo, onlineSeq = 0, push
     setBusy(kind);
     setError(null);
     setNotice(null);
+    setIdMsg(null);
     try {
       await fn();
     } catch (err) {
@@ -257,25 +313,82 @@ export default function OnlinePanel({ files, activeId, demo, onlineSeq = 0, push
     }
   };
 
+  // Switch this window to an identity the server just confirmed.
+  const adopt = (id, me) => {
+    setIdentity(id);
+    setProfile(me);
+    setBadIdentity(false);
+    setHistory(null);
+    setAnswer(null);
+    setNameText("");
+    setReloadSeq((n) => n + 1);
+  };
+
   const register = () =>
     run("register", async () => {
       if (demo) return;
       const r = await api.register(nameText);
       const id = { playerId: r.playerId, name: r.name, token: r.token };
       saveIdentity(id);
-      setIdentity(id);
-      setProfile({ playerId: r.playerId, name: r.name, elo: r.elo });
-      setBadIdentity(false);
-      setNameText("");
+      adopt(id, { playerId: r.playerId, name: r.name, elo: r.elo });
       pushLog("info", `🌐 Joined online as ${r.name} (ELO ${r.elo})`);
     });
 
   const forget = () => {
-    if (!confirm(`Forget the online identity “${identity?.name}” on this browser? Its token cannot be recovered, so you would need a new name.`)) return;
+    if (!confirm(`Forget the online identity “${identity?.name}” on this browser? Without an exported copy (ส่งออกบัญชี) it cannot be recovered, and you would need a new name.`)) return;
     clearIdentity();
     setIdentity(null);
     setProfile(null);
     setBadIdentity(false);
+    setHistory(null);
+    setIdMsg(null);
+  };
+
+  // The identity file is a credential: say so before it is written.
+  const exportIdentity = () => {
+    if (!identity) return;
+    if (
+      !confirm(
+        `ส่งออกบัญชี “${identity.name}”?\n\n⚠ The file contains your secret token. Anyone who has the file can play as you, and the token cannot be changed. Keep it private: don't share or publish it.`,
+      )
+    )
+      return;
+    const blob = new Blob([JSON.stringify(buildIdentityExport(identity), null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = identityFileName(identity.name);
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    setIdMsg({ ok: true, text: "Exported. Keep the file private: whoever has it can play as you." });
+  };
+
+  const importIdentity = (e) => {
+    const picked = e.target.files?.[0];
+    e.target.value = ""; // allow re-picking the same file
+    if (!picked || demo) return;
+    return run("import", async () => {
+      try {
+        // Verified by the server first; only then asked about and saved.
+        const text = picked.size > IDENTITY_FILE_MAX ? null : await picked.text();
+        const { identity: id, profile: me } = await verifyIdentityImport(text, api);
+        if (
+          identity &&
+          identity.token !== id.token &&
+          !confirm(
+            `Play as “${id.name}” (ELO ${me.elo}) on this browser? This REPLACES the current identity “${identity.name}”. Without an exported copy (ส่งออกบัญชี) that one cannot be recovered.`,
+          )
+        )
+          return;
+        if (!saveIdentity(id)) throw new Error("This browser did not let the game store the identity.");
+        adopt(id, me);
+        setIdMsg({ ok: true, text: `Imported: playing as ${id.name}.` });
+        pushLog("info", `🌐 Imported the online identity ${id.name} (ELO ${me.elo})`);
+      } catch (err) {
+        if (err?.offline) throw err;
+        setIdMsg({ ok: false, text: `Import failed: ${err?.message || err}` });
+      }
+    });
   };
 
   // The player's main program: the active file with its helper files.
@@ -326,7 +439,7 @@ export default function OnlinePanel({ files, activeId, demo, onlineSeq = 0, push
       const full = await api.getChallenge(c.id); // still open? (and the author's code for afterwards)
       if (full.status !== "open") {
         setReloadSeq((n) => n + 1);
-        throw new Error("Someone answered this challenge first.");
+        throw new Error(full.status === "expired" ? "This challenge has expired (หมดอายุ)." : "Someone answered this challenge first.");
       }
       const goal = GOALS[full.goal];
       if (!goal) throw new Error(`Unknown goal ${full.goal}`);
@@ -339,7 +452,10 @@ export default function OnlinePanel({ files, activeId, demo, onlineSeq = 0, push
         seed: full.seed,
         onProgress: (p) => setProgress({ ...p, label, goal: full.goal }),
       });
-      const r = await api.answerChallenge(token, c.id, { ticks: solo.ticks, ops: solo.ops, code: prog.code });
+      const r = await api.answerChallenge(token, c.id, { ticks: solo.ticks, ops: solo.ops, code: prog.code }).catch((err) => {
+        if (err?.status === 409 || err?.status === 410) setReloadSeq((n) => n + 1); // answered / expired meanwhile: refresh the list
+        throw err;
+      });
       setAnswer({ ...r, goal: full.goal, seed: full.seed, authorCode: full.code, error: solo.error });
       setProfile((p) => (p ? { ...p, elo: r.you.elo } : p));
       const word = { win: "win", loss: "loss", draw: "draw" }[r.result] || r.result;
@@ -420,12 +536,25 @@ export default function OnlinePanel({ files, activeId, demo, onlineSeq = 0, push
         )}
         {identity && !badIdentity && (
           <p className="text-[10px] text-stone-400 leading-relaxed">
-            New local maze (L1–L3) and dinosaur records are sent automatically. Your token stays on this browser only (not in Save Data).{" "}
+            New local maze (L1–L3) and dinosaur records are sent automatically. Your token is stored on this browser only (not in Save Data);
+            export it to play as {identity.name} elsewhere or to keep a backup.{" "}
             <button onClick={forget} className="underline hover:text-stone-600" disabled={!!busy}>
               Forget identity
             </button>
           </p>
         )}
+        <div className="flex flex-wrap items-center gap-1.5">
+          {identity && !badIdentity && (
+            <button onClick={exportIdentity} disabled={locked} className={smallBtn} title="Download this identity as a file. The file is a credential: keep it private">
+              ส่งออกบัญชี
+            </button>
+          )}
+          <button onClick={() => importRef.current?.click()} disabled={locked} className={smallBtn} title="Use an identity file exported from another browser">
+            {busy === "import" ? "…" : "นำเข้าบัญชี"}
+          </button>
+          <input ref={importRef} type="file" accept=".json,application/json" onChange={importIdentity} className="hidden" aria-label="Identity file" />
+        </div>
+        {idMsg && <p className={`text-[11px] break-words ${idMsg.ok ? "text-lime-700" : "text-red-600"}`}>{idMsg.text}</p>}
       </Section>
 
       <Section
@@ -487,7 +616,7 @@ export default function OnlinePanel({ files, activeId, demo, onlineSeq = 0, push
         </div>
         <p className="text-[10px] text-stone-400 leading-relaxed">
           Uses <span className="font-semibold text-stone-500">{file.name}</span> (with its helper files, like ▶) on the fixed 8×8 arena farm. Fewer ticks to the
-          goal wins, then fewer ops. ELO K = 32.{!identity && " Join above to race."}
+          goal wins, then fewer ops. ELO K = 32. An unanswered challenge expires after 7 days.{!identity && " Join above to race."}
         </p>
 
         {progress && <SoloProgress p={progress} goal={GOALS[progress.goal] || GOALS[goalId]} />}
@@ -514,7 +643,7 @@ export default function OnlinePanel({ files, activeId, demo, onlineSeq = 0, push
                       ✓ verified
                     </span>
                   )}
-                  <span className="font-mono tabular-nums text-stone-500" title={`${fmt(c.authorOps)} ops · seed ${c.seed}`}>
+                  <span className="font-mono tabular-nums text-stone-500" title={`${fmt(c.authorOps)} ops · seed ${c.seed}${c.expiresAt ? ` · expires ${timeText(c.expiresAt)}` : ""}`}>
                     {fmt(c.authorTicks)}t
                   </span>
                   <button
@@ -531,6 +660,15 @@ export default function OnlinePanel({ files, activeId, demo, onlineSeq = 0, push
           )}
         </div>
       </Section>
+
+      {identity && !badIdentity && (
+        <Section title="ประวัติ">
+          <div className="rounded-lg border border-stone-200 bg-white p-1 max-h-48 overflow-y-auto">
+            <History rows={history} />
+          </div>
+          <p className="text-[10px] text-stone-400">Your latest 20 finished challenges: your ticks / the opponent&apos;s, and your ELO change.</p>
+        </Section>
+      )}
     </div>
   );
 }
