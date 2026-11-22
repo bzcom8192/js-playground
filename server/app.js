@@ -7,7 +7,7 @@
 // IP otherwise (register, bad tokens).
 //
 // v4 phase 2 (anti-cheat level 2): arena challenges, challenge results, maze
-// scores and (v5 phase 2) dino scores are REPLAYED by the verifier (verifier.js: the engine in a
+// scores and (v5) dino scores and daily race entries are REPLAYED by the verifier (verifier.js: the engine in a
 // worker_thread, tick caps + a wall-clock timeout) and stored with the
 // server-measured ticks / ops; a run the replay can't reproduce is a 422.
 import { createReadStream } from "node:fs";
@@ -17,6 +17,7 @@ import { createVerifier } from "./verifier.js";
 import { hashToken } from "./db.js";
 import { GOALS } from "../src/farmer/arena.js";
 import { MAZE_VERIFY_TICK_CAP } from "../src/farmer/verify.js";
+import { bangkokDate, dailyCourse, dailyFailText, previousDate } from "../src/farmer/dailyRace.js";
 import {
   ARENA_TICK_CAP,
   CHALLENGE_TTL_MS,
@@ -158,6 +159,8 @@ function challengeOut(c) {
   };
 }
 
+const dailyOut = (e) => ({ rank: e.rank, playerId: e.player_id, name: e.name, ticks: e.ticks, ops: e.ops, createdAt: e.created_at, verified: !!e.verified });
+
 // One finished challenge from the asking player's side. An expired challenge
 // has no opponent and changes no ELO; closedAt is then its expiry time.
 const historyOut = (h) => ({
@@ -198,14 +201,15 @@ function claimOf(ticks, ops) {
 }
 
 /**
- * createApp({ db, distDir, rateLimit, trustProxy, verifier }) → (req, res) handler.
+ * createApp({ db, distDir, rateLimit, trustProxy, verifier, now }) → (req, res) handler.
  *  db: an openDb() store. distDir: the built game (null = no static files).
  *  rateLimit: { max, windowMs } for write endpoints (per player token, per IP
  *    without a valid token).
  *  trustProxy: take the client IP from X-Forwarded-For (behind a proxy).
  *  verifier: a createVerifier() (default: a new one with the default limits).
+ *  now: the clock of the daily race date (tests).
  */
-export function createApp({ db, distDir = null, rateLimit = {}, trustProxy = false, verifier = createVerifier() } = {}) {
+export function createApp({ db, distDir = null, rateLimit = {}, trustProxy = false, verifier = createVerifier(), now = Date.now } = {}) {
   const limiter = createRateLimiter(rateLimit);
   const root = distDir ? resolve(distDir) : null;
 
@@ -338,6 +342,24 @@ export function createApp({ db, distDir = null, rateLimit = {}, trustProxy = fal
       return sendJson(res, 200, { category: v.category, level: v.level, entries });
     }
 
+    if (path === "/api/daily") {
+      allow("GET");
+      const course = dailyCourse(bangkokDate(now()));
+      const board = db.dailyBoard(course.date).map(dailyOut);
+      // Optional token: the asker's own best, also when it is off the board.
+      const token = bearer(req);
+      const player = token ? db.playerByToken(token) : null;
+      const mine = player ? db.dailyEntry(course.date, player.id) : null;
+      const before = previousDate(course.date);
+      const winner = db.dailyBoard(before)[0];
+      return sendJson(res, 200, {
+        ...course,
+        board,
+        me: mine ? dailyOut(mine) : null,
+        yesterday: winner ? { date: before, winner: { playerId: winner.player_id, name: winner.name, ticks: winner.ticks, ops: winner.ops } } : null,
+      });
+    }
+
     if (path === "/api/scores") {
       allow("POST");
       const player = auth(req);
@@ -345,6 +367,17 @@ export function createApp({ db, distDir = null, rateLimit = {}, trustProxy = fal
       const v = validateScore(body);
       if (!v.ok) throw new HttpError(400, v.error);
       const score = v.score;
+      if (score.category === "daily") {
+        // The server's own date, fixed when the entry arrives (a replay that
+        // ends after midnight still counts for the day it was sent in).
+        const course = dailyCourse(bangkokDate(now()));
+        const r = await replay({ kind: "daily", code: score.code, seed: course.seed });
+        if (!r.solved) throw new HttpError(422, `daily race rejected: ${dailyFailText(r)}`);
+        const stored = { ...score, ...course, ticks: r.ticks, ops: r.ops, verified: true };
+        const id = db.addScore(player.id, stored);
+        const mine = db.dailyEntry(course.date, player.id);
+        return sendJson(res, 201, { id, ...withoutCode(stored), best: mine.id === id, rank: mine.rank });
+      }
       if (score.category === "dino") {
         // The program runs on the fixed benchmark; the claim (a harvest on the
         // player's own farm) is only echoed back.

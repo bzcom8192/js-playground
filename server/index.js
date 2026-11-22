@@ -26,7 +26,8 @@ export const DEFAULT_DIST = resolve(here, "..", "dist");
  *  → { server, db, verifier, url, close() }
  *  verify: createVerifier() options ({ timeoutMs, maxConcurrent, maxQueue }),
  *  or pass a ready `verifier` (it is then not closed by close()).
- *  now: the clock of the stored timestamps and the challenge expiry (tests). */
+ *  now: the clock of the stored timestamps, the challenge expiry and the daily
+ *  race date (tests). */
 export async function startServer({
   port = DEFAULT_PORT,
   host = DEFAULT_HOST,
@@ -40,7 +41,7 @@ export async function startServer({
 } = {}) {
   const db = await openDb(dbPath, { now });
   const verifier = given ?? createVerifier(verify);
-  const server = createServer(createApp({ db, distDir, rateLimit, trustProxy, verifier }));
+  const server = createServer(createApp({ db, distDir, rateLimit, trustProxy, verifier, now }));
   await new Promise((ok, fail) => {
     server.once("error", fail);
     server.listen(port, host, ok);

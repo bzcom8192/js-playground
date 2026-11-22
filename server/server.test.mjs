@@ -29,7 +29,8 @@ import { createRuntime } from "../src/farmer/runtime.js";
 import { mulberry32 } from "../src/farmer/maze.js";
 import { BOT_CODE } from "../src/farmer/arenaBots.js";
 import { TICK_CAP, runSolo } from "../src/farmer/arena.js";
-import { verifyDino } from "../src/farmer/verify.js";
+import { verifyDaily, verifyDino } from "../src/farmer/verify.js";
+import { dailyCourse } from "../src/farmer/dailyRace.js";
 
 let dir;
 let srv; // real replay verification
@@ -1050,6 +1051,228 @@ test("history: auth required, GET only, only your own events, latest 20 by closi
     assert.deepEqual(await history(c), []);
     assert.equal(CHALLENGE_TTL_MS, 7 * DAY);
   }));
+
+// ---------- v5 phase 3: the daily maze race ----------
+
+const RACE_DAY = "2026-11-01"; // Bangkok: T0 is 07:00 there
+const NEXT_DAY = "2026-11-02";
+/** Bangkok midnight that starts NEXT_DAY. */
+const MIDNIGHT = Date.UTC(2026, 10, 1, 17);
+const daily = async (at, token) => {
+  const r = await call("GET", "/api/daily", { at, token });
+  assert.equal(r.status, 200, r.text);
+  return r.json;
+};
+const enter = (at, p, code, extra = {}) => call("POST", "/api/scores", { body: { category: "daily", code, ...extra }, token: p.token, at });
+
+test("daily: the same date and seed all Bangkok day, a new one at Bangkok midnight", () =>
+  withClock("daily-seed", async ({ at, clock }) => {
+    const first = await daily(at);
+    assert.deepEqual(first, { date: RACE_DAY, seed: dailyCourse(RACE_DAY).seed, size: 8, level: 1, sx: 0, sy: 0, board: [], me: null, yesterday: null });
+    for (const t of [Date.UTC(2026, 9, 31, 17), T0 + 1, Date.UTC(2026, 10, 1, 12), MIDNIGHT - 1]) {
+      clock.t = t;
+      assert.deepEqual(await daily(at), first, new Date(t).toISOString());
+    }
+    clock.t = Date.UTC(2026, 9, 31, 17) - 1;
+    assert.equal((await daily(at)).date, "2026-10-31");
+    clock.t = MIDNIGHT;
+    const next = await daily(at);
+    assert.deepEqual([next.date, next.seed], [NEXT_DAY, dailyCourse(NEXT_DAY).seed]);
+    assert.notEqual(next.seed, first.seed);
+    assert.equal((await call("POST", "/api/daily", { at, body: {} })).status, 405);
+  }));
+
+test("daily: no code is a 400, no token a 401; the board is not a leaderboard category", () =>
+  withClock("daily-bad", async ({ at, db }) => {
+    const p = await register("Daily-Bad", at);
+    for (const body of [{}, { code: "" }, { code: "  " }, { code: 42 }, { code: "x".repeat(100_001) }, { ticks: 100, ops: 10, seed: 5, date: RACE_DAY }]) {
+      const r = await call("POST", "/api/scores", { body: { category: "daily", ...body }, token: p.token, at });
+      assert.equal(r.status, 400, r.text);
+      assert.match(r.json.error, /code/);
+    }
+    assert.equal((await call("POST", "/api/scores", { body: { category: "daily", code: stubCode(1, 1) }, at })).status, 401);
+    assert.equal((await call("GET", "/api/leaderboard?category=daily", { at })).status, 400);
+    assert.equal(db.raw.prepare("SELECT COUNT(*) AS n FROM scores").get().n, 0);
+  }));
+
+test("daily: a working program is replayed on the server's own course of the day; the client's date, seed and numbers are ignored", () => {
+  const real = createVerifier();
+  return withClock(
+    "daily-real",
+    async ({ at, clock, db }) => {
+      const p = await register("Daily-Runner", at);
+      const { seed } = dailyCourse(RACE_DAY);
+      const truth = await verifyDaily({ code: MAZE_SOLVER, seed });
+      assert.equal(truth.solved, true);
+      const r = await enter(at, p, MAZE_SOLVER, { date: NEXT_DAY, seed: 12345, size: 3, sx: 2, sy: 2, level: 3, ticks: 1, ops: 1, verified: false });
+      assert.equal(r.status, 201, r.text);
+      assert.deepEqual(r.json, {
+        id: r.json.id, category: "daily", date: RACE_DAY, seed, size: 8, level: 1, sx: 0, sy: 0,
+        ticks: truth.ticks, ops: truth.ops, value: null, verified: true, best: true, rank: 1,
+      });
+      const row = db.raw.prepare("SELECT category, level, ticks, ops, value, seed, size, sx, sy, verified, code, race_date, created_at FROM scores WHERE id = ?").get(r.json.id);
+      assert.deepEqual({ ...row }, {
+        category: "daily", level: 1, ticks: truth.ticks, ops: truth.ops, value: null, seed, size: 8, sx: 0, sy: 0,
+        verified: 1, code: MAZE_SOLVER, race_date: RACE_DAY, created_at: T0,
+      });
+      const board = (await daily(at)).board;
+      assert.deepEqual(board, [{ rank: 1, playerId: p.playerId, name: "Daily-Runner", ticks: truth.ticks, ops: truth.ops, createdAt: T0, verified: true }]);
+
+      // The next day: another maze, an empty board.
+      clock.t = MIDNIGHT;
+      assert.deepEqual((await daily(at)).board, []);
+      const next = await verifyDaily({ code: MAZE_SOLVER, seed: dailyCourse(NEXT_DAY).seed });
+      const r2 = await enter(at, p, MAZE_SOLVER, { date: RACE_DAY, seed });
+      assert.deepEqual([r2.status, r2.json.date, r2.json.ticks, r2.json.ops], [201, NEXT_DAY, next.ticks, next.ops]);
+      assert.notDeepEqual([next.ticks, next.ops], [truth.ticks, truth.ops]);
+    },
+    real,
+  ).finally(() => real.close());
+});
+
+test("daily: a program that doesn't reach the treasure is a 422 and stores nothing", () => {
+  const real = createVerifier();
+  return withClock(
+    "daily-dnf",
+    async ({ at, db }) => {
+      const p = await register("Daily-DNF", at);
+      for (const [code, why] of [
+        ["harvest();", /ended without harvesting the treasure/],
+        ["while (true) move(North);", /tick limit/],
+        ["nope();", /failed: .*nope/],
+        ["const fs = await import('node:fs'); fs.writeFileSync('/tmp/pwned', 'x');", /failed: /],
+        [`clear(); plant(Entities.Bush); while (!can_harvest()) spin_in_place();\n${MAZE_SOLVER}`, /another maze/],
+      ]) {
+        const r = await enter(at, p, code, { ticks: 1, ops: 1 });
+        assert.equal(r.status, 422, `${code} → ${r.status} ${r.text}`);
+        assert.match(r.json.error, /^daily race rejected: /);
+        assert.match(r.json.error, why, code);
+      }
+      assert.equal(db.raw.prepare("SELECT COUNT(*) AS n FROM scores").get().n, 0);
+      assert.deepEqual((await daily(at)).board, []);
+    },
+    real,
+  ).finally(() => real.close());
+});
+
+test("daily: best entry per player (ticks, then ops), shared ranks, my own rank, at most 50 rows", () =>
+  withClock("daily-board", async ({ at, db }) => {
+    const [a, b, c, d] = [await register("Day-A", at), await register("Day-B", at), await register("Day-C", at), await register("Day-D", at)];
+    const post = async (p, ticks, ops) => {
+      const r = await enter(at, p, stubCode(ticks, ops));
+      assert.equal(r.status, 201, r.text);
+      return [r.json.best, r.json.rank];
+    };
+    assert.deepEqual(await post(a, 5000, 40), [true, 1]);
+    assert.deepEqual(await post(a, 3000, 50), [true, 1]);
+    assert.deepEqual(await post(a, 9000, 10), [false, 1], "a worse run does not replace the best");
+    assert.deepEqual(await post(b, 3000, 45), [true, 1], "same ticks, fewer ops");
+    assert.deepEqual(await post(c, 3000, 50), [true, 2], "a tie shares the rank");
+    assert.deepEqual(await post(c, 3000, 50), [false, 2], "the earlier of two equal runs stays the best");
+    assert.deepEqual(await post(d, 8000, 1), [true, 4]);
+    const board = (await daily(at)).board;
+    assert.deepEqual(
+      board.map((e) => [e.rank, e.name, e.ticks, e.ops, e.verified]),
+      [
+        [1, "Day-B", 3000, 45, true],
+        [2, "Day-A", 3000, 50, true], // earlier than Day-C
+        [2, "Day-C", 3000, 50, true],
+        [4, "Day-D", 8000, 1, true],
+      ],
+    );
+    assert.equal(board[0].code, undefined);
+    assert.equal((await daily(at)).me, null);
+    assert.deepEqual((await daily(at, c.token)).me, board[2]);
+    assert.equal((await daily(at, "e".repeat(64))).me, null, "an unknown token still gets the public answer");
+
+    // Other categories share the table but never the board.
+    assert.equal((await call("POST", "/api/scores", { body: mazeScore(1, 10, 1), token: d.token, at })).status, 201);
+    assert.deepEqual(await daily(at).then((x) => x.board), board);
+    const maze = await call("GET", "/api/leaderboard?category=maze&level=1", { at });
+    assert.deepEqual(maze.json.entries.map((e) => [e.name, e.ticks]), [["Day-D", 10]]);
+    assert.deepEqual({ ...db.raw.prepare("SELECT race_date FROM scores WHERE category = 'maze'").get() }, { race_date: null });
+
+    for (let i = 0; i < 50; i++) await post(await register(`day${i}`, at), 4000 + i, 5);
+    const full = await daily(at, d.token);
+    assert.equal(full.board.length, 50);
+    assert.ok(!full.board.some((e) => e.name === "Day-D"));
+    assert.deepEqual([full.me.name, full.me.rank, full.me.ticks], ["Day-D", 54, 8000], "off the board, but told");
+  }));
+
+test("daily: yesterday's winner is the best of the previous Bangkok day only", () =>
+  withClock("daily-yesterday", async ({ at, clock }) => {
+    const a = await register("Yes-A", at);
+    const b = await register("Yes-B", at);
+    const c = await register("Yes-C", at);
+    assert.equal((await daily(at)).yesterday, null);
+    for (const [p, ticks, ops] of [[a, 5000, 40], [b, 4000, 60], [b, 4000, 50], [c, 4000, 50], [a, 4100, 20]]) {
+      assert.equal((await enter(at, p, stubCode(ticks, ops))).status, 201);
+    }
+    assert.equal((await daily(at)).yesterday, null, "today's entries are not yesterday's");
+    clock.t = MIDNIGHT - 1; // the last millisecond still counts for the old day
+    assert.equal((await enter(at, a, stubCode(4500, 1))).json.date, RACE_DAY);
+    clock.t = MIDNIGHT;
+    const won = { date: RACE_DAY, winner: { playerId: b.playerId, name: "Yes-B", ticks: 4000, ops: 50 } }; // before Yes-C, who tied later
+    assert.deepEqual((await daily(at)).yesterday, won);
+    // A faster run on the new day does not touch it.
+    assert.equal((await enter(at, c, stubCode(100, 1))).status, 201);
+    const today = await daily(at);
+    assert.deepEqual(today.yesterday, won);
+    assert.deepEqual(today.board.map((e) => e.name), ["Yes-C"]);
+    clock.t = MIDNIGHT + DAY;
+    assert.deepEqual((await daily(at)).yesterday, { date: NEXT_DAY, winner: { playerId: c.playerId, name: "Yes-C", ticks: 100, ops: 1 } });
+    clock.t = MIDNIGHT + 2 * DAY; // nobody raced the day before
+    assert.equal((await daily(at)).yesterday, null);
+  }));
+
+test("daily: an entry counts for the day it arrived, even if its replay ends after midnight", () => {
+  const jobs = [];
+  let tick = () => {};
+  const stubbed = stubVerifier();
+  const slow = { close: stubbed.close, verify: (job) => (jobs.push(job), tick(), stubbed.verify(job)) };
+  return withClock(
+    "daily-midnight",
+    async ({ at, clock }) => {
+      const p = await register("Night-Owl", at);
+      clock.t = MIDNIGHT - 1;
+      tick = () => (clock.t = MIDNIGHT + 5000);
+      const r = await enter(at, p, stubCode(4000, 30));
+      assert.deepEqual([r.status, r.json.date, r.json.rank], [201, RACE_DAY, 1]);
+      assert.deepEqual(jobs, [{ kind: "daily", code: stubCode(4000, 30), seed: dailyCourse(RACE_DAY).seed }]);
+      const after = await daily(at);
+      assert.deepEqual([after.date, after.board, after.yesterday.winner.name], [NEXT_DAY, [], "Night-Owl"]);
+    },
+    slow,
+  );
+});
+
+test("a v5 phase 2 DB file gets the race date column in place; old rows and a rolled-back server keep working", async () => {
+  const file = join(dir, "v5p2.db");
+  const old = new DatabaseSync(file);
+  old.exec(`
+    CREATE TABLE players (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE, token_hash TEXT NOT NULL UNIQUE, elo INTEGER NOT NULL DEFAULT 1000, created_at INTEGER NOT NULL);
+    CREATE TABLE scores (id INTEGER PRIMARY KEY, player_id INTEGER NOT NULL REFERENCES players(id), category TEXT NOT NULL, level INTEGER, ticks INTEGER, ops INTEGER, value INTEGER, seed INTEGER, created_at INTEGER NOT NULL, verified INTEGER NOT NULL DEFAULT 0, size INTEGER, sx INTEGER, sy INTEGER, code TEXT);
+    INSERT INTO players (name, token_hash, created_at) VALUES ('Old', 'h1', 1);
+  `);
+  const insert = "INSERT INTO scores (player_id, category, level, ticks, ops, value, seed, created_at, verified, size, sx, sy, code) VALUES (1, ?, ?, ?, 9, ?, 3, 1, 1, 8, 0, 0, 'c')";
+  old.prepare(insert).run("maze", 1, 900, null);
+  old.prepare(insert).run("dino", null, 900, 48);
+  old.close();
+  for (let open = 0; open < 2; open++) {
+    const db = await openDb(file);
+    try {
+      assert.equal(db.raw.prepare("PRAGMA table_info(scores)").all().filter((c) => c.name === "race_date").length, 1);
+      assert.deepEqual(db.leaderboard("maze", 1).map((r) => r.ticks), [900 - open]);
+      assert.deepEqual(db.leaderboard("dino", null).map((r) => r.value), [48]);
+      db.addScore(1, { category: "daily", level: 1, ticks: 500 - open, ops: 9, value: null, seed: 3, size: 8, sx: 0, sy: 0, code: "c", verified: true, date: RACE_DAY });
+      assert.deepEqual(db.dailyBoard(RACE_DAY).map((r) => [r.rank, r.name, r.ticks]), [[1, "Old", 500 - open]]);
+      assert.equal(db.dailyEntry(NEXT_DAY, 1), null);
+      if (!open) db.raw.prepare(insert).run("maze", 1, 899, null); // the old server's INSERT
+    } finally {
+      db.close();
+    }
+  }
+});
 
 test("a v4 DB file is upgraded in place: the author's ELO delta of old results is filled in", async () => {
   const file = join(dir, "v4.db");

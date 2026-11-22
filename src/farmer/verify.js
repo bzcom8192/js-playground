@@ -7,7 +7,7 @@
 // worker_thread with a wall-clock timeout (server/verifier.js); the caps here
 // make sure a run ends on its own long before that in normal cases.
 //
-// Three verifiable contexts:
+// Four verifiable contexts:
 //  - Arena (friend challenges): runSolo() on the fixed arena world + goal for
 //    the challenge seed — exactly what the client ran (same engine, same seed,
 //    seeded Math.random) → { reached, ticks, ops }.
@@ -32,12 +32,18 @@
 //    of the program alone. It runs until it ends or the benchmark's farm time
 //    is over; the result is its largest single dinosaur harvest, with the run
 //    counters at that harvest → { harvested, bone, ticks, ops }.
+//  - Daily race (v5 phase 3): the day's maze on the fixed RACE course
+//    (dailyRace.js), on the maze farm above, always "prespawned": the maze
+//    stands when the program starts and is timed from the run start. "spawn"
+//    mode is not offered, because a program that grows the maze itself can
+//    first park bots where it knows the treasure will be.
 
 import { UNLOCKS, WORLD_SIZES } from "./constants.js";
 import { mulberry32 } from "./maze.js";
 import { createRuntime } from "./runtime.js";
 import * as W from "./world.js";
 import { GOALS, OP_BUDGET, TICK_MS, runSolo } from "./arena.js";
+import { RACE } from "./dailyRace.js";
 import { DINO_BENCHMARK } from "./onlineRules.js";
 
 /** Wall-clock limit for one verification (enforced by the server's worker). */
@@ -130,7 +136,7 @@ export function mazeVerifyWorld({ seed, size, sx, sy, level }, { prespawned = fa
  * check() → a truthy value ends the run (reason "done", value in `found`).
  * onRecord(ev, stats): a new best on this world, with the run counters then.
  */
-async function runVirtual({ code, state, rng, seed, check, tickCap, clockCap, opBudget, timeExistingMaze = false, onRecord = () => {} }) {
+async function runVirtual({ code, state, rng, seed, check, tickCap, clockCap, opBudget, timeExistingMaze = false, onRecord = () => {}, mapLine }) {
   const clock = { t: 0 };
   let timers = [];
   let seq = 0;
@@ -156,7 +162,7 @@ async function runVirtual({ code, state, rng, seed, check, tickCap, clockCap, op
     timeExistingMaze,
     onRecord: (ev) => onRecord(ev, rt.stats()),
   });
-  rt.run(String(code ?? "")).then(() => (ended = true));
+  rt.run(String(code ?? ""), { mapLine }).then(() => (ended = true));
   let gridT = 0;
   const advanceTo = (target) => {
     while (gridT + TICK_MS <= target) {
@@ -246,6 +252,7 @@ async function mazeAttempt(job, prespawned) {
     clockCap: MAZE_VERIFY_CLOCK_CAP,
     opBudget: MAZE_VERIFY_OP_BUDGET,
     timeExistingMaze: prespawned,
+    mapLine: job.mapLine,
   });
   const a = r.found?.attempt;
   return {
@@ -274,6 +281,20 @@ export async function verifyMaze(job) {
   if (second.solved) return { ...second, firstTry: first.reason };
   // Report why the program-spawned attempt failed too.
   return { ...second, firstTry: first.reason, wrongStart: first.wrongStart };
+}
+
+// ---------- daily race ----------
+
+/**
+ * verifyDaily({ code, seed, mapLine }) → { kind: "daily", seed, solved, ticks,
+ *   ops, reason, error } — the program on the race course grown from `seed`.
+ *   The server calls it with its own date's seed; the client with the seed the
+ *   server told it (mapLine: error lines → the player's files).
+ */
+export async function verifyDaily({ code, seed, mapLine }) {
+  const s = seed >>> 0;
+  const r = await mazeAttempt({ code, seed: s, mapLine, ...RACE }, true);
+  return { kind: "daily", seed: s, solved: r.solved, ticks: r.ticks, ops: r.ops, reason: r.reason, error: r.error };
 }
 
 // ---------- dino ----------
@@ -327,10 +348,11 @@ export async function verifyDino({ code }) {
   };
 }
 
-/** Dispatch one job: { kind: "arena", code, goal, seed } | { kind: "maze", code, level, seed, size, sx, sy } | { kind: "dino", code }. */
+/** Dispatch one job: { kind: "arena", code, goal, seed } | { kind: "maze", code, level, seed, size, sx, sy } | { kind: "dino", code } | { kind: "daily", code, seed }. */
 export function runVerification(job) {
   if (job?.kind === "arena") return verifyArena(job);
   if (job?.kind === "maze") return verifyMaze(job);
   if (job?.kind === "dino") return verifyDino(job);
+  if (job?.kind === "daily") return verifyDaily(job);
   return Promise.reject(new Error(`unknown verification kind ${String(job?.kind)}`));
 }

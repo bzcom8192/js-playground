@@ -180,8 +180,13 @@ export function createOnlineApi({ fetchFn, base = DEFAULT_BASE, timeoutMs = DEFA
     /** maze: { category, level, ticks, ops, seed, size, sx, sy, code } → the stored
      *  score with the SERVER's ticks / ops (+ claimed, corrected, verified).
      *  dino: { category, code, value? } → the stored benchmark result: the
-     *  SERVER's value (Bone) / ticks / ops (+ claimed, verified). */
+     *  SERVER's value (Bone) / ticks / ops (+ claimed, verified).
+     *  daily: { category, code } → the stored race result: the SERVER's date, seed,
+     *  ticks / ops (+ best: my best today?, rank: my rank today). */
     submitScore: (token, score) => request("POST", "/scores", { body: score, token }),
+    /** → { date, seed, size, level, sx, sy, board: [{ rank, playerId, name, ticks, ops, createdAt, verified }],
+     *  me (with a token: my best today, the same shape, or null), yesterday: { date, winner } | null } */
+    daily: (token) => request("GET", "/daily", { token }),
     /** → { challenges: [{ id, authorId, authorName, authorElo, goal, seed, authorTicks, authorOps, createdAt, expiresAt, verified }] } */
     listChallenges: () => request("GET", "/challenges"),
     getChallenge: (id) => request("GET", `/challenges/${enc(id)}`),

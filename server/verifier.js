@@ -5,7 +5,7 @@
 //    worker is terminated — also mid-busy-loop — and the job is rejected;
 //  - V8 heap limits (resourceLimits), so a memory bomb kills only the worker;
 //  - the engine's own caps (arena 200,000 ticks; maze replay 5,000,000 run
-//    ticks / virtual ms and 2,000,000 ops; dino benchmark 300,000 virtual ms
+//    ticks / virtual ms and 2,000,000 ops, also for the daily race; dino benchmark 300,000 virtual ms
 //    and 2,000,000 ops), which end normal runs on their own.
 // At most `maxConcurrent` workers run at once; up to `maxQueue` more jobs
 // wait; beyond that verify() answers { ok: false, code: "busy" } at once.
@@ -43,6 +43,16 @@ function cleanResult(job, r) {
   }
   if (typeof r.solved !== "boolean") return null;
   if (r.solved && (!isCount(r.ticks) || !isCount(r.ops))) return null;
+  if (job.kind === "daily") {
+    return {
+      kind: "daily",
+      solved: r.solved,
+      ticks: r.solved ? r.ticks : null,
+      ops: r.solved ? r.ops : null,
+      reason: String(r.reason ?? ""),
+      error: r.error == null ? null : String(r.error),
+    };
+  }
   return {
     kind: "maze",
     solved: r.solved,
@@ -61,7 +71,7 @@ function cleanResult(job, r) {
  *  { verify(job) → Promise<{ ok: true, result, ms } | { ok: false, code, error }>,
  *    close(), stats() }
  *  job: { kind: "arena", code, goal, seed } | { kind: "maze", code, level, seed, size, sx, sy }
- *    | { kind: "dino", code }
+ *    | { kind: "dino", code } | { kind: "daily", code, seed }
  *  code: "timeout" | "crash" | "busy" | "closed"
  */
 export function createVerifier({ timeoutMs = VERIFY_TIMEOUT_MS, maxConcurrent = 2, maxQueue = 16, resourceLimits = DEFAULT_RESOURCE_LIMITS } = {}) {

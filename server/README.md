@@ -105,7 +105,8 @@ npm ci --include=dev && npm run build
 sudo systemctl restart farmer-server
 ```
 To go forward again: `git checkout farmer-game`, then Update.
-- A v4 server (phase 2) runs fine on a DB that v5 has opened: the only new column is nullable, and v5 fills in the rows a v4 server added. The v4 server does not know about challenge expiry, so expired challenges are open again while it runs.
+- A v4 server (phase 2) runs fine on a DB that v5 has opened: the new columns are nullable, and v5 fills in the rows a v4 server added. The v4 server does not know about challenge expiry, so expired challenges are open again while it runs.
+- A v5 server from before the daily race ignores its entries (column `race_date`); they are back after the next update.
 - Going back further than that has not been tested.
 
 ## Database and backup
@@ -141,6 +142,9 @@ bore local 4188 --to <bore-server>        # forwards to localhost:4188
 - The server listens on `127.0.0.1` only. **bore needs nothing more:** it connects to `localhost:4188` from the same machine. `npm run dev` (Vite) proxies `/api` there too.
 - To reach it directly from another machine (LAN, Tailscale): `HOST=0.0.0.0 npm run server`.
 - Port 4188 must be free. A `python3 -m http.server 4188` that still serves the old static build has to be stopped first (`ss -ltnp | grep 4188`), or use another `PORT`.
+
+## Daily maze race
+The race date is the Bangkok calendar date, computed from the server clock (the time zone setting of the machine does not matter). Keep the clock synchronised (`timedatectl`): a wrong clock means the wrong course. There is nothing to schedule; a new day starts by itself.
 
 ## Troubleshooting
 - **Apache answers 503:** the service is not running, or not on the port in `ProxyPass` (`systemctl status farmer-server`).

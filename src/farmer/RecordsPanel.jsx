@@ -62,13 +62,13 @@ function PendingSeed({ what, seed, onSetSeed }) {
 }
 
 // One seed box for both seeded things: the next maze or the next dinosaur.
-function SeedInput({ pending, pendingDino, onSetSeed, onSetDinoSeed }) {
-  const [draft, setDraft] = useState("");
+// The text is the page's state, so that the Online window's daily race can fill it.
+function SeedInput({ draft, onDraft, pending, pendingDino, onSetSeed, onSetDinoSeed }) {
   const seed = parseSeed(draft);
   const apply = (set) => {
     if (seed === null) return;
     set(seed);
-    setDraft("");
+    onDraft("");
   };
   const submit = (e) => {
     e.preventDefault();
@@ -80,7 +80,7 @@ function SeedInput({ pending, pendingDino, onSetSeed, onSetDinoSeed }) {
       <form onSubmit={submit} className="flex items-center gap-1.5">
         <input
           value={draft}
-          onChange={(e) => setDraft(e.target.value)}
+          onChange={(e) => onDraft(e.target.value)}
           inputMode="numeric"
           placeholder="e.g. 123456789"
           aria-label="Maze or dinosaur seed to replay"
@@ -235,7 +235,7 @@ function ContractStats({ stats }) {
   );
 }
 
-export default function RecordsPanel({ game, stats, onSetSeed, onSetDinoSeed }) {
+export default function RecordsPanel({ game, stats, seedDraft, onSeedDraft, onSetSeed, onSetDinoSeed }) {
   const recs = game.records;
   const levels = Object.keys(recs?.mazes || {})
     .map(Number)
@@ -244,6 +244,8 @@ export default function RecordsPanel({ game, stats, onSetSeed, onSetDinoSeed }) 
     <div className="p-3 space-y-4 text-sm text-stone-800">
       <RunStats stats={stats} />
       <SeedInput
+        draft={seedDraft}
+        onDraft={onSeedDraft}
         pending={game.pendingSeed ?? null}
         pendingDino={game.pendingDinoSeed ?? null}
         onSetSeed={onSetSeed}

@@ -10,11 +10,13 @@
 // and maze scores (which now carry their code + seed + farm size + start
 // tile). v5 phase 2: dino scores too. The dinosaur is seeded now, so a dino
 // score is the program itself, run by the server on one fixed benchmark farm
-// (DINO_BENCHMARK). See RESULT15.md / RESULT19.md.
+// (DINO_BENCHMARK). v5 phase 3: daily race entries are the program itself too,
+// run on the day's course (dailyRace.js). See RESULT15.md / RESULT19.md / RESULT20.md.
 
 import { UNLOCKS, WORLD_SIZES } from "./constants.js";
 import { GOAL_IDS, eloExpected } from "./arenaRating.js";
 import { DNF_TICKS as SOLO_DNF_TICKS, TICK_CAP } from "./arena.js";
+import { RACE } from "./dailyRace.js";
 
 export { GOAL_IDS };
 
@@ -58,7 +60,8 @@ export const ARENA_TICK_CAP = TICK_CAP;
 export const DNF_TICKS = SOLO_DNF_TICKS; // = TICK_CAP + 1
 export const ARENA_MAX_OPS = 10_000_000;
 
-/** Leaderboard categories and their ordering rule. */
+/** Leaderboard categories and their ordering rule (the daily race has its own
+ *  board, GET /api/daily). */
 export const CATEGORIES = Object.freeze({
   maze: Object.freeze({ id: "maze", levels: MAZE_LEVELS, order: "ticks asc, ops asc" }),
   dino: Object.freeze({ id: "dino", levels: null, order: "value desc" }),
@@ -111,12 +114,19 @@ export function validateBoardQuery(category, level) {
  *        DINO_BENCHMARK and stores the Bone, ticks and ops IT measures. Claimed
  *        numbers (value, ticks, ops, seed) are accepted but ignored: they come
  *        from the player's own farm, not from the benchmark.
+ *  daily: `code` (required) is all that counts: the server runs it on the course
+ *        of ITS Bangkok date. Any date, seed, ticks or ops in the body are
+ *        ignored; the seed here is null until the server fills it in.
  */
 export function validateScore(body) {
   if (!body || typeof body !== "object" || Array.isArray(body)) return fail("body must be a JSON object");
+  const { code } = body;
+  if (body.category === "daily") {
+    if (!validCode(code)) return fail(`daily scores need code: a non-empty string of at most ${CODE_MAX} characters (the program, for the race)`);
+    return { ok: true, score: { category: "daily", ticks: null, ops: null, value: null, seed: null, ...RACE, code } };
+  }
   const q = validateBoardQuery(body.category, body.level);
   if (!q.ok) return q;
-  const { code } = body;
   if (q.category === "maze") {
     const { ticks, ops, size, sx, sy } = body;
     const seed = body.seed === undefined || body.seed === null ? null : body.seed;

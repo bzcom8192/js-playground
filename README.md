@@ -48,7 +48,7 @@ A farming-automation game. Write plain JavaScript (no `await`) as the plan for a
 solar-powered field bot: it ploughs, plants and harvests, the harvest pays for
 upgrades in the Workshop, and later a whole crew of bots works the farm from one
 program. With weather, daily contracts, hedge labyrinths, an arena and an optional
-online leaderboard with replay-verified runs. Open it from the **Semicolon Acres**
+online leaderboard and daily maze race with replay-verified runs. Open it from the **Semicolon Acres**
 link in the header, or go to `/#/farmer` (`/#/farmer?demo=1` shows a grown farm).
 The in-game **Field Guide** has the full API and example programs.
 The editor/keyboard-shortcut audit is in [AUDIT.md](AUDIT.md).

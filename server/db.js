@@ -41,7 +41,8 @@ CREATE TABLE IF NOT EXISTS scores (
   size INTEGER,
   sx INTEGER,
   sy INTEGER,
-  code TEXT
+  code TEXT,
+  race_date TEXT
 );
 CREATE INDEX IF NOT EXISTS scores_board ON scores(category, level, player_id);
 CREATE TABLE IF NOT EXISTS challenges (
@@ -78,8 +79,10 @@ CREATE INDEX IF NOT EXISTS challenge_results_player ON challenge_results(player_
 // v4 phase 2: old rows keep verified = 0 (they were trust-based).
 // v5: author_elo_delta (elo_delta is the challenger's). Nullable on purpose, so
 // a rolled-back (older) server can keep inserting rows without it.
+// v5 phase 3: race_date (the Bangkok date of a daily race entry), null for the
+// other categories.
 const ADDED_COLUMNS = {
-  scores: ["verified INTEGER NOT NULL DEFAULT 0", "size INTEGER", "sx INTEGER", "sy INTEGER", "code TEXT"],
+  scores: ["verified INTEGER NOT NULL DEFAULT 0", "size INTEGER", "sx INTEGER", "sy INTEGER", "code TEXT", "race_date TEXT"],
   challenges: ["verified INTEGER NOT NULL DEFAULT 0"],
   challenge_results: ["verified INTEGER NOT NULL DEFAULT 0", "author_elo_delta INTEGER"],
 };
@@ -89,6 +92,8 @@ function migrate(db) {
     const have = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name));
     for (const col of cols) if (!have.has(col.split(" ")[0])) db.exec(`ALTER TABLE ${table} ADD COLUMN ${col}`);
   }
+  // Only here: in SCHEMA it would run before an older file has the column.
+  db.exec("CREATE INDEX IF NOT EXISTS scores_daily ON scores(race_date, player_id) WHERE race_date IS NOT NULL");
   // Results stored before v5: ELO has always been zero-sum, so the author's
   // change is the challenger's, negated.
   db.exec("UPDATE challenge_results SET author_elo_delta = -elo_delta WHERE author_elo_delta IS NULL");
@@ -96,6 +101,16 @@ function migrate(db) {
 
 export const hashToken = (token) => createHash("sha256").update(String(token)).digest("hex");
 export const newToken = () => randomBytes(32).toString("hex");
+
+// One day's race: the best entry per player, ranked (equal ticks and ops share
+// a rank). Param: the race date.
+const DAILY_RANKED = `
+  SELECT *, RANK() OVER (ORDER BY ticks ASC, ops ASC) AS rank FROM (
+    SELECT s.id, s.player_id, p.name, s.ticks, s.ops, s.created_at, s.verified,
+           ROW_NUMBER() OVER (PARTITION BY s.player_id ORDER BY s.ticks ASC, s.ops ASC, s.id ASC) AS rn
+    FROM scores s JOIN players p ON p.id = s.player_id
+    WHERE s.category = 'daily' AND s.race_date = ? AND s.verified = 1
+  ) WHERE rn = 1`;
 
 const isUnique = (err) => /UNIQUE constraint failed/i.test(String(err?.message));
 
@@ -116,7 +131,7 @@ export async function openDb(file, { now = Date.now } = {}) {
     playerById: db.prepare("SELECT id, name, elo, created_at FROM players WHERE id = ?"),
     setElo: db.prepare("UPDATE players SET elo = ? WHERE id = ?"),
     insertScore: db.prepare(
-      "INSERT INTO scores (player_id, category, level, ticks, ops, value, seed, created_at, verified, size, sx, sy, code) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO scores (player_id, category, level, ticks, ops, value, seed, created_at, verified, size, sx, sy, code, race_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     ),
     // Best entry per player (window function), then the category's order.
     // Only replay-verified rows count: the trust-based ones (maze before v4
@@ -135,6 +150,8 @@ export async function openDb(file, { now = Date.now } = {}) {
         FROM scores s JOIN players p ON p.id = s.player_id
         WHERE s.category = 'dino' AND s.verified = 1
       ) WHERE rn = 1 ORDER BY value DESC, id ASC LIMIT ${LEADERBOARD_LIMIT}`),
+    boardDaily: db.prepare(`${DAILY_RANKED} ORDER BY ticks ASC, ops ASC, id ASC LIMIT ${LEADERBOARD_LIMIT}`),
+    dailyEntry: db.prepare(`SELECT * FROM (${DAILY_RANKED}) WHERE player_id = ?`),
     insertChallenge: db.prepare(
       "INSERT INTO challenges (author_id, goal, seed, code, author_ticks, author_ops, status, created_at, verified) VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?)",
     ),
@@ -218,15 +235,21 @@ export async function openDb(file, { now = Date.now } = {}) {
     playerById: (id) => q.playerById.get(id) ?? null,
 
     /** s: a validated score; s.verified (bool) = the server replayed it and
-     *  s.ticks / s.ops / s.value are the server's numbers. */
+     *  s.ticks / s.ops / s.value are the server's numbers; s.date: the race
+     *  date (daily only). */
     addScore(playerId, s) {
       const r = q.insertScore.run(
         playerId, s.category, s.level, s.ticks, s.ops, s.value, s.seed, now(),
-        s.verified ? 1 : 0, s.size ?? null, s.sx ?? null, s.sy ?? null, s.code ?? null,
+        s.verified ? 1 : 0, s.size ?? null, s.sx ?? null, s.sy ?? null, s.code ?? null, s.date ?? null,
       );
       return Number(r.lastInsertRowid);
     },
     leaderboard: (category, level) => (category === "dino" ? q.boardDino.all() : q.boardMaze.all(level)),
+
+    /** The race of `date`: the best entry per player, at most LEADERBOARD_LIMIT. */
+    dailyBoard: (date) => q.boardDaily.all(date),
+    /** One player's best entry in the race of `date` (with its rank), or null. */
+    dailyEntry: (date, playerId) => q.dailyEntry.get(date, playerId) ?? null,
 
     addChallenge(authorId, c) {
       const r = q.insertChallenge.run(authorId, c.goal, c.seed, c.code, c.authorTicks, c.authorOps, now(), c.verified ? 1 : 0);

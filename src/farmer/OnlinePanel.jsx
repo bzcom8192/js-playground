@@ -7,10 +7,13 @@
 // server (✓); v5 phase 2: so are dino rows (the program's benchmark run).
 // v5: identity export / import (its own file, not Save Data), challenges
 // expire after 7 days, and a match history (ประวัติ) with the ELO changes.
+// v5 phase 3: the daily maze race (แข่งวงกตประจำวัน, DailyRace.jsx).
 import { useCallback, useEffect, useRef, useState } from "react";
 import { GOALS, GOAL_IDS, TICK_CAP } from "./arena.js";
 import { playSolo } from "./arenaClient.js";
 import { ITEM_ICONS } from "./constants.js";
+import DailyRace from "./DailyRace.jsx";
+import { playDaily } from "./dailyClient.js";
 import { randomSeed } from "./maze.js";
 import { buildProgram } from "./program.js";
 import { TEAL } from "./farmerUi.jsx";
@@ -26,6 +29,7 @@ import {
   saveIdentity,
   verifyIdentityImport,
 } from "./onlineApi.js";
+import { dailyView } from "./onlineDaily.js";
 import { historyRows, signed, timeText } from "./onlineHistory.js";
 
 const fmt = (n) => Number(n || 0).toLocaleString("en-US");
@@ -209,9 +213,10 @@ function AnswerCard({ r }) {
 /**
  * Props: files, activeId (the main program = the active file, run with its
  * helper files like ▶), demo, onlineSeq (bumped after an auto-submit),
- * pushLog(kind, text), onExitDemo().
+ * pushLog(kind, text), onExitDemo(), onPracticeSeed(seed): the daily seed into
+ * the Records window's replay-seed box.
  */
-export default function OnlinePanel({ files, activeId, demo, onlineSeq = 0, pushLog = () => {}, onExitDemo, api = onlineApi }) {
+export default function OnlinePanel({ files, activeId, demo, onlineSeq = 0, pushLog = () => {}, onExitDemo, onPracticeSeed = () => {}, api = onlineApi }) {
   const [identity, setIdentity] = useState(() => loadIdentity());
   const [profile, setProfile] = useState(null);
   const [badIdentity, setBadIdentity] = useState(false);
@@ -220,8 +225,11 @@ export default function OnlinePanel({ files, activeId, demo, onlineSeq = 0, push
   const [board, setBoard] = useState(null);
   const [challenges, setChallenges] = useState(null);
   const [history, setHistory] = useState(null); // null: loading, false: not available, else rows
+  const [daily, setDaily] = useState(null); // GET /api/daily; null: loading, false: not available
+  const [dailyRun, setDailyRun] = useState(null); // my last local run on the race course
+  const [dailyMsg, setDailyMsg] = useState(null); // { ok, text }: the outcome of a run / submit
   const [nameText, setNameText] = useState("");
-  const [busy, setBusy] = useState(null); // "register" | "import" | "create" | `accept:<id>`
+  const [busy, setBusy] = useState(null); // "register" | "import" | "create" | "daily:run" | "daily:submit" | `accept:<id>`
   const [idMsg, setIdMsg] = useState(null); // { ok, text }: the outcome of an export / import
   const [progress, setProgress] = useState(null);
   const [goalId, setGoalId] = useState("hay500");
@@ -248,7 +256,7 @@ export default function OnlinePanel({ files, activeId, demo, onlineSeq = 0, push
     let alive = true;
     (async () => {
       try {
-        const [lb, list, me, hist] = await Promise.all([
+        const [lb, list, me, hist, race] = await Promise.all([
           api.leaderboard(tab.category, tab.level),
           api.listChallenges(),
           token
@@ -263,12 +271,17 @@ export default function OnlinePanel({ files, activeId, demo, onlineSeq = 0, push
                 return false; // unknown token, or a server without the endpoint: the rest still works
               })
             : Promise.resolve(null),
+          api.daily(token).catch((err) => {
+            if (err?.offline) throw err;
+            return false; // a server without the endpoint: the rest still works
+          }),
         ]);
         if (!alive) return;
         setOffline(false);
         setBoard(lb);
         setChallenges(list.challenges || []);
         setHistory(hist);
+        setDaily(race);
         if (me !== undefined) {
           setProfile(me);
           setBadIdentity(me === null);
@@ -294,6 +307,7 @@ export default function OnlinePanel({ files, activeId, demo, onlineSeq = 0, push
     setError(null);
     setNotice(null);
     setIdMsg(null);
+    setDailyMsg(null);
     try {
       await fn();
     } catch (err) {
@@ -312,6 +326,7 @@ export default function OnlinePanel({ files, activeId, demo, onlineSeq = 0, push
     setBadIdentity(false);
     setHistory(null);
     setAnswer(null);
+    setDailyMsg(null);
     setNameText("");
     setReloadSeq((n) => n + 1);
   };
@@ -458,6 +473,47 @@ export default function OnlinePanel({ files, activeId, demo, onlineSeq = 0, push
       setReloadSeq((n) => n + 1);
     });
 
+  // Daily race errors show in its own section (offline still blanks the window).
+  const runRace = (kind, fn) =>
+    run(kind, async () => {
+      try {
+        await fn();
+      } catch (err) {
+        if (err?.offline) throw err;
+        setDailyMsg({ ok: false, text: String(err?.message || err) });
+      }
+    });
+
+  const runDaily = () =>
+    runRace("daily:run", async () => {
+      if (demo) return;
+      setDailyRun(null);
+      const prog = program();
+      const today = await api.daily(token); // the window may have been open since yesterday
+      setDaily(today);
+      const course = dailyView(today);
+      if (!course) throw new Error("The server's answer was not understood.");
+      const r = await playDaily({ code: prog.code, segments: prog.segments, seed: course.seed });
+      setDailyRun({ ...r, date: course.date, fileName: file.name, code: prog.code });
+    });
+
+  // Submits the program of the run on show, even if the file was edited since.
+  const submitDaily = () =>
+    runRace("daily:submit", async () => {
+      if (demo || !token || !dailyRun?.solved) return;
+      try {
+        const s = await api.submitScore(token, { category: "daily", code: dailyRun.code });
+        const numbers = `${fmt(s.ticks)} ticks · ${fmt(s.ops)} ops`;
+        let text = `✓ ${s.date}: ${numbers}, rank ${s.rank}${s.best ? "" : " (your earlier best counts)"}.`;
+        if (s.date !== dailyRun.date) text += " A new day has started, so the server ran it on the new course.";
+        else if (s.ticks !== dailyRun.ticks || s.ops !== dailyRun.ops) text += " The server's numbers differ from your run; they count.";
+        setDailyMsg({ ok: true, text });
+        pushLog("info", `🌐 Daily race ${s.date}: ${numbers}, verified, rank ${s.rank} (${dailyRun.fileName})`);
+      } finally {
+        setReloadSeq((n) => n + 1); // the board; after a refusal also the date
+      }
+    });
+
   if (offline) {
     return (
       <div className="p-4 space-y-3 text-sm text-stone-700">
@@ -474,6 +530,8 @@ export default function OnlinePanel({ files, activeId, demo, onlineSeq = 0, push
 
   const locked = demo || !!busy;
   const elo = profile?.elo;
+  const race = daily ? dailyView(daily, identity?.playerId ?? null) || false : daily;
+  const raceReady = !!dailyRun?.solved && !!race && dailyRun.date === race.date;
 
   return (
     <div className="p-3 space-y-4 text-sm text-stone-800">
@@ -547,6 +605,22 @@ export default function OnlinePanel({ files, activeId, demo, onlineSeq = 0, push
           <input ref={importRef} type="file" accept=".json,application/json" onChange={importIdentity} className="hidden" aria-label="Identity file" />
         </div>
         {idMsg && <p className={`text-[11px] break-words ${idMsg.ok ? "text-lime-700" : "text-red-600"}`}>{idMsg.text}</p>}
+      </Section>
+
+      <Section title="🏁 แข่งวงกตประจำวัน">
+        <DailyRace
+          view={race}
+          run={dailyRun}
+          msg={dailyMsg}
+          busy={busy?.startsWith("daily:") ? busy.slice(6) : null}
+          canRun={!locked}
+          canSubmit={!locked && !!identity && !badIdentity && raceReady}
+          submitHint={!identity ? "Join above to submit" : raceReady ? "Send the program of this run; the server runs it again and keeps its own numbers" : "Finish today's course first"}
+          fileName={file.name}
+          onRun={runDaily}
+          onSubmit={submitDaily}
+          onPractice={onPracticeSeed}
+        />
       </Section>
 
       <Section
