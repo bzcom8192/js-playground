@@ -702,7 +702,7 @@ export default function FarmerPage() {
   const recordsWindow = windows.records?.open && (
     <FloatingWindow key="records" title="Almanac" rect={windows.records} {...windowProps("records")} bodyClass="bg-[#fdf6ea] flex flex-col" mobileBodyClass="h-[28rem]">
       <div className="flex-1 overflow-y-auto min-h-0 bg-stone-50">
-        <RecordsPanel game={game} stats={view.stats} onSetSeed={engine.setPendingSeed} />
+        <RecordsPanel game={game} stats={view.stats} onSetSeed={engine.setPendingSeed} onSetDinoSeed={engine.setPendingDinoSeed} />
       </div>
     </FloatingWindow>
   );

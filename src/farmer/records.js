@@ -14,8 +14,11 @@
 //     size, sx, sy: farm size and start tile (the layout depends on them too).
 //     lines / chars: program size of the main file (non-empty lines, characters).
 //     at: Date.now() of the solve.
-//   DinoRecord = { bone, level, cut, at } — one harvest's Bone, the Dinosaurs
-//     level and how many segments that cut removed.
+//   DinoRecord = { bone, level, cut, at, seed, size, sx, sy } — one harvest's
+//     Bone, the Dinosaurs level and how many segments that cut removed.
+//     seed, size, sx, sy (v5): the dinosaur's seed, the farm size and its
+//     hatching tile (sx, sy null: it hatched before seeds existed). Records
+//     from older saves have none of the four.
 //   contracts = { completed, bonus: { Gold, Bone } } — v3 phase 2: daily
 //     contracts delivered in total and the reward earned per reward item
 //     (see contracts.js). Older saves have none and load with zeros.
@@ -134,6 +137,14 @@ export function sanitizeRecords(raw) {
     const bone = nonNeg(d.bone);
     if (bone !== null && bone > 0) {
       out.dino = { bone, level: nonNeg(d.level) ?? 1, cut: nonNeg(d.cut) ?? 1, at: nonNeg(d.at) ?? 0 };
+      const seed = parseSeed(d.seed);
+      if (seed !== null) {
+        const tile = (v) => (v === null || v === undefined ? null : nonNeg(v));
+        const sx = tile(d.sx);
+        const sy = tile(d.sy);
+        const known = sx !== null && sy !== null;
+        Object.assign(out.dino, { seed, size: nonNeg(d.size) ?? 0, sx: known ? sx : null, sy: known ? sy : null });
+      }
     }
   }
   const c = raw.contracts;

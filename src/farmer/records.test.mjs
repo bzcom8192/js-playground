@@ -305,22 +305,36 @@ function dinoFarm() {
   const s = farm(6, { Dinosaurs: 2 });
   const cells = [[0, 0], [1, 0], [2, 0], [3, 0]];
   for (const [x, y] of cells) W.tileAt(s, x, y).entity = { type: "Dinosaur", progress: 1 };
-  s.dino = { body: cells.map(([x, y]) => ({ x, y })), dir: "West", stepTimer: 0, appleTimer: 0 };
+  s.dino = { body: cells.map(([x, y]) => ({ x, y })), dir: "West", stepTimer: 0, appleTimer: 0, seed: 4242, draws: 9, start: { x: 5, y: 2 } };
   return s;
 }
 
-test("dinosaur harvest writes the best single Bone haul with level and cut length", async () => {
+test("dinosaur harvest writes the best single Bone haul with level, cut length and seed", async () => {
   const s = dinoFarm();
   s.drone.x = 1; // segment 2 of 4 → cuts 3 → 3² × L2 = 18 Bone
   const { rt, logs } = runtime(s);
   await rt.run("harvest()");
   assert.equal(s.items.Bone, 18);
-  assert.deepEqual(s.records.dino, { bone: 18, level: 2, cut: 3, at: 1_700_000_000_000 });
+  const rec = { bone: 18, level: 2, cut: 3, seed: 4242, size: 6, sx: 5, sy: 2, at: 1_700_000_000_000 };
+  assert.deepEqual(s.records.dino, rec);
+  assert.deepEqual(W.deserialize(JSON.parse(JSON.stringify(W.serialize(s)))).records.dino, rec, "the seed is saved with the record");
   assert.ok(logs.some((l) => l.text === "🦴 New best dinosaur harvest: 18 Bone (3 cut)"));
   s.drone.x = 0; // the head: 1 segment left → 2 Bone, not a record
   await rt.run("harvest()");
   assert.equal(s.items.Bone, 20);
   assert.equal(s.records.dino.bone, 18);
+});
+
+test("dinosaur records: no seed in an old save stays so; a damaged seed or tile is dropped", () => {
+  const load = (dino) => R.sanitizeRecords({ dino }).dino;
+  const old = { bone: 50, level: 1, cut: 7, at: 3 };
+  assert.deepEqual(load(old), old);
+  for (const seed of [-1, 2 ** 32, 1.5, "x", null]) assert.deepEqual(load({ ...old, seed, size: 6, sx: 0, sy: 0 }), old, String(seed));
+  assert.deepEqual(load({ ...old, seed: 0, size: 6, sx: 0, sy: 5 }), { ...old, seed: 0, size: 6, sx: 0, sy: 5 });
+  // Alive before seeds existed: a seed, but no hatching tile.
+  for (const [sx, sy] of [[null, null], [3, null], ["x", 1], [undefined, undefined]]) {
+    assert.deepEqual(load({ ...old, seed: 9, size: 6, sx, sy }), { ...old, seed: 9, size: 6, sx: null, sy: null });
+  }
 });
 
 // ---------- persistence ----------

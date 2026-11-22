@@ -8,9 +8,9 @@
 // verify.js, in a worker thread with a tick cap and a wall-clock timeout) and
 // stores only what it measured itself — friend-arena challenges and results,
 // and maze scores (which now carry their code + seed + farm size + start
-// tile). Dino scores stay LEVEL 1 (trust + the sanity rules below): the
-// dinosaur's walk is not seeded, so a harvest cannot be replayed. See
-// RESULT15.md.
+// tile). v5 phase 2: dino scores too. The dinosaur is seeded now, so a dino
+// score is the program itself, run by the server on one fixed benchmark farm
+// (DINO_BENCHMARK). See RESULT15.md / RESULT19.md.
 
 import { UNLOCKS, WORLD_SIZES } from "./constants.js";
 import { GOAL_IDS, eloExpected } from "./arenaRating.js";
@@ -41,8 +41,16 @@ export const MAZE_MAX_OPS = 100_000_000;
 /** The biggest Bone one harvest can pay: every tile of the largest farm cut at
  *  once, squared, × the top Dinosaurs level (12×12 → 144² × 3 = 62,208). */
 export const DINO_MAX_BONE = (WORLD_SIZES[WORLD_SIZES.length - 1] ** 2) ** 2 * maxLevel("Dinosaurs");
-export const DINO_MAX_TICKS = 1_000_000_000;
-export const DINO_MAX_OPS = 1_000_000_000;
+
+/**
+ * v5 phase 2: the dino leaderboard's benchmark, the same for everybody (the
+ * farm itself: dinoVerifyWorld in verify.js). A `size` × `size` verification
+ * farm covered in grown Grass, a dinosaur hatched on tile (x, y), the bot on
+ * (0, 0); every dinosaur of the run — that one and any egg planted later — has
+ * `seed`. The run lasts `worldTicks` world ticks of 100 ms: 300 s of farm time,
+ * 1,000 dinosaur steps and 200 apple spawns.
+ */
+export const DINO_BENCHMARK = Object.freeze({ seed: 4188, size: 12, x: 6, y: 6, worldTicks: 3000 });
 
 /** Arena (friend challenges): a run that did not reach the goal within the
  *  arena tick cap is reported with ticks = DNF_TICKS (always loses). */
@@ -99,17 +107,20 @@ export function validateBoardQuery(category, level) {
  *        size), the start tile sx / sy and the program `code` — because the
  *        server replays the run and keeps ITS ticks / ops (the claimed ones
  *        are only sanity-checked). → score also has { size, sx, sy, code }.
- *  dino: no level, value = Bone of one harvest 1 … DINO_MAX_BONE; ticks / ops
- *        optional (if sent: positive and capped). Not replayable (level 1).
+ *  dino: no level; `code` (required) is all that counts: the server runs it on
+ *        DINO_BENCHMARK and stores the Bone, ticks and ops IT measures. Claimed
+ *        numbers (value, ticks, ops, seed) are accepted but ignored: they come
+ *        from the player's own farm, not from the benchmark.
  */
 export function validateScore(body) {
   if (!body || typeof body !== "object" || Array.isArray(body)) return fail("body must be a JSON object");
   const q = validateBoardQuery(body.category, body.level);
   if (!q.ok) return q;
-  const seed = body.seed === undefined || body.seed === null ? null : body.seed;
-  if (seed !== null && !isSeed(seed)) return fail("seed must be a 32-bit unsigned integer");
+  const { code } = body;
   if (q.category === "maze") {
-    const { ticks, ops, size, sx, sy, code } = body;
+    const { ticks, ops, size, sx, sy } = body;
+    const seed = body.seed === undefined || body.seed === null ? null : body.seed;
+    if (seed !== null && !isSeed(seed)) return fail("seed must be a 32-bit unsigned integer");
     if (!isInt(ticks) || ticks <= 0) return fail("ticks must be a positive integer");
     if (!isInt(ops) || ops <= 0) return fail("ops must be a positive integer");
     if (ops > ticks) return fail("ops cannot exceed ticks");
@@ -122,20 +133,9 @@ export function validateScore(body) {
     if (!validCode(code)) return fail(`code must be a non-empty string of at most ${CODE_MAX} characters (the program, for the replay)`);
     return { ok: true, score: { category: "maze", level: q.level, ticks, ops, value: null, seed, size, sx, sy, code } };
   }
-  const { value } = body;
-  if (!isInt(value) || value <= 0) return fail("value must be a positive integer");
-  if (value > DINO_MAX_BONE) return fail(`value is out of range (max ${DINO_MAX_BONE})`);
-  const opt = (v, max, label) => {
-    if (v === undefined || v === null) return { v: null };
-    if (!isInt(v) || v <= 0) return { error: `${label} must be a positive integer` };
-    if (v > max) return { error: `${label} is out of range` };
-    return { v };
-  };
-  const t = opt(body.ticks, DINO_MAX_TICKS, "ticks");
-  if (t.error) return fail(t.error);
-  const o = opt(body.ops, DINO_MAX_OPS, "ops");
-  if (o.error) return fail(o.error);
-  return { ok: true, score: { category: "dino", level: null, ticks: t.v, ops: o.v, value, seed, size: null, sx: null, sy: null, code: null } };
+  if (!validCode(code)) return fail(`dino scores need code: a non-empty string of at most ${CODE_MAX} characters (the program, for the benchmark run)`);
+  const { seed, size, x, y } = DINO_BENCHMARK;
+  return { ok: true, score: { category: "dino", level: null, ticks: null, ops: null, value: null, seed, size, sx: x, sy: y, code } };
 }
 
 /** Is leaderboard entry `a` better than `b` in `category`? */

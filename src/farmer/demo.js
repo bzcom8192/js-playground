@@ -1,6 +1,6 @@
 // Demo farm for visual QA (#/farmer?demo=1). Never saved: the page leaves
 // demo mode (back to the real save) on the first edit / run / save / buy.
-import { UNLOCKS, WORLD_SIZES } from "./constants.js";
+import { DEMO_DINO_SEED, UNLOCKS, WORLD_SIZES } from "./constants.js";
 import * as W from "./world.js";
 import { DEMO_WEATHER_SEED } from "./weather.js";
 
@@ -73,6 +73,8 @@ export function createDemoGame() {
   // Weather runs on the demo farm from a fixed seed; it is never persisted
   // (serialize writes weather: null for a demo farm).
   s.weather = { seed: DEMO_WEATHER_SEED, time: 0 };
+  // Same for its dinosaurs: one fixed seed, never persisted.
+  s.dinoSeed = DEMO_DINO_SEED;
   return s;
 }
 

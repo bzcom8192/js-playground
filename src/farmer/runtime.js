@@ -160,8 +160,8 @@ export function createRuntime(opts) {
     // program gets its own frozen `Math` whose random() is this function).
     mathRandom = null,
     // v4 Online: a run just set a new LOCAL best → onRecord({ kind: "maze", attempt })
-    // or onRecord({ kind: "dino", rec }). Display/network side effects only;
-    // it must not throw into the run (errors are swallowed).
+    // or onRecord({ kind: "dino", rec }), both with `code`, the program as it ran.
+    // Display/network side effects only; it must not throw into the run (errors are swallowed).
     onRecord = () => {},
     // v4 phase 2 (server replay): time a maze that already exists when Run is
     // pressed from the run start (normally such a maze is "not timed").
@@ -324,12 +324,25 @@ export function createRuntime(opts) {
       if (r.best) notifyRecord({ kind: "maze", attempt, code: session.code });
       return;
     }
+    if (ev.type === "dinoHatch") {
+      log("info", `Dinosaur seed: ${ev.seed}${ev.replay ? " (replay)" : ""}`);
+      return;
+    }
     if (ev.type === "dinoHarvest") {
-      const rec = { bone: ev.bone, level: ev.level, cut: ev.cut, at: wallClock() };
+      const rec = {
+        bone: ev.bone,
+        level: ev.level,
+        cut: ev.cut,
+        seed: ev.seed,
+        size: ev.size,
+        sx: ev.start?.x ?? null,
+        sy: ev.start?.y ?? null,
+        at: wallClock(),
+      };
       const r = R.addDinoHarvest(s, rec);
       if (r.best) {
         log("info", `🦴 New best dinosaur harvest: ${ev.bone.toLocaleString("en-US")} Bone (${ev.cut} cut)`);
-        notifyRecord({ kind: "dino", rec });
+        notifyRecord({ kind: "dino", rec, code: session.code });
       }
     }
   }

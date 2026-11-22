@@ -29,6 +29,7 @@ import {
   verifyIdentityImport,
 } from "./onlineApi.js";
 import {
+  DINO_BENCHMARK,
   DINO_MAX_BONE,
   DNF_TICKS,
   MAZE_LEVELS,
@@ -305,10 +306,12 @@ test("scoreForRecord: maze L1–L3 (with code + layout for the replay) and dino 
   assert.equal(scoreForRecord(mazeEv(1, 4200, 40, null)), null, "no program → nothing to replay → not sent");
   assert.equal(scoreForRecord(mazeEv(1, 4200, 40, "x".repeat(100_001))), null, "too long to upload");
   assert.equal(scoreForRecord({ ...mazeEv(1), attempt: { ...mazeEv(1).attempt, sx: 6 } }), null, "start off the farm");
-  assert.deepEqual(scoreForRecord({ kind: "dino", rec: { bone: 18, level: 2, cut: 3, at: 1 } }), { category: "dino", value: 18 });
+  // v5 phase 2: a dino score carries the program too (the server runs its benchmark with it).
+  const dinoRec = { bone: 18, level: 2, cut: 3, seed: 5, size: 6, sx: 0, sy: 0, at: 1 };
+  assert.deepEqual(scoreForRecord({ kind: "dino", rec: dinoRec, code: "harvest()" }), { category: "dino", value: 18, code: "harvest()" });
+  for (const code of [undefined, null, "  ", "x".repeat(100_001)]) assert.equal(scoreForRecord({ kind: "dino", rec: dinoRec, code }), null, "no program, not sent");
   assert.equal(scoreForRecord(mazeEv(4)), null); // no such leaderboard level
   assert.equal(scoreForRecord(mazeEv(1, 0, 0)), null); // insane
-  assert.equal(scoreForRecord({ kind: "dino", rec: { bone: DINO_MAX_BONE + 1 } }), null);
   assert.equal(scoreForRecord(null), null);
   assert.deepEqual(MAZE_LEVELS, [1, 2, 3]);
 });
@@ -341,6 +344,36 @@ test("submitRecord: sends with the stored token, skips without identity / in dem
   }
   // even a broken api object
   assert.equal((await submitRecord(mazeEv(), { api: { submitScore: () => { throw new Error("sync"); } }, storage: st })).sent, false);
+});
+
+test("submitRecord: a dino program is sent once, however often its run beats the local record", async () => {
+  const st = memStorage();
+  saveIdentity({ playerId: 1, name: "Nok", token: TOKEN }, st);
+  const ev = (bone, code = "harvest()") => ({ kind: "dino", rec: { bone, level: 1, cut: 1, seed: 1, size: 6, sx: 0, sy: 0, at: 1 }, code });
+  const sent = new Map();
+  const { fn, calls } = mockFetch(() => ({ status: 201, json: { id: 1, value: 75, verified: true } }));
+  const opts = { api: createOnlineApi({ fetchFn: fn }), storage: st, sent };
+  const first = await submitRecord(ev(3), opts);
+  assert.equal(first.sent, true);
+  assert.equal(first.stored.value, 75);
+  assert.deepEqual(calls[0].body, { category: "dino", value: 3, code: "harvest()" });
+  assert.deepEqual(await submitRecord(ev(12), opts), { sent: false, reason: "already sent" });
+  assert.equal(calls.length, 1);
+  assert.equal((await submitRecord(ev(27, "harvest(); // v2"), opts)).sent, true, "another program is sent");
+  assert.equal(calls.length, 2);
+  // A maze record is never held back.
+  for (let i = 0; i < 2; i++) assert.equal((await submitRecord(mazeEv(), opts)).sent, true);
+
+  // Offline / busy: not counted as sent, the next record tries again. 422: the
+  // same program would fail again, so it is not repeated.
+  let reply = () => new TypeError("offline");
+  const flaky = { api: createOnlineApi({ fetchFn: (...a) => mockFetch(reply).fn(...a) }), storage: st, sent: new Map() };
+  assert.equal((await submitRecord(ev(3), flaky)).sent, false);
+  reply = () => ({ status: 429, json: { error: "busy" } });
+  assert.equal((await submitRecord(ev(4), flaky)).reason, "busy");
+  reply = () => ({ status: 422, json: { error: "dino score rejected: …" } });
+  assert.deepEqual(await submitRecord(ev(5), flaky), { sent: false, reason: "dino score rejected: …", rejected: true });
+  assert.deepEqual(await submitRecord(ev(6), flaky), { sent: false, reason: "already sent" });
 });
 
 // ---------- the runtime hook ----------
@@ -417,14 +450,15 @@ test("runtime onRecord fires on a new best maze (a valid score) and dino haul, n
   const d = farm(6, { Dinosaurs: 2 });
   const cells = [[0, 0], [1, 0], [2, 0], [3, 0]];
   for (const [x, y] of cells) W.tileAt(d, x, y).entity = { type: "Dinosaur", progress: 1 };
-  d.dino = { body: cells.map(([x, y]) => ({ x, y })), dir: "West", stepTimer: 0, appleTimer: 0 };
+  d.dino = { body: cells.map(([x, y]) => ({ x, y })), dir: "West", stepTimer: 0, appleTimer: 0, seed: 77, draws: 3, start: { x: 4, y: 4 } };
   d.drone.x = 1;
   const dinoEvents = [];
   const rt2 = runtime(d, { onRecord: (ev) => dinoEvents.push(ev) });
   await rt2.run("harvest()");
   d.drone.x = 0;
   await rt2.run("harvest()");
-  assert.deepEqual(dinoEvents, [{ kind: "dino", rec: { bone: 18, level: 2, cut: 3, at: 1_700_000_000_000 } }]);
+  const rec = { bone: 18, level: 2, cut: 3, seed: 77, size: 6, sx: 4, sy: 4, at: 1_700_000_000_000 };
+  assert.deepEqual(dinoEvents, [{ kind: "dino", rec, code: "harvest()" }], "with the program as it ran");
 
   // A throwing onRecord never breaks the run.
   const s3 = mk();
@@ -449,7 +483,17 @@ test("rules: names, scores, challenges, results", () => {
     assert.equal(validateScore({ ...maze, ...patch }).ok, false, JSON.stringify(patch));
   }
   assert.deepEqual(validateScore(maze).score, { ...maze, value: null });
-  assert.equal(validateScore({ category: "dino", value: DINO_MAX_BONE }).ok, true);
+  // v5 phase 2: dino needs the program and nothing else; every claimed number is ignored.
+  const { seed, size, x, y } = DINO_BENCHMARK;
+  const dinoScore = { category: "dino", level: null, ticks: null, ops: null, value: null, seed, size, sx: x, sy: y, code: "x" };
+  for (const claim of [{}, { value: 18 }, { value: DINO_MAX_BONE + 1, ticks: -1, ops: "many", seed: -5, size: 3, sx: 99 }]) {
+    assert.deepEqual(validateScore({ category: "dino", code: "x", ...claim }), { ok: true, score: dinoScore }, JSON.stringify(claim));
+  }
+  for (const code of [undefined, null, "", "  ", 5, "x".repeat(100_001)]) {
+    const r = validateScore({ category: "dino", value: 18, code });
+    assert.equal(r.ok, false);
+    assert.match(r.error, /code/);
+  }
   assert.equal(DINO_MAX_BONE, 144 * 144 * 3);
   const c = { goal: "pumpkin300", seed: 0, code: "x", authorTicks: TICK_CAP, authorOps: 1 };
   assert.equal(validateChallenge(c).ok, true);

@@ -173,6 +173,7 @@ export const DEAD_PUMPKIN_CHANCE = 0.2;
 export const WATER_BASE_INTERVAL = 10; // s per Water item at Watering level 1
 export const DINO_STEP_SECONDS = 0.3; // game seconds per dinosaur step (3 world ticks of 100 ms)
 export const APPLE_SPAWN_SECONDS = 1.5; // game seconds between apple spawns while a dinosaur lives
+export const DEMO_DINO_SEED = 12; // every dinosaur on the demo farm has this seed (see hatchDino in world.js)
 // Rice (v3 phase 5). Ticks here are world ticks (0.1 s of farm time, the same
 // tick the weather counts — see weather.js), so 200 ticks = 20 s.
 export const RICE_PLANT_WATER = 0.5; // plant(Rice) needs tile water ≥ this

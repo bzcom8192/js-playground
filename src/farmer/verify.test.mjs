@@ -11,7 +11,18 @@ import { generateSeededMaze, mulberry32 } from "./maze.js";
 import { EXAMPLES } from "./examples.js";
 import { BOT_CODE } from "./arenaBots.js";
 import { DNF_TICKS, runSolo } from "./arena.js";
-import { MAZE_VERIFY_TICK_CAP, mazeVerifyWorld, runVerification, verifyArena, verifyMaze } from "./verify.js";
+import { DINO_BENCHMARK, DINO_MAX_BONE } from "./onlineRules.js";
+import {
+  DINO_VERIFY_CLOCK_CAP,
+  MAZE_VERIFY_TICK_CAP,
+  VERIFY_STOCK,
+  dinoVerifyWorld,
+  mazeVerifyWorld,
+  runVerification,
+  verifyArena,
+  verifyDino,
+  verifyMaze,
+} from "./verify.js";
 
 // The DFS solver from the online tests: spawns the maze itself, then solves it.
 const SOLVER = `use_item(Items.Fertilizer);
@@ -138,4 +149,76 @@ test("arena replay equals the client's runSolo; non-finishers report DNF", async
   assert.deepEqual([dnf.reached, dnf.ticks], [false, DNF_TICKS]);
   await assert.rejects(runVerification({ kind: "chess" }), /unknown verification kind/);
   await assert.rejects(verifyArena({ code: "x", goal: "gold200", seed: 1 }), /unknown arena goal/);
+});
+
+// ---------- dino benchmark (v5 phase 2) ----------
+
+// Wait until the dinosaur has grown for a while, then cut it wherever the sweep meets it.
+const DINO_SWEEP = `const n = get_world_size();
+while (get_time() < 100) spin_in_place();
+for (let x = 0; x < n; x++) {
+  for (let y = 0; y < n; y++) {
+    if (get_entity_type() === Entities.Dinosaur) harvest();
+    move(North);
+  }
+  move(East);
+}
+`;
+
+test("dino benchmark farm: the documented, fixed definition", () => {
+  assert.deepEqual(DINO_BENCHMARK, { seed: 4188, size: 12, x: 6, y: 6, worldTicks: 3000 });
+  assert.equal(DINO_VERIFY_CLOCK_CAP, 300_000);
+  const { state } = dinoVerifyWorld();
+  assert.equal(state.size, 12);
+  assert.deepEqual(state.dino, { body: [{ x: 6, y: 6 }], dir: "South", stepTimer: 0, appleTimer: 0, seed: 4188, draws: 0, start: { x: 6, y: 6 } });
+  assert.ok(state.tiles.every((t, i) => t.entity.type === (i === 6 * 12 + 6 ? "Dinosaur" : "Grass") && t.entity.progress === 1));
+  assert.deepEqual([state.drone.x, state.drone.y], [0, 0]);
+  assert.equal(state.unlocks.Dinosaurs, 3);
+  assert.equal(state.unlocks.Speed, 5);
+  for (const [item, n] of Object.entries(state.items)) assert.equal(n, item === "Bone" || item === "Power" ? 0 : VERIFY_STOCK, item);
+  assert.deepEqual([state.weather, state.maze, state.records.dino], [null, null, null]);
+  assert.equal(JSON.stringify(dinoVerifyWorld().state), JSON.stringify(state), "the same every time");
+});
+
+test("dino benchmark: the score is the largest single harvest, identical on every run", async () => {
+  const a = await verifyDino({ code: DINO_SWEEP });
+  assert.equal(a.harvested, true, JSON.stringify(a));
+  assert.equal(a.reason, "ended");
+  assert.equal(a.bone, a.cut ** 2 * 3, "segments² × level 3");
+  assert.ok(a.cut >= 3 && a.bone <= DINO_MAX_BONE);
+  assert.ok(a.ticks > 0 && a.ops > 0);
+  const b = await runVerification({ kind: "dino", code: DINO_SWEEP, value: 999_999, bone: 1, ticks: 1, ops: 1, seed: 1 });
+  assert.deepEqual(b, a, "no number from the job is an input");
+  // A smaller harvest afterwards (or a later, equal one) changes nothing.
+  const more = await verifyDino({ code: DINO_SWEEP + "while (true) spin_in_place();" });
+  assert.deepEqual({ ...more, reason: "" }, { ...a, reason: "" });
+  assert.equal(more.reason, "clock cap", "a program that never ends is measured up to the cap");
+});
+
+test("dino benchmark: an egg planted later has the benchmark seed too (clear() first is no re-roll)", async () => {
+  const replant = `clear();
+for (let i = 0; i < 6; i++) move(North);
+for (let i = 0; i < 6; i++) move(East);
+plant(Entities.Dinosaur);
+while (get_time() < 2) spin_in_place();
+while (get_entity_type() !== Entities.Dinosaur) move([North, East, South, West][Math.floor(Math.random() * 4)]);
+harvest();`;
+  const r = await verifyDino({ code: replant });
+  assert.equal(r.harvested, true, JSON.stringify(r));
+  assert.deepEqual(await verifyDino({ code: replant }), r, "Math.random() is seeded as well");
+  const { state } = dinoVerifyWorld();
+  W.clearFarm(state);
+  W.plant(state, "Dinosaur", () => 0.123);
+  assert.equal(state.dino.seed, DINO_BENCHMARK.seed);
+});
+
+test("dino benchmark: nothing harvested → no result; a late failure keeps the harvest", async () => {
+  for (const [code, reason] of [["harvest();", "ended"], ["while (true) spin_in_place();", "clock cap"], ["nope();", "error"], ["let x = ;", "error"], ["while (true) { get_pos_x(); }", "clock cap"]]) {
+    const r = await verifyDino({ code });
+    assert.deepEqual([r.harvested, r.bone, r.ticks, r.ops, r.reason], [false, null, null, null, reason], code);
+  }
+  const ok = await verifyDino({ code: DINO_SWEEP });
+  const late = await verifyDino({ code: DINO_SWEEP + "throw new Error('too late');" });
+  assert.deepEqual([late.bone, late.ticks, late.ops], [ok.bone, ok.ticks, ok.ops]);
+  assert.match(late.error, /too late/);
 });

@@ -6,8 +6,8 @@
 // simple in-memory rate limit: per player when the token is valid, per client
 // IP otherwise (register, bad tokens).
 //
-// v4 phase 2 (anti-cheat level 2): arena challenges, challenge results and
-// maze scores are REPLAYED by the verifier (verifier.js: the engine in a
+// v4 phase 2 (anti-cheat level 2): arena challenges, challenge results, maze
+// scores and (v5 phase 2) dino scores are REPLAYED by the verifier (verifier.js: the engine in a
 // worker_thread, tick caps + a wall-clock timeout) and stored with the
 // server-measured ticks / ops; a run the replay can't reproduce is a 422.
 import { createReadStream } from "node:fs";
@@ -20,6 +20,7 @@ import { MAZE_VERIFY_TICK_CAP } from "../src/farmer/verify.js";
 import {
   ARENA_TICK_CAP,
   CHALLENGE_TTL_MS,
+  DINO_BENCHMARK,
   DNF_TICKS,
   eloUpdate,
   outcomeOf,
@@ -256,6 +257,13 @@ export function createApp({ db, distDir = null, rateLimit = {}, trustProxy = fal
     return "the replay ended without harvesting the treasure";
   };
 
+  const dinoFailText = (r) => {
+    if (r.error) return `the benchmark run failed: ${r.error}`;
+    if (r.reason === "op budget") return "the benchmark run was cut off before it harvested the dinosaur (too many API calls)";
+    if (r.reason === "clock cap") return `the benchmark run did not harvest the dinosaur within ${fmt(DINO_BENCHMARK.worldTicks)} world ticks`;
+    return "the benchmark run ended without harvesting the dinosaur";
+  };
+
   const intParam = (s) => (/^\d{1,15}$/.test(s) ? Number(s) : null);
 
   // ---------- API routes ----------
@@ -337,11 +345,15 @@ export function createApp({ db, distDir = null, rateLimit = {}, trustProxy = fal
       const v = validateScore(body);
       if (!v.ok) throw new HttpError(400, v.error);
       const score = v.score;
-      if (score.category !== "maze") {
-        // Dino: level 1 (trust + sanity). The dinosaur's walk is not seeded,
-        // so a harvest can't be replayed.
-        const id = db.addScore(player.id, { ...score, verified: false });
-        return sendJson(res, 201, { id, ...withoutCode(score), verified: false });
+      if (score.category === "dino") {
+        // The program runs on the fixed benchmark; the claim (a harvest on the
+        // player's own farm) is only echoed back.
+        const r = await replay({ kind: "dino", code: score.code });
+        if (!r.harvested) throw new HttpError(422, `dino score rejected: ${dinoFailText(r)}`);
+        const stored = { ...score, value: r.bone, ticks: r.ticks, ops: r.ops, verified: true };
+        const id = db.addScore(player.id, stored);
+        const claimed = Number.isInteger(body.value) && body.value > 0 ? { value: body.value } : null;
+        return sendJson(res, 201, { id, ...withoutCode(stored), claimed });
       }
       const r = await replay({ kind: "maze", code: score.code, level: score.level, seed: score.seed, size: score.size, sx: score.sx, sy: score.sy });
       if (!r.solved) throw new HttpError(422, `maze score rejected: ${mazeFailText(r, score)}`);

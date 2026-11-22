@@ -116,14 +116,18 @@ export default function useFarmEngine() {
         if (demoRef.current) return;
         void submitRecord(ev).then((r) => {
           if (!r.sent) {
-            // The server replayed the maze run and could not reproduce it.
+            // The server replayed the program and could not reproduce it.
             if (r.rejected) logBuffer.current.push({ id: ++logId, kind: "warn", text: `🌐 The online leaderboard did not accept this record: ${r.reason}` });
             return;
           }
           const maze = r.score.category === "maze";
           const what = maze ? `Maze L${r.score.level}` : "Dino";
           const st = r.stored;
-          const verified = maze && st?.verified ? ` — ✓ verified by the server${st.corrected ? ` (${st.ticks.toLocaleString("en-US")} ticks · ${st.ops.toLocaleString("en-US")} ops)` : ""}` : "";
+          const num = (n) => Number(n || 0).toLocaleString("en-US");
+          let verified = "";
+          if (st?.verified && maze) verified = ` — ✓ verified by the server${st.corrected ? ` (${num(st.ticks)} ticks · ${num(st.ops)} ops)` : ""}`;
+          // The board counts the program's run on the server's benchmark farm, not the local harvest.
+          else if (st?.verified) verified = ` — ✓ ${num(st.value)} Bone on the server's benchmark farm`;
           logBuffer.current.push({ id: ++logId, kind: "info", text: `🌐 Sent your new best (${what}) to the online leaderboard${verified}` });
           setOnlineSeq((n) => n + 1);
         });
@@ -283,6 +287,17 @@ export default function useFarmEngine() {
     [exitDemo, save],
   );
 
+  /** Records window: the seed the next dinosaur hatches with (null = random). Saved at once. */
+  const setPendingDinoSeed = useCallback(
+    (seed) => {
+      exitDemo();
+      gameRef.current.pendingDinoSeed = seed;
+      dirtyRef.current = true;
+      save();
+    },
+    [exitDemo, save],
+  );
+
   /** Contracts window: the Deliver button (same code path as deliver_contract). */
   const deliverContract = useCallback(
     (id) => {
@@ -392,6 +407,7 @@ export default function useFarmEngine() {
     importSave,
     clearFarm,
     setPendingSeed,
+    setPendingDinoSeed,
     deliverContract,
     recordArenaMatch,
     buy,

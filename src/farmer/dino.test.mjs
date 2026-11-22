@@ -201,6 +201,7 @@ test("autonomous movement never enters its body, a hedge or a crop, and never wr
       W.tileAt(s, x, y).entity = i % 2 ? { type: "Hedge", progress: 1 } : W.makeEntity("Bush", rng, 1);
     }
     const blocked = new Set(s.tiles.map((t, k) => (t.entity && t.entity.type !== "Grass" ? k : -1)).filter((k) => k >= 0));
+    s.pendingDinoSeed = 10 * seed + 1; // (its walk comes from its own seed)
     assert.equal(W.plant(s, "Dinosaur").ok, true);
     let moved = 0;
     let grew = 0;
@@ -410,6 +411,7 @@ test("spawning a maze removes the dinosaur and apples; no dinosaur inside a maze
   W.clearFarm(s);
   s.drone.x = 3;
   s.drone.y = 3;
+  s.pendingDinoSeed = 4;
   assert.equal(W.plant(s, "Dinosaur").ok, true);
   const rng = seeded(4);
   for (let i = 0; i < 60; i++) W.tick(s, 0.1, rng);
@@ -452,6 +454,7 @@ test("save/load round trip with a live dinosaur + apples is exact and keeps simu
   W.clearFarm(s);
   s.drone.x = 3;
   s.drone.y = 3;
+  s.pendingDinoSeed = 11;
   assert.equal(W.plant(s, "Dinosaur").ok, true);
   const rng = seeded(11);
   for (let i = 0; i < 5000 && s.dino.body.length < 4; i++) W.tick(s, 0.07, rng);
@@ -466,9 +469,10 @@ test("save/load round trip with a live dinosaur + apples is exact and keeps simu
   assert.deepEqual(types(t), types(s), "segments and apples on the same tiles");
   assert.equal(snap(t), snap(s));
   checkChain(t);
-  // Both copies evolve identically from here with the same random stream.
+  // Both copies evolve identically from here: the walk is the dinosaur's own
+  // saved stream, whatever the world's random source gives.
   const r1 = seeded(99);
-  const r2 = seeded(99);
+  const r2 = seeded(100);
   for (let i = 0; i < 100; i++) {
     W.tick(s, 0.1, r1);
     W.tick(t, 0.1, r2);

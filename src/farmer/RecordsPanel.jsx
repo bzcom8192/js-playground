@@ -1,6 +1,6 @@
 // Records window (v3 phase 1): this run's metrics, the replay-seed input, the
 // best maze run per Mazes level with a histogram of your own attempts, and the
-// best dinosaur harvest. Personal records only — there is no server.
+// best dinosaur harvest (with its seed). Personal records only — no server.
 import { useState } from "react";
 import { parseSeed } from "./maze.js";
 import { hasRecords, histogram } from "./records.js";
@@ -50,15 +50,31 @@ function RunStats({ stats }) {
   );
 }
 
-function SeedInput({ pending, onSetSeed }) {
+function PendingSeed({ what, seed, onSetSeed }) {
+  return (
+    <p className="text-[11px] text-stone-600 flex items-center gap-1.5">
+      Next {what} uses seed <span className="font-mono font-semibold">{seed}</span>
+      <button onClick={() => onSetSeed(null)} className="text-stone-400 hover:text-red-600" title="Back to a random seed">
+        ✕
+      </button>
+    </p>
+  );
+}
+
+// One seed box for both seeded things: the next maze or the next dinosaur.
+function SeedInput({ pending, pendingDino, onSetSeed, onSetDinoSeed }) {
   const [draft, setDraft] = useState("");
   const seed = parseSeed(draft);
-  const submit = (e) => {
-    e.preventDefault();
+  const apply = (set) => {
     if (seed === null) return;
-    onSetSeed(seed);
+    set(seed);
     setDraft("");
   };
+  const submit = (e) => {
+    e.preventDefault();
+    apply(onSetSeed);
+  };
+  const button = "px-2.5 py-1 rounded text-xs font-semibold text-white hover:brightness-110 disabled:opacity-40";
   return (
     <Section title="Replay seed">
       <form onSubmit={submit} className="flex items-center gap-1.5">
@@ -67,30 +83,30 @@ function SeedInput({ pending, onSetSeed }) {
           onChange={(e) => setDraft(e.target.value)}
           inputMode="numeric"
           placeholder="e.g. 123456789"
-          aria-label="Maze seed to replay"
+          aria-label="Maze or dinosaur seed to replay"
           className={`flex-1 min-w-0 px-2 py-1 rounded border bg-white font-mono text-xs text-stone-800 ${
             draft && seed === null ? "border-red-400" : "border-stone-300"
           }`}
         />
+        <button type="submit" disabled={seed === null} className={button} style={{ background: TEAL }} title="The next maze uses this seed">
+          Maze
+        </button>
         <button
-          type="submit"
+          type="button"
+          onClick={() => apply(onSetDinoSeed)}
           disabled={seed === null}
-          className="px-2.5 py-1 rounded text-xs font-semibold text-white hover:brightness-110 disabled:opacity-40"
+          className={button}
           style={{ background: TEAL }}
+          title="The next dinosaur uses this seed"
         >
-          Use next
+          Dino
         </button>
       </form>
-      {pending !== null ? (
-        <p className="text-[11px] text-stone-600 flex items-center gap-1.5">
-          Next maze uses seed <span className="font-mono font-semibold">{pending}</span>
-          <button onClick={() => onSetSeed(null)} className="text-stone-400 hover:text-red-600" title="Back to a random seed">
-            ✕
-          </button>
-        </p>
-      ) : (
+      {pending !== null && <PendingSeed what="maze" seed={pending} onSetSeed={onSetSeed} />}
+      {pendingDino !== null && <PendingSeed what="dinosaur" seed={pendingDino} onSetSeed={onSetDinoSeed} />}
+      {pending === null && pendingDino === null && (
         <p className="text-[11px] text-stone-400">
-          Same seed + farm size + start tile → the same maze. Seeds are printed in the Output log.
+          Same seed + farm size + start tile → the same maze, or the same dinosaur walk and apples. Seeds are printed in the Output log.
         </p>
       )}
     </Section>
@@ -125,12 +141,12 @@ function Histogram({ attempts, best }) {
   );
 }
 
-function SeedButton({ seed, onSetSeed }) {
+function SeedButton({ seed, onSetSeed, what = "maze" }) {
   return (
     <button
       onClick={() => onSetSeed(seed)}
       className="font-mono text-stone-700 hover:text-[#1c7a72] underline decoration-dotted"
-      title="Replay: the next maze uses this seed"
+      title={`Replay: the next ${what} uses this seed`}
     >
       {seed}
     </button>
@@ -185,6 +201,23 @@ function MazeLevel({ level, entry, onSetSeed }) {
   );
 }
 
+// The seed of the best dinosaur harvest. Without a hatching tile (it was alive
+// before dinosaurs had seeds) the run can't be repeated from its seed.
+function DinoSeed({ rec, onSetSeed }) {
+  if (rec.seed === undefined) return null;
+  const known = rec.sx !== null && rec.sy !== null;
+  return (
+    <>
+      <span>
+        seed {known ? <SeedButton seed={rec.seed} onSetSeed={onSetSeed} what="dinosaur" /> : <span className="font-mono">{rec.seed}</span>}
+      </span>
+      <span className="text-stone-400">
+        {rec.size}×{rec.size} {known ? `from (${rec.sx}, ${rec.sy})` : "(hatched before seeds: not repeatable)"}
+      </span>
+    </>
+  );
+}
+
 // Save-level contract stats (v3 phase 2): one small row.
 function ContractStats({ stats }) {
   const done = stats?.completed || 0;
@@ -202,7 +235,7 @@ function ContractStats({ stats }) {
   );
 }
 
-export default function RecordsPanel({ game, stats, onSetSeed }) {
+export default function RecordsPanel({ game, stats, onSetSeed, onSetDinoSeed }) {
   const recs = game.records;
   const levels = Object.keys(recs?.mazes || {})
     .map(Number)
@@ -210,7 +243,12 @@ export default function RecordsPanel({ game, stats, onSetSeed }) {
   return (
     <div className="p-3 space-y-4 text-sm text-stone-800">
       <RunStats stats={stats} />
-      <SeedInput pending={game.pendingSeed ?? null} onSetSeed={onSetSeed} />
+      <SeedInput
+        pending={game.pendingSeed ?? null}
+        pendingDino={game.pendingDinoSeed ?? null}
+        onSetSeed={onSetSeed}
+        onSetDinoSeed={onSetDinoSeed}
+      />
       {!hasRecords(recs) ? (
         <p className="text-center text-stone-500 text-xs py-6">A blank page. Your first solved maze goes here.</p>
       ) : (
@@ -226,10 +264,11 @@ export default function RecordsPanel({ game, stats, onSetSeed }) {
           )}
           <Section title="Best dinosaur harvest">
             {recs.dino ? (
-              <div className="rounded-lg border border-stone-200 bg-white p-2 text-xs text-stone-600 flex flex-wrap gap-x-2">
+              <div className="rounded-lg border border-stone-200 bg-white p-2 text-xs text-stone-600 flex flex-wrap gap-x-2 gap-y-0.5">
                 <span className="font-mono font-bold text-stone-800">🦴 {fmt(recs.dino.bone)} Bone</span>
                 <span>{recs.dino.cut} segments cut</span>
                 <span className="text-stone-400">level {recs.dino.level}</span>
+                <DinoSeed rec={recs.dino} onSetSeed={onSetDinoSeed} />
               </div>
             ) : (
               <p className="text-[11px] text-stone-400">No dinosaur harvest yet.</p>

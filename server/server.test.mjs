@@ -22,21 +22,24 @@ import { startServer } from "./index.js";
 import { createRateLimiter } from "./app.js";
 import { hashToken, openDb } from "./db.js";
 import { createVerifier } from "./verifier.js";
-import { CHALLENGE_TTL_MS, DINO_MAX_BONE, DNF_TICKS, HISTORY_LIMIT, eloUpdate } from "../src/farmer/onlineRules.js";
+import { CHALLENGE_TTL_MS, DINO_BENCHMARK, DINO_MAX_BONE, DNF_TICKS, HISTORY_LIMIT, eloUpdate } from "../src/farmer/onlineRules.js";
 import * as W from "../src/farmer/world.js";
 import { WORLD_SIZES } from "../src/farmer/constants.js";
 import { createRuntime } from "../src/farmer/runtime.js";
 import { mulberry32 } from "../src/farmer/maze.js";
 import { BOT_CODE } from "../src/farmer/arenaBots.js";
 import { TICK_CAP, runSolo } from "../src/farmer/arena.js";
+import { verifyDino } from "../src/farmer/verify.js";
 
 let dir;
 let srv; // real replay verification
 let stub; // stand-in verifier (see the header)
 let base;
 
-/** Code the stub verifier "measures" as { ticks, ops } (reached / solved iff ticks ≤ the cap). */
-const stubCode = (ticks, ops) => `// stub ticks=${ticks} ops=${ops}\nharvest();`;
+/** Code the stub verifier "measures" as { ticks, ops } (reached / solved iff ticks ≤ the cap);
+ *  a dino benchmark run measures `bone`. */
+const stubCode = (ticks, ops, bone = 1) => `// stub ticks=${ticks} ops=${ops} bone=${bone}\nharvest();`;
+const dinoScore = (bone, claim = {}) => ({ category: "dino", code: stubCode(1000, 10, bone), ...claim });
 function stubVerifier() {
   return {
     async verify(job) {
@@ -46,6 +49,10 @@ function stubVerifier() {
       if (job.kind === "arena") {
         const reached = ticks <= TICK_CAP;
         return { ok: true, result: { kind: "arena", reached, ticks: reached ? ticks : DNF_TICKS, ops, reason: reached ? "goal" : "cap", error: null } };
+      }
+      if (job.kind === "dino") {
+        const bone = Number(/bone=(\d+)/.exec(job.code)?.[1] ?? 0);
+        return { ok: true, result: { kind: "dino", harvested: bone > 0, bone: bone || null, ticks: m ? ticks : null, ops: m ? ops : null, reason: "ended", error: null } };
       }
       return { ok: true, result: { kind: "maze", solved: !!m, mode: "spawn", ticks: m ? ticks : null, ops: m ? ops : null, reason: m ? "solved" : "ended", error: null } };
     },
@@ -177,11 +184,14 @@ test("score sanity rejections", async () => {
     { category: "maze", level: 1, ticks: 1e12, ops: 1 },
     { category: "maze", level: 1, ticks: 100, ops: 1, seed: -1 },
     { category: "maze", level: 1, ticks: 100, ops: 1, seed: 2 ** 32 },
-    { category: "dino", level: 1, value: 10 }, // dino has no level
-    { category: "dino", value: 0 },
-    { category: "dino", value: DINO_MAX_BONE + 1 },
-    { category: "dino" },
-    { category: "dino", value: 10, ticks: -1 },
+    { ...dinoScore(10), level: 1 }, // dino has no level
+    { category: "dino" }, // v5 phase 2: no program, no score
+    { category: "dino", value: 10 },
+    { category: "dino", value: 10, ticks: 100, ops: 10, seed: 4188 },
+    { category: "dino", value: 10, code: "" },
+    { category: "dino", value: 10, code: "   " },
+    { category: "dino", value: 10, code: 42 },
+    { category: "dino", value: 10, code: "x".repeat(100_001) },
   ];
   for (const body of bad) {
     const r = await call("POST", "/api/scores", { body, token });
@@ -200,9 +210,11 @@ test("score sanity rejections", async () => {
   assert.equal(ok.status, 201, ok.text);
   assert.equal(ok.json.verified, true);
   assert.equal(ok.json.code, undefined, "the program is not echoed back");
-  const dino = await call("POST", "/api/scores", { body: { category: "dino", value: DINO_MAX_BONE }, token });
+  const dino = await call("POST", "/api/scores", { body: dinoScore(48, { value: 7 }), token });
   assert.equal(dino.status, 201, dino.text);
-  assert.equal(dino.json.verified, false, "dino scores are level 1 (not replayable)");
+  assert.equal(dino.json.verified, true);
+  assert.equal(dino.json.value, 48, "measured, not claimed");
+  assert.equal(dino.json.code, undefined, "the program is not echoed back");
 });
 
 test("leaderboard: best entry per player, maze = fewest ticks then ops, dino = most Bone", async () => {
@@ -235,7 +247,7 @@ test("leaderboard: best entry per player, maze = fewest ticks then ops, dino = m
   assert.equal(lb.json.entries[0].code, undefined);
 
   const d = await register("LB-D");
-  for (const [p, v] of [[a, 50], [a, 400], [b, 400], [d, 90], [d, 12]]) await post(p, { category: "dino", value: v });
+  for (const [p, v] of [[a, 50], [a, 400], [b, 400], [d, 90], [d, 12]]) await post(p, dinoScore(v));
   const dino = await call("GET", "/api/leaderboard?category=dino");
   const mine = dino.json.entries.filter((e) => [a, b, d].some((p) => p.playerId === e.playerId));
   assert.deepEqual(
@@ -248,7 +260,7 @@ test("leaderboard: best entry per player, maze = fewest ticks then ops, dino = m
   );
   // equal Bone shares a rank
   assert.equal(mine[0].rank, mine[1].rank);
-  assert.ok(mine.every((e) => e.verified === false), "dino rows are marked unverified");
+  assert.ok(mine.every((e) => e.verified === true), "dino rows are benchmark runs");
 
   for (const q of ["category=maze", "category=maze&level=9", "category=dino&level=1", "category=x", ""]) {
     const r = await call("GET", `/api/leaderboard?${q}`);
@@ -595,7 +607,10 @@ test("an infinite loop is rejected by the wall-clock timeout without hanging (AP
     assert.ok(ms < 5000, `answered after ${ms} ms`);
     assert.equal(health.json.ok, true);
     assert.equal(sub.verifier.stats().running, 0, "the worker was terminated");
-    // A maze score with the same trick is rejected the same way.
+    // A maze or dino score with the same trick is rejected the same way.
+    const d = await call("POST", "/api/scores", { body: { category: "dino", value: 100, code: loop }, token: p.token, at: sub.url });
+    assert.equal(d.status, 422, d.text);
+    assert.match(d.json.error, /could not verify/);
     const m = await call("POST", "/api/scores", {
       body: { category: "maze", level: 1, ticks: 100, ops: 10, seed: 1, size: 6, sx: 0, sy: 0, code: loop },
       token: p.token,
@@ -693,12 +708,67 @@ test("maze: code that doesn't solve the recorded maze is rejected (422)", async 
   assert.equal(n, 0);
 });
 
+// Waits for the dinosaur to grow, then cuts it wherever the sweep meets it.
+const DINO_SWEEP = `const n = get_world_size();
+while (get_time() < 100) spin_in_place();
+for (let x = 0; x < n; x++) {
+  for (let y = 0; y < n; y++) {
+    if (get_entity_type() === Entities.Dinosaur) harvest();
+    move(North);
+  }
+  move(East);
+}
+`;
+
+test("dino: a known program gets the server-measured Bone; tampered client numbers are ignored", async () => {
+  const p = await registerReal("Dino-Faker");
+  const truth = await verifyDino({ code: DINO_SWEEP });
+  assert.ok(truth.bone >= 27, JSON.stringify(truth));
+  const row = (id) => ({ ...srv.db.raw.prepare("SELECT category, level, value, ticks, ops, seed, size, sx, sy, verified, code FROM scores WHERE id = ?").get(id) });
+  const { seed, size, x, y } = DINO_BENCHMARK;
+  const expected = { category: "dino", level: null, value: truth.bone, ticks: truth.ticks, ops: truth.ops, seed, size, sx: x, sy: y, verified: 1, code: DINO_SWEEP };
+  const claims = [{}, { value: DINO_MAX_BONE, ticks: 1, ops: 1 }, { value: 1, seed: 5, size: 3, sx: 0, sy: 0, verified: false }, { value: -5, ticks: "x" }];
+  for (const claim of claims) {
+    const r = await onReal("POST", "/api/scores", { body: { category: "dino", code: DINO_SWEEP, ...claim }, token: p.token });
+    assert.equal(r.status, 201, `${JSON.stringify(claim)} → ${r.text}`);
+    assert.deepEqual([r.json.value, r.json.ticks, r.json.ops, r.json.verified], [truth.bone, truth.ticks, truth.ops, true]);
+    assert.deepEqual(r.json.claimed, claim.value > 0 ? { value: claim.value } : null);
+    assert.equal(r.json.code, undefined);
+    assert.deepEqual(row(r.json.id), expected, "stored = server-measured");
+  }
+  const mine = (await onReal("GET", "/api/leaderboard?category=dino")).json.entries.find((e) => e.playerId === p.playerId);
+  assert.deepEqual([mine.value, mine.ticks, mine.ops, mine.seed, mine.verified], [truth.bone, truth.ticks, truth.ops, seed, true]);
+  assert.equal(mine.code, undefined);
+});
+
+test("dino: no code is a 400; a program that harvests no dinosaur on the benchmark is a 422; nothing is stored", async () => {
+  const p = await registerReal("Dino-Bluffer");
+  const none = await onReal("POST", "/api/scores", { body: { category: "dino", value: 5000, ticks: 100, ops: 10 }, token: p.token });
+  assert.equal(none.status, 400);
+  assert.match(none.json.error, /code/);
+  for (const [code, why] of [
+    ["harvest();", /ended without harvesting/],
+    ["while (true) spin_in_place();", /3,000 world ticks/],
+    ["nope();", /failed: .*nope/],
+    ["let x = ;", /failed: /],
+    ["while (true) { move(North); for (let i = 0; i < 200; i++) get_pos_x(); }", /too many API calls/],
+    ["const fs = await import('node:fs'); fs.writeFileSync('/tmp/pwned', 'x');", /failed: /],
+    ["Array.prototype.splice = () => ({ length: 144 }); harvest();", /failed: /],
+  ]) {
+    const r = await onReal("POST", "/api/scores", { body: { category: "dino", value: 5000, code }, token: p.token });
+    assert.equal(r.status, 422, `${code} → ${r.status} ${r.text}`);
+    assert.match(r.json.error, /^dino score rejected: /);
+    assert.match(r.json.error, why, code);
+  }
+  assert.equal(srv.db.raw.prepare("SELECT COUNT(*) AS n FROM scores WHERE player_id = ?").get(p.playerId).n, 0);
+});
+
 test("rate limit is per player token: two tokens from one IP each get their own bucket", async () => {
   const sub = await startServer({ port: 0, host: "127.0.0.1", dbPath: join(dir, "rl-token.db"), distDir: null, rateLimit: { max: 3, windowMs: 60_000 }, verifier: stubVerifier() });
   try {
     const a = await register("Bucket-A", sub.url); // IP bucket: 1
     const b = await register("Bucket-B", sub.url); // IP bucket: 2
-    const post = (p) => call("POST", "/api/scores", { body: { category: "dino", value: 5 }, token: p.token, at: sub.url }).then((r) => r.status);
+    const post = (p) => call("POST", "/api/scores", { body: dinoScore(5), token: p.token, at: sub.url }).then((r) => r.status);
     const codesA = [await post(a), await post(a), await post(a), await post(a)];
     assert.deepEqual(codesA, [201, 201, 201, 429], "A's own bucket runs out");
     const codesB = [await post(b), await post(b), await post(b), await post(b)];
@@ -709,7 +779,7 @@ test("rate limit is per player token: two tokens from one IP each get their own 
       (await call("POST", "/api/auth/register", { body: { name: "Bucket-D" }, at: sub.url })).status,
     ];
     assert.deepEqual(reg, [201, 429]);
-    assert.equal((await call("POST", "/api/scores", { body: { category: "dino", value: 5 }, token: "c".repeat(64), at: sub.url })).status, 429);
+    assert.equal((await call("POST", "/api/scores", { body: dinoScore(5), token: "c".repeat(64), at: sub.url })).status, 429);
   } finally {
     await sub.close();
   }
@@ -746,6 +816,7 @@ test("a phase-1 DB file is upgraded in place (old rows count as unverified)", as
     CREATE TABLE challenge_results (id INTEGER PRIMARY KEY, challenge_id INTEGER NOT NULL UNIQUE REFERENCES challenges(id), player_id INTEGER NOT NULL REFERENCES players(id), ticks INTEGER NOT NULL, ops INTEGER NOT NULL, code TEXT NOT NULL, outcome TEXT NOT NULL, elo_delta INTEGER NOT NULL, created_at INTEGER NOT NULL);
     INSERT INTO players (name, token_hash, created_at) VALUES ('Oldie', '${hashToken("d".repeat(64))}', 1);
     INSERT INTO scores (player_id, category, level, ticks, ops, created_at) VALUES (1, 'maze', 1, 5, 1, 1);
+    INSERT INTO scores (player_id, category, value, created_at) VALUES (1, 'dino', 62208, 1);
     INSERT INTO challenges (author_id, goal, seed, code, author_ticks, author_ops, created_at) VALUES (1, 'hay500', 1, 'x', 1, 1, 1);
   `);
   old.close();
@@ -755,6 +826,11 @@ test("a phase-1 DB file is upgraded in place (old rows count as unverified)", as
     assert.equal(db.openChallenges()[0].verified, 0);
     const id = db.addScore(1, { category: "maze", level: 1, ticks: 900, ops: 9, value: null, seed: 3, size: 6, sx: 0, sy: 0, code: "c", verified: true });
     assert.equal(db.leaderboard("maze", 1)[0].id, id);
+    // v5 phase 2: the same for dino. The old row is kept, only not ranked.
+    assert.deepEqual(db.leaderboard("dino", null), [], "the trust-based dino row is not on the verified board");
+    const d = db.addScore(1, { category: "dino", level: null, ticks: 900, ops: 9, value: 48, seed: 4188, size: 12, sx: 6, sy: 6, code: "c", verified: true });
+    assert.deepEqual(db.leaderboard("dino", null).map((r) => [r.id, r.value]), [[d, 48]]);
+    assert.equal(db.raw.prepare("SELECT value FROM scores WHERE category = 'dino' AND verified = 0").get().value, 62208);
   } finally {
     db.close();
   }

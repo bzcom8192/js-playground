@@ -33,6 +33,13 @@ export function mulberry32(seed) {
   };
 }
 
+/**
+ * Draw number `n` (0, 1, 2 …) of the mulberry32(seed) stream: a stream whose
+ * position is a plain counter, so it can be saved and resumed exactly (the
+ * dinosaur, see world.js). mulberry32's whole state is seed + n × its step.
+ */
+export const mulberry32At = (seed, n) => mulberry32((seed + Math.imul(n, 0x6d2b79f5)) >>> 0)();
+
 /** A random unsigned 32-bit seed from `rng` (ambient by default). */
 export const randomSeed = (rng = Math.random) => Math.floor(rng() * 4294967296) >>> 0;
 

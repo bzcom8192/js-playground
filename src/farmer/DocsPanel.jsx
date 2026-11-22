@@ -107,6 +107,7 @@ const DINOSAURS = [
   ["Wandering", "Every 0.3 s of game time the head picks a free tile next door: bare ground, grass (it is trampled) or an apple. Not its own body, a hedge, a crop or the edge. Hemmed in, it waits. Bots straddle it."],
   ["Apples 🍎", "While it lives, one appears every 1.5 s on a free tile, up to one per 16 tiles (at least 1). Each one eaten adds a tile. Bots can't gather them or work their tile."],
   ["Bone 🦴", "Cutting a segment takes everything behind it as well: (segments)² × level. The head means all of it, the tail tip means 1. When nothing is left, so are the apples, and you can set another egg."],
+  ["Seeds 🏆", "The Output tab prints each dinosaur's seed. Its steps and apples come from it: same seed, farm, hatching tile and bot moves, same walk. The Almanac keeps the seed of your best cut, and can set one for the next egg. Online, a best sends your program to one benchmark farm that is the same for everyone."],
   ["Good to know", "Every segment reads as Entities.Dinosaur, and the strip above the farm says which one. A labyrinth, clear() or New Acres ends it. See example 8."],
 ];
 

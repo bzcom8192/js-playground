@@ -7,7 +7,7 @@
 // worker_thread with a wall-clock timeout (server/verifier.js); the caps here
 // make sure a run ends on its own long before that in normal cases.
 //
-// Two verifiable contexts:
+// Three verifiable contexts:
 //  - Arena (friend challenges): runSolo() on the fixed arena world + goal for
 //    the challenge seed — exactly what the client ran (same engine, same seed,
 //    seeded Math.random) → { reached, ticks, ops }.
@@ -26,12 +26,19 @@
 //       recorded maze, e.g. the program's setup depends on the player's own
 //       farm): the maze is generated before Run and timed from the run start.
 //    solved = the recorded maze's treasure was harvested.
+//  - Dino (leaderboard, v5 phase 2): the program runs from the top on ONE fixed
+//    benchmark (DINO_BENCHMARK in onlineRules.js: the verification farm under
+//    grass, a pre-planted dinosaur with a fixed seed), so a score is a function
+//    of the program alone. It runs until it ends or the benchmark's farm time
+//    is over; the result is its largest single dinosaur harvest, with the run
+//    counters at that harvest → { harvested, bone, ticks, ops }.
 
 import { UNLOCKS, WORLD_SIZES } from "./constants.js";
 import { mulberry32 } from "./maze.js";
 import { createRuntime } from "./runtime.js";
 import * as W from "./world.js";
 import { GOALS, OP_BUDGET, TICK_MS, runSolo } from "./arena.js";
+import { DINO_BENCHMARK } from "./onlineRules.js";
 
 /** Wall-clock limit for one verification (enforced by the server's worker). */
 export const VERIFY_TIMEOUT_MS = 10_000;
@@ -42,6 +49,11 @@ export const MAZE_VERIFY_TICK_CAP = 5_000_000;
 export const MAZE_VERIFY_CLOCK_CAP = 5_000_000;
 /** Maze replay: API calls before the run is cut off (as in the arena). */
 export const MAZE_VERIFY_OP_BUDGET = OP_BUDGET;
+/** Dino benchmark: farm time (virtual ms) and API calls before the run ends.
+ *  What was harvested until then counts. No separate run-clock cap: at the
+ *  farm's Speed the run clock is bounded by these two. */
+export const DINO_VERIFY_CLOCK_CAP = DINO_BENCHMARK.worldTicks * TICK_MS;
+export const DINO_VERIFY_OP_BUDGET = OP_BUDGET;
 /** Every item on the verification farm starts at this amount (Power: 0). */
 export const VERIFY_STOCK = 1_000_000;
 
@@ -74,6 +86,25 @@ export async function verifyArena({ code, goal, seed }) {
 
 // ---------- maze ----------
 
+/** The verification farm: size × size, every unlock at its top level (Expand =
+ *  the size), a grown `crop` on every tile, plenty of every item, no weather. */
+function verifyFarm(size, crop, rng) {
+  const state = W.createGame();
+  for (const u of UNLOCKS) state.unlocks[u.id] = u.maxLevel;
+  state.unlocks.Expand = WORLD_SIZES.indexOf(size);
+  state.size = size;
+  state.tiles = Array.from({ length: size * size }, () => {
+    const t = W.newTile();
+    t.entity = W.makeEntity(crop, rng, 1);
+    return t;
+  });
+  for (const k of Object.keys(state.items)) state.items[k] = VERIFY_STOCK;
+  state.items.Power = 0;
+  state.arena = null;
+  state.weather = null;
+  return state;
+}
+
 /**
  * The maze verification farm (see the header). prespawned: generate the maze
  * now (consuming the queued seed) instead of leaving it to the program.
@@ -83,23 +114,11 @@ export function mazeVerifyWorld({ seed, size, sx, sy, level }, { prespawned = fa
   if (!WORLD_SIZES.includes(size)) throw new Error(`bad farm size ${String(size)}`);
   if (!(sx >= 0 && sy >= 0 && sx < size && sy < size)) throw new Error("start tile is off the farm");
   const rng = mulberry32((seed ^ 0x5bd1e995) >>> 0);
-  const state = W.createGame();
-  for (const u of UNLOCKS) state.unlocks[u.id] = u.maxLevel;
-  state.unlocks.Expand = WORLD_SIZES.indexOf(size);
+  const state = verifyFarm(size, "Bush", rng);
   state.unlocks.Mazes = level;
-  state.size = size;
-  state.tiles = Array.from({ length: size * size }, () => {
-    const t = W.newTile();
-    t.entity = W.makeEntity("Bush", rng, 1);
-    return t;
-  });
-  for (const k of Object.keys(state.items)) state.items[k] = VERIFY_STOCK;
-  state.items.Power = 0;
   state.drone.x = sx;
   state.drone.y = sy;
   state.pendingSeed = seed >>> 0;
-  state.arena = null;
-  state.weather = null;
   if (prespawned) W.spawnMaze(state, rng);
   return { state, rng };
 }
@@ -109,8 +128,9 @@ export function mazeVerifyWorld({ seed, size, sx, sy, level }, { prespawned = fa
  * pattern for a single side: run until every drone waits on a timer, jump the
  * clock to the earliest timer, world growth on a fixed TICK_MS grid).
  * check() → a truthy value ends the run (reason "done", value in `found`).
+ * onRecord(ev, stats): a new best on this world, with the run counters then.
  */
-async function runVirtual({ code, state, rng, seed, check, tickCap, clockCap, opBudget, timeExistingMaze = false }) {
+async function runVirtual({ code, state, rng, seed, check, tickCap, clockCap, opBudget, timeExistingMaze = false, onRecord = () => {} }) {
   const clock = { t: 0 };
   let timers = [];
   let seq = 0;
@@ -134,6 +154,7 @@ async function runVirtual({ code, state, rng, seed, check, tickCap, clockCap, op
     wallClock: () => 0,
     today: () => "2000-01-01",
     timeExistingMaze,
+    onRecord: (ev) => onRecord(ev, rt.stats()),
   });
   rt.run(String(code ?? "")).then(() => (ended = true));
   let gridT = 0;
@@ -255,9 +276,61 @@ export async function verifyMaze(job) {
   return { ...second, firstTry: first.reason, wrongStart: first.wrongStart };
 }
 
-/** Dispatch one job: { kind: "arena", code, goal, seed } | { kind: "maze", code, level, seed, size, sx, sy }. */
+// ---------- dino ----------
+
+/**
+ * The dino benchmark farm (see DINO_BENCHMARK): everything unlocked at its top
+ * level, grown Grass everywhere, the stock of the maze farm but no Bone (a
+ * program may count its Bone), the dinosaur already hatched. → { state, rng }
+ */
+export function dinoVerifyWorld() {
+  const { seed, size, x, y } = DINO_BENCHMARK;
+  const rng = mulberry32((seed ^ 0x5bd1e995) >>> 0);
+  const state = verifyFarm(size, "Grass", rng);
+  state.items.Bone = 0;
+  state.dinoSeed = seed;
+  W.hatchDino(state, rng, { x, y });
+  return { state, rng };
+}
+
+/**
+ * verifyDino({ code }) → { kind: "dino", harvested, bone, cut, ticks, ops,
+ *   reason, error } — the largest single dinosaur harvest of the run (the first
+ *   one, if several are equal) and the run counters at that moment. A program
+ *   that fails or is cut off later keeps what it had harvested by then.
+ */
+export async function verifyDino({ code }) {
+  const { state, rng } = dinoVerifyWorld();
+  let best = null;
+  const r = await runVirtual({
+    code,
+    state,
+    rng,
+    seed: DINO_BENCHMARK.seed,
+    check: () => null,
+    tickCap: Infinity,
+    clockCap: DINO_VERIFY_CLOCK_CAP,
+    opBudget: DINO_VERIFY_OP_BUDGET,
+    onRecord: (ev, stats) => {
+      if (ev.kind === "dino") best = { bone: ev.rec.bone, cut: ev.rec.cut, ticks: stats.runTicks, ops: stats.ops };
+    },
+  });
+  return {
+    kind: "dino",
+    harvested: !!best,
+    bone: best ? best.bone : null,
+    cut: best ? best.cut : null,
+    ticks: best ? best.ticks : null,
+    ops: best ? best.ops : null,
+    reason: r.reason,
+    error: r.error,
+  };
+}
+
+/** Dispatch one job: { kind: "arena", code, goal, seed } | { kind: "maze", code, level, seed, size, sx, sy } | { kind: "dino", code }. */
 export function runVerification(job) {
   if (job?.kind === "arena") return verifyArena(job);
   if (job?.kind === "maze") return verifyMaze(job);
+  if (job?.kind === "dino") return verifyDino(job);
   return Promise.reject(new Error(`unknown verification kind ${String(job?.kind)}`));
 }

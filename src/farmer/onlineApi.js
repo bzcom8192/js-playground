@@ -178,7 +178,9 @@ export function createOnlineApi({ fetchFn, base = DEFAULT_BASE, timeoutMs = DEFA
     leaderboard: (category, level = null) =>
       request("GET", `/leaderboard?category=${enc(category)}${level === null || level === undefined ? "" : `&level=${enc(level)}`}`),
     /** maze: { category, level, ticks, ops, seed, size, sx, sy, code } → the stored
-     *  score with the SERVER's ticks / ops (+ claimed, corrected, verified). */
+     *  score with the SERVER's ticks / ops (+ claimed, corrected, verified).
+     *  dino: { category, code, value? } → the stored benchmark result: the
+     *  SERVER's value (Bone) / ticks / ops (+ claimed, verified). */
     submitScore: (token, score) => request("POST", "/scores", { body: score, token }),
     /** → { challenges: [{ id, authorId, authorName, authorElo, goal, seed, authorTicks, authorOps, createdAt, expiresAt, verified }] } */
     listChallenges: () => request("GET", "/challenges"),
@@ -202,36 +204,51 @@ export const onlineApi = createOnlineApi();
  *  no program to replay).
  *  v4 phase 2: a maze score carries what the server needs to REPLAY it — the
  *  program as it ran (ev.code, helper files included), the seed, the farm
- *  size and the start tile; the server keeps its own ticks / ops. */
+ *  size and the start tile; the server keeps its own ticks / ops.
+ *  v5 phase 2: a dino score carries the program too; the server runs it on its
+ *  own benchmark farm and keeps the Bone / ticks / ops measured there. */
 export function scoreForRecord(ev) {
   let score = null;
   if (ev?.kind === "maze" && ev.attempt && MAZE_LEVELS.includes(ev.attempt.level)) {
     const a = ev.attempt;
     score = { category: "maze", level: a.level, ticks: a.ticks, ops: a.ops, seed: a.seed ?? null, size: a.size, sx: a.sx, sy: a.sy, code: ev.code };
   } else if (ev?.kind === "dino" && ev.rec) {
-    score = { category: "dino", value: ev.rec.bone };
+    score = { category: "dino", value: ev.rec.bone, code: ev.code };
   }
   return score && validateScore(score).ok ? score : null;
 }
+
+// The dino program each identity (token) sent last: its benchmark result does
+// not depend on the local harvest, so a run that keeps beating its own record
+// sends the same program only once.
+const dinoSent = new Map();
 
 /**
  * Fire-and-forget: send a new local record to the leaderboard if this
  * browser has an identity. Never rejects. → Promise<{ sent, score?, stored?,
  * reason?, rejected? }> — stored: the server's answer (maze: its replayed
- * ticks / ops); rejected: the server's replay could not reproduce it (422).
+ * ticks / ops, dino: its benchmark result); rejected: the server's replay
+ * could not reproduce it (422).
  */
-export async function submitRecord(ev, { api = onlineApi, storage, demo = false } = {}) {
+export async function submitRecord(ev, { api = onlineApi, storage, demo = false, sent = dinoSent } = {}) {
+  let undo = () => {};
   try {
     if (demo) return { sent: false, reason: "demo" };
     const id = loadIdentity(storage === undefined ? defaultStorage() : storage);
     if (!id) return { sent: false, reason: "no identity" };
     const score = scoreForRecord(ev);
     if (!score) return { sent: false, reason: "not a leaderboard score" };
+    if (score.category === "dino") {
+      if (sent.get(id.token) === score.code) return { sent: false, reason: "already sent" };
+      sent.set(id.token, score.code);
+      undo = () => sent.get(id.token) === score.code && sent.delete(id.token);
+    }
     const stored = await api.submitScore(id.token, score);
     return { sent: true, score, stored: stored && typeof stored === "object" ? stored : null };
   } catch (err) {
     const out = { sent: false, reason: String(err?.message || err) };
     if (err?.status === 422) out.rejected = true;
+    else undo(); // it never got there: the next record may try again
     return out;
   }
 }

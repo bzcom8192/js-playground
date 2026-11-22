@@ -5,13 +5,15 @@
 //    worker is terminated — also mid-busy-loop — and the job is rejected;
 //  - V8 heap limits (resourceLimits), so a memory bomb kills only the worker;
 //  - the engine's own caps (arena 200,000 ticks; maze replay 5,000,000 run
-//    ticks / virtual ms and 2,000,000 ops), which end normal runs on their own.
+//    ticks / virtual ms and 2,000,000 ops; dino benchmark 300,000 virtual ms
+//    and 2,000,000 ops), which end normal runs on their own.
 // At most `maxConcurrent` workers run at once; up to `maxQueue` more jobs
 // wait; beyond that verify() answers { ok: false, code: "busy" } at once.
 // The API process never runs submitted code itself and never throws from
 // verify(): every failure is a { ok: false, code, error } value.
 import { Worker } from "node:worker_threads";
 import { VERIFY_TIMEOUT_MS } from "../src/farmer/verify.js";
+import { DINO_MAX_BONE } from "../src/farmer/onlineRules.js";
 
 const WORKER_URL = new URL("./verifyWorker.js", import.meta.url);
 
@@ -25,6 +27,19 @@ function cleanResult(job, r) {
   if (job.kind === "arena") {
     if (typeof r.reached !== "boolean" || !isCount(r.ticks) || !isCount(r.ops)) return null;
     return { kind: "arena", reached: r.reached, ticks: r.ticks, ops: r.ops, reason: String(r.reason ?? ""), error: r.error == null ? null : String(r.error) };
+  }
+  if (job.kind === "dino") {
+    if (typeof r.harvested !== "boolean") return null;
+    if (r.harvested && (!isCount(r.bone) || r.bone < 1 || r.bone > DINO_MAX_BONE || !isCount(r.ticks) || !isCount(r.ops))) return null;
+    return {
+      kind: "dino",
+      harvested: r.harvested,
+      bone: r.harvested ? r.bone : null,
+      ticks: r.harvested ? r.ticks : null,
+      ops: r.harvested ? r.ops : null,
+      reason: String(r.reason ?? ""),
+      error: r.error == null ? null : String(r.error),
+    };
   }
   if (typeof r.solved !== "boolean") return null;
   if (r.solved && (!isCount(r.ticks) || !isCount(r.ops))) return null;
@@ -46,6 +61,7 @@ function cleanResult(job, r) {
  *  { verify(job) → Promise<{ ok: true, result, ms } | { ok: false, code, error }>,
  *    close(), stats() }
  *  job: { kind: "arena", code, goal, seed } | { kind: "maze", code, level, seed, size, sx, sy }
+ *    | { kind: "dino", code }
  *  code: "timeout" | "crash" | "busy" | "closed"
  */
 export function createVerifier({ timeoutMs = VERIFY_TIMEOUT_MS, maxConcurrent = 2, maxQueue = 16, resourceLimits = DEFAULT_RESOURCE_LIMITS } = {}) {

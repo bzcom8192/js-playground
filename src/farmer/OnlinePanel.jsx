@@ -4,7 +4,7 @@
 // so ("เซิร์ฟเวอร์ไม่ตอบสนอง") and nothing else in the game changes. The
 // demo farm can look but not register, submit or race.
 // v4 phase 2: maze rows and friend challenges are replay-verified by the
-// server (✓); dino rows are not replayable and say so (ยังไม่ยืนยัน).
+// server (✓); v5 phase 2: so are dino rows (the program's benchmark run).
 // v5: identity export / import (its own file, not Save Data), challenges
 // expire after 7 days, and a match history (ประวัติ) with the ELO changes.
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -14,7 +14,7 @@ import { ITEM_ICONS } from "./constants.js";
 import { randomSeed } from "./maze.js";
 import { buildProgram } from "./program.js";
 import { TEAL } from "./farmerUi.jsx";
-import { CODE_MAX, NAME_MAX } from "./onlineRules.js";
+import { CODE_MAX, DINO_BENCHMARK, NAME_MAX } from "./onlineRules.js";
 import {
   IDENTITY_FILE_MAX,
   OFFLINE_MESSAGE,
@@ -55,9 +55,7 @@ function Section({ title, right, children }) {
   );
 }
 
-const UNVERIFIED_LABEL = "ยังไม่ยืนยัน";
 const VERIFIED_TITLE = "Verified: the server replayed this program and measured the run itself";
-const UNVERIFIED_TITLE = "Not verified: a dinosaur's walk is not seeded, so the server cannot replay the harvest (trust-based)";
 
 function VerifiedMark() {
   return (
@@ -97,13 +95,7 @@ function Leaderboard({ tab, board, meId }) {
                 {dino ? `${fmt(e.value)} ${ITEM_ICONS.Bone}` : `${fmt(e.ticks)} / ${fmt(e.ops)}`}
               </td>
               <td className="pl-0.5 pr-1 text-right whitespace-nowrap w-4">
-                {e.verified ? (
-                  <VerifiedMark />
-                ) : (
-                  <span className="text-[9px] font-normal text-stone-400" title={UNVERIFIED_TITLE}>
-                    {UNVERIFIED_LABEL}
-                  </span>
-                )}
+                {e.verified && <VerifiedMark />}
               </td>
             </tr>
           );
@@ -588,8 +580,8 @@ export default function OnlinePanel({ files, activeId, demo, onlineSeq = 0, push
         </div>
         <p className="text-[10px] text-stone-400">
           Maze: fewest ticks, then fewest ops. Dino: biggest single harvest. Best entry per player, top 50. <VerifiedMark /> = the server replayed
-          the program and measured the run itself (maze records send their code). Dino rows are {UNVERIFIED_LABEL}: the dinosaur&apos;s walk is
-          not seeded, so a harvest can&apos;t be replayed.
+          the program and measured the run itself (records send their code). Dino programs all run on the server&apos;s benchmark farm:{" "}
+          {DINO_BENCHMARK.size}×{DINO_BENCHMARK.size}, dinosaur seed {DINO_BENCHMARK.seed}, {fmt(DINO_BENCHMARK.worldTicks / 10)} s of farm time.
         </p>
       </Section>
 

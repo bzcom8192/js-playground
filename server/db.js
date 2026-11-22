@@ -119,7 +119,8 @@ export async function openDb(file, { now = Date.now } = {}) {
       "INSERT INTO scores (player_id, category, level, ticks, ops, value, seed, created_at, verified, size, sx, sy, code) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     ),
     // Best entry per player (window function), then the category's order.
-    // Maze: only replay-verified rows count (phase-1 trust rows are hidden).
+    // Only replay-verified rows count: the trust-based ones (maze before v4
+    // phase 2, dino before v5 phase 2) stay in the table but off the board.
     boardMaze: db.prepare(`
       SELECT * FROM (
         SELECT s.id, s.player_id, p.name, s.ticks, s.ops, s.value, s.seed, s.created_at, s.verified, s.size, s.sx, s.sy,
@@ -132,7 +133,7 @@ export async function openDb(file, { now = Date.now } = {}) {
         SELECT s.id, s.player_id, p.name, s.ticks, s.ops, s.value, s.seed, s.created_at, s.verified, s.size, s.sx, s.sy,
                ROW_NUMBER() OVER (PARTITION BY s.player_id ORDER BY s.value DESC, s.id ASC) AS rn
         FROM scores s JOIN players p ON p.id = s.player_id
-        WHERE s.category = 'dino'
+        WHERE s.category = 'dino' AND s.verified = 1
       ) WHERE rn = 1 ORDER BY value DESC, id ASC LIMIT ${LEADERBOARD_LIMIT}`),
     insertChallenge: db.prepare(
       "INSERT INTO challenges (author_id, goal, seed, code, author_ticks, author_ops, status, created_at, verified) VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?)",
@@ -217,7 +218,7 @@ export async function openDb(file, { now = Date.now } = {}) {
     playerById: (id) => q.playerById.get(id) ?? null,
 
     /** s: a validated score; s.verified (bool) = the server replayed it and
-     *  s.ticks / s.ops are the server's numbers. */
+     *  s.ticks / s.ops / s.value are the server's numbers. */
     addScore(playerId, s) {
       const r = q.insertScore.run(
         playerId, s.category, s.level, s.ticks, s.ops, s.value, s.seed, now(),

@@ -29,7 +29,7 @@ import {
   appleCap,
   maxDrones,
 } from "./constants.js";
-import { generateSeededMaze, parseSeed, randomSeed, treasureDirection } from "./maze.js";
+import { generateSeededMaze, mulberry32At, parseSeed, randomSeed, treasureDirection } from "./maze.js";
 import { emptyRecords, sanitizeRecords } from "./records.js";
 import { farmClock, sanitizeContracts } from "./contracts.js";
 import { emptyArena, sanitizeArena } from "./arenaRating.js";
@@ -96,13 +96,20 @@ export function createGame() {
     // are Hedge entities on the tiles. `seed` is null for a maze loaded from a
     // save written before seeded mazes.
     maze: null,
-    // The dinosaur: { body: [{x, y}, …] (head first), dir, stepTimer, appleTimer } or null.
-    // Every body tile holds a { type: "Dinosaur" } entity; apples are "Apple" entities.
+    // The dinosaur: { body: [{x, y}, …] (head first), dir, stepTimer, appleTimer,
+    // seed, draws, start: { x, y } | null } or null. Every body tile holds a
+    // { type: "Dinosaur" } entity; apples are "Apple" entities. Its walk and its
+    // apples are drawn from mulberry32(seed); `draws` = draws used so far.
+    // `start` (where it hatched) is null for one from a save without seeds.
     dino: null,
     // Personal records (see records.js) and the seed the next maze will use
     // (set from the Records window's "replay seed"; null = draw a random one).
     records: emptyRecords(),
     pendingSeed: null,
+    // v5: the same for the next dinosaur, and a fixed seed for EVERY dinosaur of
+    // this world (the demo farm, the server's benchmark; never saved) or null.
+    pendingDinoSeed: null,
+    dinoSeed: null,
     // v3 phase 2: the farm clock in ticks (every run adds its run clock; see
     // contracts.js) and today's daily contracts ({ date, contracts } or null
     // until contracts.ensureContracts generates them).
@@ -320,7 +327,7 @@ function simulate(state, dt, rng, fx) {
       }
     }
   }
-  if (state.dino) dinoTick(state, dt, rng);
+  if (state.dino) dinoTick(state, dt);
   const wl = level(state, "Watering");
   if (wl > 0) {
     const interval = WATER_BASE_INTERVAL / wl;
@@ -506,7 +513,7 @@ export function plant(state, type, rng = Math.random) {
   }
   pay(state, info.cost);
   if (type === "Dinosaur") {
-    hatchDino(state);
+    hatchDino(state, rng);
     return ok;
   }
   tile.entity = makeEntity(type, rng);
@@ -741,20 +748,28 @@ export function serialize(state) {
           sy: state.maze.start?.y ?? null,
         }
       : null,
-    // The dinosaur's body chain (head first) and its timers; segments and
-    // apples are also entities on the tiles below.
-    dino: state.dino
-      ? {
-          body: state.dino.body.map((p) => [p.x, p.y]),
-          dir: state.dino.dir,
-          st: state.dino.stepTimer,
-          at: state.dino.appleTimer,
-        }
-      : null,
-    // v3: personal records + the pending replay seed. Older saves have
-    // neither and load with empty records.
+    // The dinosaur's body chain (head first), its timers, its seed + the draws
+    // used (so it walks on exactly where it was) and its hatching tile;
+    // segments and apples are also entities on the tiles below. The demo
+    // farm's dinosaur is not persisted.
+    dino:
+      state.dino && !state.demo
+        ? {
+            body: state.dino.body.map((p) => [p.x, p.y]),
+            dir: state.dino.dir,
+            st: state.dino.stepTimer,
+            at: state.dino.appleTimer,
+            seed: parseSeed(state.dino.seed),
+            n: state.dino.draws ?? 0,
+            sx: state.dino.start?.x ?? null,
+            sy: state.dino.start?.y ?? null,
+          }
+        : null,
+    // v3: personal records + the pending replay seeds (v5: also the next
+    // dinosaur's). Older saves have none and load with empty records.
     records: sanitizeRecords(state.records),
     pendingSeed: parseSeed(state.pendingSeed),
+    pendingDinoSeed: parseSeed(state.pendingDinoSeed),
     // v3 phase 2: farm clock + today's contracts. A demo farm's contracts are
     // only for show and never persisted (the demo is never saved anyway).
     clock: Math.floor(farmClock(state)),
@@ -821,6 +836,7 @@ export function deserialize(data) {
   restoreDino(state, data.dino);
   state.records = sanitizeRecords(data.records);
   state.pendingSeed = parseSeed(data.pendingSeed);
+  state.pendingDinoSeed = parseSeed(data.pendingDinoSeed);
   return state;
 }
 
@@ -966,20 +982,45 @@ export function dinoMoves(state) {
   return out;
 }
 
-function hatchDino(state) {
-  const { x, y } = state.drone;
+/**
+ * Hatch the farm's dinosaur on tile (x, y) (default: the drone's). Everything
+ * random about it comes from its seed: the world's fixed one (state.dinoSeed)
+ * if there is one, else the pending (replay) seed — used once and cleared —
+ * else a fresh random 32-bit seed drawn from `rng`.
+ * Same seed + farm + hatching tile + bot actions → the same walk and apples.
+ */
+export function hatchDino(state, rng = Math.random, { x, y } = state.drone) {
+  const fixed = parseSeed(state.dinoSeed);
+  const pending = fixed === null ? parseSeed(state.pendingDinoSeed) : null;
+  const seed = fixed ?? pending ?? randomSeed(rng);
+  if (fixed === null) state.pendingDinoSeed = null;
   const tile = tileAt(state, x, y);
   tile.entity = { type: "Dinosaur", progress: 1 };
   tile.regrow = 0;
-  state.dino = { body: [{ x, y }], dir: "South", stepTimer: 0, appleTimer: 0 };
+  state.dino = { body: [{ x, y }], dir: "South", stepTimer: 0, appleTimer: 0, seed, draws: 0, start: { x, y } };
+  emit({ type: "dinoHatch", seed, replay: pending !== null });
 }
+
+/** The dinosaur's seed; one that has none yet (an old save) gets it here. */
+function seedOfDino(d, rng = Math.random) {
+  if (parseSeed(d.seed) === null) {
+    d.seed = randomSeed(rng);
+    d.draws = 0;
+    d.start = null;
+  }
+  return d.seed;
+}
+
+/** The dinosaur's own random stream: () => float in [0, 1), counted in `draws`. */
+const dinoRandom = (state) => () => mulberry32At(seedOfDino(state.dino), state.dino.draws++);
 
 /**
  * One autonomous step: the head moves to a random valid neighbour. Eating an
  * apple grows the body by one (the tail stays); otherwise the tail follows.
  * With no valid move the dinosaur stays put. Returns true if it moved.
+ * rng: the dinosaur's own stream unless the caller brings one.
  */
-export function dinoStep(state, rng = Math.random) {
+export function dinoStep(state, rng = dinoRandom(state)) {
   const moves = dinoMoves(state);
   if (!moves.length) return false;
   const m = moves[Math.min(moves.length - 1, Math.floor(rng() * moves.length))];
@@ -997,7 +1038,7 @@ export function dinoStep(state, rng = Math.random) {
 }
 
 /** Spawn one apple on a random empty (or grass) tile, if under the cap. */
-export function spawnApple(state, rng = Math.random) {
+export function spawnApple(state, rng = dinoRandom(state)) {
   let apples = 0;
   const free = [];
   state.tiles.forEach((t, i) => {
@@ -1011,17 +1052,27 @@ export function spawnApple(state, rng = Math.random) {
   return true;
 }
 
-function dinoTick(state, dt, rng) {
+// Float sums of different frame lengths reach "due" a hair early or late.
+const DUE_EPS = 1e-9;
+
+// Steps and apples that came due happen in time order (an apple first when
+// both are due at the same moment), so the walk does not depend on how the
+// time was cut into frames.
+function dinoTick(state, dt) {
   const d = state.dino;
   d.appleTimer += dt;
-  while (d.appleTimer >= APPLE_SPAWN_SECONDS) {
-    d.appleTimer -= APPLE_SPAWN_SECONDS;
-    spawnApple(state, rng);
-  }
   d.stepTimer += dt;
-  while (d.stepTimer >= DINO_STEP_SECONDS) {
-    d.stepTimer -= DINO_STEP_SECONDS;
-    dinoStep(state, rng);
+  for (;;) {
+    const apple = d.appleTimer - APPLE_SPAWN_SECONDS; // seconds overdue
+    const step = d.stepTimer - DINO_STEP_SECONDS;
+    if (apple < -DUE_EPS && step < -DUE_EPS) return;
+    if (apple >= step - DUE_EPS) {
+      d.appleTimer = Math.max(0, apple);
+      spawnApple(state);
+    } else {
+      d.stepTimer = Math.max(0, step);
+      dinoStep(state);
+    }
   }
 }
 
@@ -1044,7 +1095,15 @@ function harvestDino(state, x, y) {
   const cut = body.splice(i);
   const bone = boneFor(state, cut.length);
   add(state, "Bone", bone);
-  emit({ type: "dinoHarvest", bone, cut: cut.length, level: Math.max(1, level(state, "Dinosaurs")) });
+  emit({
+    type: "dinoHarvest",
+    bone,
+    cut: cut.length,
+    level: Math.max(1, level(state, "Dinosaurs")),
+    seed: seedOfDino(state.dino),
+    start: state.dino.start ?? null,
+    size: state.size,
+  });
   for (const p of cut) removeEntity(tileAt(state, p.x, p.y));
   if (!body.length) {
     state.dino = null;
@@ -1081,7 +1140,11 @@ function restoreDino(state, d) {
       dir: DIRS.includes(d.dir) ? d.dir : "South",
       stepTimer: timer(d.st, DINO_STEP_SECONDS),
       appleTimer: timer(d.at, APPLE_SPAWN_SECONDS),
+      seed: parseSeed(d.seed),
+      draws: Number.isSafeInteger(d.n) && d.n >= 0 ? d.n : 0,
+      start: inside(d.sx) && inside(d.sy) ? { x: d.sx, y: d.sy } : null,
     };
+    seedOfDino(state.dino); // saved before v5: it gets its seed now and keeps it
   }
   state.tiles.forEach((t, i) => {
     const type = t.entity?.type;
