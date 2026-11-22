@@ -30,7 +30,10 @@ export default function FarmBoard3D({ game, moveMs, paused, status, onFail }) {
     renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
     renderer.setClearColor(0x000000, 0); // the page background shows through
     renderer.shadowMap.enabled = true;
+    // PCFShadowMap is the soft filter: three r187 removed PCFSoftShadowMap (asking
+    // for it logs a warning and gives this one). Softness is sun.shadow.radius.
     renderer.shadowMap.type = THREE.PCFShadowMap;
+    renderer.shadowMap.autoUpdate = false; // redrawn on demand, see FarmScene.shadowDirty
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.05;
     const canvas = renderer.domElement;
@@ -71,6 +74,7 @@ export default function FarmBoard3D({ game, moveMs, paused, status, onFail }) {
       if (farm.n !== sizeBefore) resize();
       if (farm.update(dt, { paused: p, moveMs: m, status: st })) needsRender = true;
       if (needsRender) {
+        if (farm.takeShadowDirty()) renderer.shadowMap.needsUpdate = true;
         renderer.render(farm.scene, farm.camera);
         needsRender = false;
       }

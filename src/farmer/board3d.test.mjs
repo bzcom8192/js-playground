@@ -253,3 +253,144 @@ test("12×12 farm full of wheat stays within the triangle budget", () => {
   assert.ok(perFrame < 4, `per-frame CPU ${perFrame.toFixed(3)} ms`);
   fs.dispose();
 });
+
+// ---------- detail pass (BRIEF18) ----------
+
+/** The demo layout repeated over a 12×12 farm; `only` fills every tile with that ripe crop. */
+function farm12(only) {
+  const game = createDemoGame();
+  const src = game.tiles;
+  game.size = 12;
+  game.tiles = Array.from({ length: 144 }, (_, i) => {
+    const t = structuredClone(src[(Math.floor(i / 12) % 8) * 8 + ((i % 12) % 8)]);
+    if (only) t.entity = { ...W.makeEntity(only, Math.random, 1), size: 9 };
+    return t;
+  });
+  return game;
+}
+
+test("triangle budget: full 12×12 demo farm < 180k, any single crop < 300k", () => {
+  const count = (game) => {
+    const fs = new FarmScene();
+    fs.sync(game);
+    fs.update(1 / 60);
+    const tris = countTriangles(fs.scene);
+    fs.dispose();
+    return tris;
+  };
+  const demo = count(farm12());
+  assert.ok(demo < 180_000, `demo 12×12: ${demo}`);
+  for (const type of ["Grass", "Rice", "Dead_Rice", "Bush", "Tree", "Carrot", "Dead_Pumpkin", "Sunflower", "Cactus"]) {
+    const tris = count(farm12(type));
+    assert.ok(tris < 300_000, `${type}: ${tris}`);
+  }
+});
+
+test("crops are smooth, indexed and shared; ripe models differ from young ones", () => {
+  const kit = createModelKit();
+  const meshOf = (type, progress, variant = 0) => {
+    let mesh;
+    kit.buildEntity({ type, progress, size: 4 }, variant).traverse((o) => o.isMesh && (mesh = o));
+    return mesh;
+  };
+  for (const type of ["Grass", "Rice", "Dead_Rice", "Bush", "Tree", "Carrot", "Pumpkin", "Dead_Pumpkin", "Sunflower", "Cactus"]) {
+    const a = meshOf(type, 1, 0);
+    assert.ok(a.geometry.index, `${type} shares vertices`);
+    assert.ok(!a.material.flatShading, `${type} is smooth-shaded`);
+    assert.equal(a.geometry, meshOf(type, 1, 3).geometry, `${type}: one geometry per variant, not per tile`);
+    for (const name of ["position", "normal", "color"]) {
+      assert.ok(a.geometry.attributes[name].array.every(Number.isFinite), `${type} ${name} is finite`);
+    }
+    assert.ok(a.geometry.boundingBox.min.y < 0.02, `${type} stands on the ground`);
+  }
+  // Ripe bush = berries, ripe carrot = orange shoulder, ripe cactus = flower.
+  for (const type of ["Bush", "Carrot", "Cactus"]) {
+    assert.ok(countTriangles(meshOf(type, 1)) > countTriangles(meshOf(type, 0.5)), `${type} ripens visibly`);
+  }
+  // Cactus height still follows its size, 0 → 9.
+  let last = 0;
+  for (let size = 0; size <= 9; size++) {
+    let mesh;
+    kit.buildEntity({ type: "Cactus", progress: 1, size }).traverse((o) => o.isMesh && (mesh = o));
+    const h = mesh.geometry.boundingBox.max.y;
+    assert.ok(h > last + 0.02, `cactus ${size}: ${h}`);
+    last = h;
+  }
+  // Merged pumpkins use their own finer mesh, shared by every giant.
+  const g3 = kit.buildGiantPumpkin(3).children[0].geometry;
+  assert.equal(g3, kit.buildGiantPumpkin(2).children[0].geometry);
+  assert.ok(g3.index.count > 2 * meshOf("Pumpkin", 1).geometry.index.count);
+  kit.dispose();
+});
+
+test("bot: paint, metal, rubber and glass have their own surface; bots of one colour share meshes", () => {
+  const kit = createModelKit();
+  const a = kit.buildBot();
+  const b = kit.buildBot();
+  const bodyOf = (d) => d.spin.children[0];
+  assert.equal(bodyOf(a).geometry, bodyOf(b).geometry);
+  assert.equal(a.wheels[0].geometry, b.wheels[3].geometry);
+  const mats = [...bodyOf(a).material, ...a.wheels[0].material];
+  for (const m of [bodyOf(a), a.wheels[0]]) assert.equal(m.geometry.groups.length, m.material.length);
+  const surfaces = new Set(mats.map((m) => `${m.roughness}/${m.metalness}`));
+  assert.equal(surfaces.size, 4);
+  const [paint, metal, glass] = bodyOf(a).material;
+  const rubber = a.wheels[0].material[0];
+  assert.ok(metal.metalness > paint.metalness && rubber.metalness === 0);
+  assert.ok(glass.roughness < paint.roughness && paint.roughness < rubber.roughness);
+  // Wheels stand on the ground and stay round enough to roll.
+  const box = a.wheels[0].geometry.boundingBox;
+  assert.ok(near(box.max.y, 0.085, 0.004) && near(box.min.y, -0.085, 0.004), "wheel radius unchanged");
+  for (const d of [a, b]) {
+    kit.release(d.root);
+    kit.release(d.shadow);
+  }
+  kit.dispose();
+});
+
+test("tiles: soil is furrowed, grass is not, and two looks alternate per ground", () => {
+  const kit = createModelKit();
+  const soil = kit.buildTile("Soil", 0);
+  const grass = kit.buildTile("Grassland", 0);
+  assert.ok(soil.geometry.attributes.position.array.some((v, i) => i % 3 === 1 && v < -0.02 && v > -0.05), "furrows");
+  assert.ok(soil.geometry.boundingBox.max.y <= 1e-9, "ridges stay below the water plane");
+  assert.notEqual(soil.geometry, grass.geometry);
+  assert.notEqual(soil.material[1], kit.buildTile("Soil", 1).material[1]);
+  assert.equal(soil.material[1], kit.buildTile("Soil", 2).material[1]);
+  kit.setTileGround(grass, "Soil", 0);
+  assert.equal(grass.geometry, soil.geometry);
+  assert.equal(grass.material, soil.material);
+  kit.dispose();
+});
+
+test("shadow map is redrawn only when a shadow caster changes", () => {
+  const game = W.createGame();
+  game.size = 3;
+  game.tiles = Array.from({ length: 9 }, W.newTile);
+  game.tiles[4].entity = W.makeEntity("Bush", Math.random, 0.2);
+  const fs = new FarmScene();
+  const frame = () => {
+    fs.sync(game);
+    fs.update(1 / 60);
+    return fs.takeShadowDirty();
+  };
+  assert.equal(frame(), true, "first frame");
+  for (let i = 0; i < 5; i++) frame();
+  assert.equal(frame(), false, "idle farm keeps its shadows");
+  game.drone.x = 1;
+  for (let i = 0; i < 10; i++) assert.equal(frame(), false, "the bots cast no shadow-map shadow");
+  // Growth: every third frame while it lasts, and never left stale.
+  game.tiles[4].entity.progress = 0.8;
+  const seen = Array.from({ length: 60 }, frame);
+  const redraws = seen.filter(Boolean).length;
+  assert.ok(redraws > 3 && redraws <= 21, `${redraws} redraws in 60 frames`);
+  for (let i = 1; i < seen.length; i++) assert.ok(!(seen[i] && seen[i - 1]), "not on consecutive frames");
+  assert.equal(fs.shadowStale, false);
+  // Harvest and planting: at once.
+  game.tiles[4].entity = null;
+  assert.equal(frame(), true);
+  for (let i = 0; i < 60; i++) frame();
+  game.tiles[0].entity = W.makeEntity("Tree", Math.random, 0);
+  assert.equal(frame(), true);
+  fs.dispose();
+});

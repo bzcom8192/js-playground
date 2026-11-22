@@ -23,6 +23,7 @@ import {
 
 export const CAMERA_ELEVATION_DEG = 55;
 const CAMERA_FOV = 22;
+const SHADOW_GROWTH_FRAMES = 3;
 const POP_S = 0.28;
 const DIE_S = 0.24;
 const WHEAT_GREEN = new THREE.Color("#5cae8c");
@@ -61,13 +62,14 @@ export class FarmScene {
     this.scene.add(this.board);
 
     // Low morning sun from the upper left + a soft peach/lilac ambient.
-    this.hemi = new THREE.HemisphereLight("#fff1e2", "#7d6a96", 1.5);
+    // The key is stronger than the fill so rounded models show their form.
+    this.hemi = new THREE.HemisphereLight("#fff1e2", "#7d6a96", 1.35);
     this.scene.add(this.hemi);
-    this.sun = new THREE.DirectionalLight("#ffdcb8", 2.7);
+    this.sun = new THREE.DirectionalLight("#ffdcb8", 3.1);
     this.sun.castShadow = true;
     this.sun.shadow.bias = -0.0004;
     this.sun.shadow.normalBias = 0.02;
-    this.sun.shadow.radius = 3;
+    this.sun.shadow.radius = 4;
     this.scene.add(this.sun);
     this.scene.add(this.sun.target);
 
@@ -83,6 +85,13 @@ export class FarmScene {
     this.view = { w: 0, h: 0 };
     this.animT = 0;
     this.builds = 0; // entity models built (tests / perf checks)
+    // The shadow map is redrawn only when something that casts a shadow changed.
+    // The bots never do (they carry a blob shadow), so an idle farm keeps its last
+    // map. Changes marked dirty redraw it on the next frame; plants that merely
+    // grow mark it stale, which redraws it every few frames.
+    this.shadowDirty = true;
+    this.shadowStale = false;
+    this.shadowAge = 0; // rendered frames since the last redraw
 
     // Bot 0. Megafarm helpers live in extraDrones
     // (extraDrones[k − 1] shows game.drones[k]), built on demand.
@@ -153,7 +162,7 @@ export class FarmScene {
     for (let y = 0; y < n; y++) {
       for (let x = 0; x < n; x++) {
         const { x: wx, z: wz } = tileToWorld(n, x, y);
-        const tile = this.kit.buildTile("Grassland");
+        const tile = this.kit.buildTile("Grassland", variantOf(x, y));
         tile.position.set(wx, 0, wz);
         const water = this.kit.buildWater();
         water.position.set(wx, 0.01, wz);
@@ -194,7 +203,7 @@ export class FarmScene {
     cam.far = dist * 2 + 4;
     this.sun.position.set(-0.72, 1.25, 0.5).normalize().multiplyScalar(dist);
     this.sun.target.position.set(0, 0, 0);
-    const size = n > 6 ? 2048 : 1024;
+    const size = n > 6 ? 2560 : 2048;
     if (this.sun.shadow.mapSize.x !== size) {
       this.sun.shadow.mapSize.set(size, size);
       if (this.sun.shadow.map) {
@@ -203,6 +212,7 @@ export class FarmScene {
       }
     }
     cam.updateProjectionMatrix();
+    this.shadowDirty = true;
   }
 
   _removeModel(obj, animate) {
@@ -234,7 +244,7 @@ export class FarmScene {
       const t = game.tiles[rec.y * n + rec.x];
       if (rec.ground !== t.ground) {
         rec.ground = t.ground;
-        this.kit.setTileGround(rec.tile, t.ground);
+        this.kit.setTileGround(rec.tile, t.ground, variantOf(rec.x, rec.y));
         changed = true;
       }
       const wl = waterLevel(t.water);
@@ -305,6 +315,7 @@ export class FarmScene {
       }
     }
     if (this._syncDino(game, fresh)) changed = true;
+    if (changed) this.shadowDirty = true;
     return changed;
   }
 
@@ -412,6 +423,7 @@ export class FarmScene {
     if (!game) return false;
     dt = Math.min(dt, 0.1);
     let moving = false;
+    let popping = false;
     if (!paused) this.animT += dt;
 
     // Growth + planting pops.
@@ -427,6 +439,7 @@ export class FarmScene {
       if (rec.pop < 1) {
         rec.pop = Math.min(1, rec.pop + dt / POP_S);
         dirty = true;
+        popping = true;
       }
       if (dirty) {
         this._applyGrowth(rec);
@@ -438,12 +451,12 @@ export class FarmScene {
         g.pop = Math.min(1, g.pop + dt / POP_S);
         const s = popScale(g.pop);
         g.model.scale.setScalar(s);
-        moving = true;
+        moving = popping = true;
       }
     }
     // Harvest pops.
     if (this.dying.length) {
-      moving = true;
+      moving = popping = true;
       this.dying = this.dying.filter((d) => {
         d.t += dt / DIE_S;
         if (d.t >= 1) {
@@ -456,7 +469,9 @@ export class FarmScene {
       });
     }
 
-    if (this._updateDino(dt, paused)) moving = true;
+    if (this._updateDino(dt, paused)) moving = popping = true;
+    if (popping) this.shadowDirty = true;
+    else if (moving) this.shadowStale = true; // only growth so far
     if (this._updateDrones(dt, paused, moveMs)) moving = true;
     if (this._updateLights(paused ? "paused" : status)) moving = true;
     return moving;
@@ -560,6 +575,17 @@ export class FarmScene {
     d.rx = d.x;
     d.rz = d.z;
     return moving;
+  }
+
+  /** Whether the frame about to be drawn needs a fresh shadow map (call once per frame). */
+  takeShadowDirty() {
+    this.shadowAge++;
+    const redraw = this.shadowDirty || (this.shadowStale && this.shadowAge >= SHADOW_GROWTH_FRAMES);
+    if (redraw) {
+      this.shadowDirty = this.shadowStale = false;
+      this.shadowAge = 0;
+    }
+    return redraw;
   }
 
   // ---------- camera ----------
