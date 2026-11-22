@@ -1,19 +1,54 @@
 // JS Farmer Online server tests (node --test). Each test file run gets its
-// own temp SQLite file; the server listens on an ephemeral port.
+// own temp SQLite files; the servers listen on ephemeral ports.
+//
+// Two servers:
+//  - `srv` replays for real (the worker-thread verifier, anti-cheat level 2):
+//    the verification tests at the bottom run against it.
+//  - `stub` has a stand-in verifier that reads the "measured" numbers from a
+//    comment in the submitted code (stubCode()), so the HTTP / leaderboard /
+//    ELO plumbing tests can pick exact tick counts without writing programs
+//    that hit them. It goes through exactly the same routes and storage.
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { request } from "node:http";
+import { DatabaseSync } from "node:sqlite";
 import { startServer } from "./index.js";
 import { createRateLimiter } from "./app.js";
-import { hashToken } from "./db.js";
+import { hashToken, openDb } from "./db.js";
+import { createVerifier } from "./verifier.js";
 import { DINO_MAX_BONE, DNF_TICKS, eloUpdate } from "../src/farmer/onlineRules.js";
+import * as W from "../src/farmer/world.js";
+import { WORLD_SIZES } from "../src/farmer/constants.js";
+import { createRuntime } from "../src/farmer/runtime.js";
+import { mulberry32 } from "../src/farmer/maze.js";
+import { BOT_CODE } from "../src/farmer/arenaBots.js";
+import { TICK_CAP, runSolo } from "../src/farmer/arena.js";
 
 let dir;
-let srv;
+let srv; // real replay verification
+let stub; // stand-in verifier (see the header)
 let base;
+
+/** Code the stub verifier "measures" as { ticks, ops } (reached / solved iff ticks ≤ the cap). */
+const stubCode = (ticks, ops) => `// stub ticks=${ticks} ops=${ops}\nharvest();`;
+function stubVerifier() {
+  return {
+    async verify(job) {
+      const m = /ticks=(\d+) ops=(\d+)/.exec(job.code);
+      const ticks = m ? Number(m[1]) : DNF_TICKS;
+      const ops = m ? Number(m[2]) : 0;
+      if (job.kind === "arena") {
+        const reached = ticks <= TICK_CAP;
+        return { ok: true, result: { kind: "arena", reached, ticks: reached ? ticks : DNF_TICKS, ops, reason: reached ? "goal" : "cap", error: null } };
+      }
+      return { ok: true, result: { kind: "maze", solved: !!m, mode: "spawn", ticks: m ? ticks : null, ops: m ? ops : null, reason: m ? "solved" : "ended", error: null } };
+    },
+    close: async () => {},
+  };
+}
 
 before(async () => {
   dir = mkdtempSync(join(tmpdir(), "farmer-online-"));
@@ -21,20 +56,23 @@ before(async () => {
   mkdirSync(join(dist, "assets"), { recursive: true });
   writeFileSync(join(dist, "index.html"), "<!doctype html><title>farmer</title>");
   writeFileSync(join(dist, "assets", "app-abc.js"), "console.log(1)");
-  srv = await startServer({ port: 0, host: "127.0.0.1", dbPath: join(dir, "test.db"), distDir: dist, rateLimit: { max: 10_000, windowMs: 60_000 } });
-  base = srv.url;
+  const rateLimit = { max: 10_000, windowMs: 60_000 };
+  srv = await startServer({ port: 0, host: "127.0.0.1", dbPath: join(dir, "test.db"), distDir: dist, rateLimit });
+  stub = await startServer({ port: 0, host: "127.0.0.1", dbPath: join(dir, "stub.db"), distDir: dist, rateLimit, verifier: stubVerifier() });
+  base = stub.url;
 });
 
 after(async () => {
   await srv?.close();
+  await stub?.close();
   rmSync(dir, { recursive: true, force: true });
 });
 
-async function call(method, path, { body, token, headers = {} } = {}) {
+async function call(method, path, { body, token, headers = {}, at = base } = {}) {
   const h = { ...headers };
   if (body !== undefined) h["Content-Type"] = "application/json";
   if (token) h.Authorization = `Bearer ${token}`;
-  const res = await fetch(base + path, { method, headers: h, body: body === undefined ? undefined : typeof body === "string" ? body : JSON.stringify(body) });
+  const res = await fetch(at + path, { method, headers: h, body: body === undefined ? undefined : typeof body === "string" ? body : JSON.stringify(body) });
   const text = await res.text();
   let json = null;
   try {
@@ -59,8 +97,8 @@ function rawGet(path) {
 }
 
 let nameSeq = 0;
-async function register(name = `p${++nameSeq}-${Date.now() % 100000}`) {
-  const r = await call("POST", "/api/auth/register", { body: { name } });
+async function register(name = `p${++nameSeq}-${Date.now() % 100000}`, at = base) {
+  const r = await call("POST", "/api/auth/register", { body: { name }, at });
   assert.equal(r.status, 201, r.text);
   return r.json;
 }
@@ -74,7 +112,7 @@ test("register returns playerId + a 32-byte hex token; only its SHA-256 is store
   assert.match(r.json.token, /^[0-9a-f]{64}$/);
   assert.equal(r.json.name, "Somchai Farmer");
   assert.equal(r.json.elo, 1000);
-  const row = srv.db.raw.prepare("SELECT token_hash FROM players WHERE id = ?").get(r.json.playerId);
+  const row = stub.db.raw.prepare("SELECT token_hash FROM players WHERE id = ?").get(r.json.playerId);
   assert.equal(row.token_hash, hashToken(r.json.token));
   assert.notEqual(row.token_hash, r.json.token);
   const me = await call("GET", "/api/players/me", { token: r.json.token });
@@ -117,6 +155,9 @@ test("auth rejection: missing, malformed and unknown tokens → 401 JSON", async
 
 // ---------- scores ----------
 
+/** A maze score body whose stub replay measures exactly `ticks` / `ops`. */
+const mazeScore = (level, ticks, ops) => ({ category: "maze", level, ticks, ops, seed: 7, size: 6, sx: 0, sy: 0, code: stubCode(ticks, ops) });
+
 test("score sanity rejections", async () => {
   const { token } = await register();
   const bad = [
@@ -146,10 +187,19 @@ test("score sanity rejections", async () => {
   }
   assert.equal((await call("POST", "/api/scores", { body: "{not json", token })).status, 400);
   assert.equal((await call("POST", "/api/scores", { body: [1, 2], token })).status, 400);
-  const ok = await call("POST", "/api/scores", { body: { category: "maze", level: 1, ticks: 2400, ops: 12, seed: 7 }, token });
+  // v4 phase 2: maze scores also need the replay inputs.
+  const good = mazeScore(1, 2400, 12);
+  for (const patch of [{ seed: undefined }, { size: 9 }, { sx: 6 }, { code: "" }, { code: undefined }]) {
+    const r = await call("POST", "/api/scores", { body: { ...good, ...patch }, token });
+    assert.equal(r.status, 400, `${JSON.stringify(patch)} → ${r.status} ${r.text}`);
+  }
+  const ok = await call("POST", "/api/scores", { body: good, token });
   assert.equal(ok.status, 201, ok.text);
+  assert.equal(ok.json.verified, true);
+  assert.equal(ok.json.code, undefined, "the program is not echoed back");
   const dino = await call("POST", "/api/scores", { body: { category: "dino", value: DINO_MAX_BONE }, token });
   assert.equal(dino.status, 201, dino.text);
+  assert.equal(dino.json.verified, false, "dino scores are level 1 (not replayable)");
 });
 
 test("leaderboard: best entry per player, maze = fewest ticks then ops, dino = most Bone", async () => {
@@ -158,12 +208,12 @@ test("leaderboard: best entry per player, maze = fewest ticks then ops, dino = m
   const c = await register("LB-C");
   const post = (p, body) => call("POST", "/api/scores", { body, token: p.token }).then((r) => assert.equal(r.status, 201, r.text));
   // Level 2 is only used by this test.
-  await post(a, { category: "maze", level: 2, ticks: 5000, ops: 40 });
-  await post(a, { category: "maze", level: 2, ticks: 3000, ops: 50 }); // a's best
-  await post(a, { category: "maze", level: 2, ticks: 9000, ops: 10 });
-  await post(b, { category: "maze", level: 2, ticks: 3000, ops: 45 }); // same ticks, fewer ops → ahead of a
-  await post(c, { category: "maze", level: 2, ticks: 2000, ops: 900 });
-  await post(c, { category: "maze", level: 3, ticks: 100, ops: 1 }); // other level: ignored
+  await post(a, mazeScore(2, 5000, 40));
+  await post(a, mazeScore(2, 3000, 50)); // a's best
+  await post(a, mazeScore(2, 9000, 10));
+  await post(b, mazeScore(2, 3000, 45)); // same ticks, fewer ops → ahead of a
+  await post(c, mazeScore(2, 2000, 900));
+  await post(c, mazeScore(3, 100, 1)); // other level: ignored
   const lb = await call("GET", "/api/leaderboard?category=maze&level=2");
   assert.equal(lb.status, 200);
   assert.equal(lb.json.category, "maze");
@@ -177,6 +227,9 @@ test("leaderboard: best entry per player, maze = fewest ticks then ops, dino = m
     ],
   );
   assert.equal(lb.json.entries[0].playerId, c.playerId);
+  assert.ok(lb.json.entries.every((e) => e.verified === true), "maze rows are replay-verified");
+  assert.deepEqual([lb.json.entries[0].size, lb.json.entries[0].sx, lb.json.entries[0].sy], [6, 0, 0]);
+  assert.equal(lb.json.entries[0].code, undefined);
 
   const d = await register("LB-D");
   for (const [p, v] of [[a, 50], [a, 400], [b, 400], [d, 90], [d, 12]]) await post(p, { category: "dino", value: v });
@@ -192,6 +245,7 @@ test("leaderboard: best entry per player, maze = fewest ticks then ops, dino = m
   );
   // equal Bone shares a rank
   assert.equal(mine[0].rank, mine[1].rank);
+  assert.ok(mine.every((e) => e.verified === false), "dino rows are marked unverified");
 
   for (const q of ["category=maze", "category=maze&level=9", "category=dino&level=1", "category=x", ""]) {
     const r = await call("GET", `/api/leaderboard?${q}`);
@@ -202,7 +256,7 @@ test("leaderboard: best entry per player, maze = fewest ticks then ops, dino = m
 test("leaderboard is capped at 50 entries", async () => {
   for (let i = 0; i < 53; i++) {
     const p = await register(`cap${i}`);
-    const r = await call("POST", "/api/scores", { body: { category: "maze", level: 3, ticks: 10_000 + i, ops: 5 }, token: p.token });
+    const r = await call("POST", "/api/scores", { body: mazeScore(3, 10_000 + i, 5), token: p.token });
     assert.equal(r.status, 201);
   }
   const lb = await call("GET", "/api/leaderboard?category=maze&level=3");
@@ -211,13 +265,15 @@ test("leaderboard is capped at 50 entries", async () => {
 
 // ---------- challenges + ELO ----------
 
-const CODE = "while (true) { harvest(); }";
+const CODE = stubCode(50_000, 300);
 
 async function makeChallenge(author, { ticks = 50_000, ops = 300, goal = "hay500", seed = 1234 } = {}) {
-  const r = await call("POST", "/api/challenges", { body: { goal, seed, code: CODE, authorTicks: ticks, authorOps: ops }, token: author.token });
+  const r = await call("POST", "/api/challenges", { body: { goal, seed, code: stubCode(ticks, ops) }, token: author.token });
   assert.equal(r.status, 201, r.text);
   return r.json;
 }
+/** A result body whose stub replay measures `ticks` / `ops` (DNF_TICKS: did not finish). */
+const answer = (ticks, ops) => ({ code: stubCode(ticks, ops) });
 const me = async (p) => (await call("GET", "/api/players/me", { token: p.token })).json;
 
 test("challenge lifecycle: create → listed → full view → answered (win) → closed, ELO updated", async () => {
@@ -232,8 +288,8 @@ test("challenge lifecycle: create → listed → full view → answered (win) �
   const listed = list.json.challenges.find((c) => c.id === ch.id);
   assert.ok(listed);
   assert.deepEqual(
-    { goal: listed.goal, seed: listed.seed, authorTicks: listed.authorTicks, authorOps: listed.authorOps, authorName: listed.authorName },
-    { goal: "hay500", seed: 1234, authorTicks: 50_000, authorOps: 300, authorName: "Author1" },
+    { goal: listed.goal, seed: listed.seed, authorTicks: listed.authorTicks, authorOps: listed.authorOps, authorName: listed.authorName, verified: listed.verified },
+    { goal: "hay500", seed: 1234, authorTicks: 50_000, authorOps: 300, authorName: "Author1", verified: true },
   );
   assert.equal(listed.code, undefined, "the list does not carry code");
 
@@ -241,9 +297,10 @@ test("challenge lifecycle: create → listed → full view → answered (win) �
   assert.equal(full.json.code, CODE);
   assert.equal(full.json.result, null);
 
-  const res = await call("POST", `/api/challenges/${ch.id}/results`, { body: { ticks: 40_000, ops: 900, code: "harvest()" }, token: challenger.token });
+  const res = await call("POST", `/api/challenges/${ch.id}/results`, { body: answer(40_000, 900), token: challenger.token });
   assert.equal(res.status, 201, res.text);
   assert.equal(res.json.result, "win");
+  assert.equal(res.json.verified, true);
   assert.equal(res.json.you.delta, 16);
   assert.equal(res.json.you.elo, 1016);
   assert.equal(res.json.author.delta, -16);
@@ -260,7 +317,7 @@ test("challenge lifecycle: create → listed → full view → answered (win) �
 
   // One result per challenge.
   const third = await register("Third1");
-  const again = await call("POST", `/api/challenges/${ch.id}/results`, { body: { ticks: 1, ops: 1, code: "x" }, token: third.token });
+  const again = await call("POST", `/api/challenges/${ch.id}/results`, { body: answer(1, 1), token: third.token });
   assert.equal(again.status, 409);
   assert.equal((await me(third)).elo, 1000);
 });
@@ -271,7 +328,7 @@ test("ELO math: loss, tie → fewer ops, exact draw, DNF, unequal ratings", asyn
     const a = await register("EloA1");
     const b = await register("EloB1");
     const ch = await makeChallenge(a, { ticks: 50_000, ops: 300 });
-    const r = await call("POST", `/api/challenges/${ch.id}/results`, { body: { ticks: 50_001, ops: 1, code: "x" }, token: b.token });
+    const r = await call("POST", `/api/challenges/${ch.id}/results`, { body: answer(50_001, 1), token: b.token });
     assert.equal(r.json.result, "loss");
     assert.equal(r.json.you.delta, -16);
     assert.equal((await me(a)).elo, 1016);
@@ -282,7 +339,7 @@ test("ELO math: loss, tie → fewer ops, exact draw, DNF, unequal ratings", asyn
     const a = await register("EloA2");
     const b = await register("EloB2");
     const ch = await makeChallenge(a, { ticks: 50_000, ops: 300 });
-    const r = await call("POST", `/api/challenges/${ch.id}/results`, { body: { ticks: 50_000, ops: 299, code: "x" }, token: b.token });
+    const r = await call("POST", `/api/challenges/${ch.id}/results`, { body: answer(50_000, 299), token: b.token });
     assert.equal(r.json.result, "win");
   }
   // exact tie → draw, equal ratings → no change
@@ -290,7 +347,7 @@ test("ELO math: loss, tie → fewer ops, exact draw, DNF, unequal ratings", asyn
     const a = await register("EloA3");
     const b = await register("EloB3");
     const ch = await makeChallenge(a, { ticks: 50_000, ops: 300 });
-    const r = await call("POST", `/api/challenges/${ch.id}/results`, { body: { ticks: 50_000, ops: 300, code: "x" }, token: b.token });
+    const r = await call("POST", `/api/challenges/${ch.id}/results`, { body: answer(50_000, 300), token: b.token });
     assert.equal(r.json.result, "draw");
     assert.equal(r.json.you.delta, 0);
     assert.equal(r.json.author.delta, 0);
@@ -300,7 +357,7 @@ test("ELO math: loss, tie → fewer ops, exact draw, DNF, unequal ratings", asyn
     const a = await register("EloA4");
     const b = await register("EloB4");
     const ch = await makeChallenge(a, { ticks: 199_000, ops: 300 });
-    const r = await call("POST", `/api/challenges/${ch.id}/results`, { body: { ticks: DNF_TICKS, ops: 5, code: "x" }, token: b.token });
+    const r = await call("POST", `/api/challenges/${ch.id}/results`, { body: answer(DNF_TICKS, 5), token: b.token });
     assert.equal(r.status, 201);
     assert.equal(r.json.result, "loss");
   }
@@ -310,9 +367,9 @@ test("ELO math: loss, tie → fewer ops, exact draw, DNF, unequal ratings", asyn
     const b = await register("EloB5");
     const c = await register("EloC5");
     const ch1 = await makeChallenge(b, { ticks: 60_000, ops: 10 });
-    await call("POST", `/api/challenges/${ch1.id}/results`, { body: { ticks: 50_000, ops: 10, code: "x" }, token: a.token }); // a 1016, b 984
+    await call("POST", `/api/challenges/${ch1.id}/results`, { body: answer(50_000, 10), token: a.token }); // a 1016, b 984
     const ch2 = await makeChallenge(a, { ticks: 50_000, ops: 10 });
-    const r = await call("POST", `/api/challenges/${ch2.id}/results`, { body: { ticks: 50_000, ops: 10, code: "x" }, token: c.token });
+    const r = await call("POST", `/api/challenges/${ch2.id}/results`, { body: answer(50_000, 10), token: c.token });
     const expect = eloUpdate(1000, 1016, 0.5); // challenger c vs author a
     assert.equal(r.json.result, "draw");
     assert.equal(r.json.you.delta, expect.deltaA);
@@ -325,7 +382,7 @@ test("ELO math: loss, tie → fewer ops, exact draw, DNF, unequal ratings", asyn
 test("self-challenge is rejected and leaves the challenge open", async () => {
   const a = await register("Selfie");
   const ch = await makeChallenge(a);
-  const r = await call("POST", `/api/challenges/${ch.id}/results`, { body: { ticks: 1, ops: 1, code: "x" }, token: a.token });
+  const r = await call("POST", `/api/challenges/${ch.id}/results`, { body: answer(1, 1), token: a.token });
   assert.equal(r.status, 403);
   assert.match(r.json.error, /own challenge/);
   assert.equal((await call("GET", `/api/challenges/${ch.id}`)).json.status, "open");
@@ -336,28 +393,29 @@ test("challenge / result validation and missing challenges", async () => {
   const a = await register("Valid1");
   const b = await register("Valid2");
   const good = { goal: "wood800", seed: 99, code: CODE, authorTicks: 80_000, authorOps: 500 };
-  for (const patch of [
-    { goal: "gold200" },
-    { seed: -1 },
-    { seed: 1.5 },
-    { code: "" },
-    { code: "x".repeat(100_001) },
-    { authorTicks: 0 },
-    { authorTicks: 200_001 }, // did not reach the goal: no challenge
-    { authorOps: 0 },
-  ]) {
+  for (const patch of [{ goal: "gold200" }, { seed: -1 }, { seed: 1.5 }, { code: "" }, { code: "x".repeat(100_001) }]) {
     const r = await call("POST", "/api/challenges", { body: { ...good, ...patch }, token: a.token });
     assert.equal(r.status, 400, JSON.stringify(patch));
   }
+  // v4 phase 2: claimed authorTicks / authorOps are accepted but ignored —
+  // even nonsense — the stored numbers are the replay's.
+  for (const patch of [{ authorTicks: 0 }, { authorTicks: 200_001 }, { authorOps: 0 }, { authorTicks: undefined, authorOps: undefined }]) {
+    const r = await call("POST", "/api/challenges", { body: { ...good, ...patch }, token: a.token });
+    assert.equal(r.status, 201, JSON.stringify(patch));
+    assert.deepEqual([r.json.authorTicks, r.json.authorOps], [50_000, 300]);
+  }
+  // A replay that misses the goal: no challenge.
+  const miss = await call("POST", "/api/challenges", { body: { ...good, code: stubCode(TICK_CAP + 1, 5) }, token: a.token });
+  assert.equal(miss.status, 422);
   const ch = await makeChallenge(a);
-  for (const body of [{ ticks: 0, ops: 1, code: "x" }, { ticks: DNF_TICKS + 1, ops: 1, code: "x" }, { ticks: 10, ops: -1, code: "x" }, { ticks: 10, ops: 1 }]) {
+  for (const body of [{ ticks: 10, ops: 1 }, { code: "" }, { code: 42 }]) {
     const r = await call("POST", `/api/challenges/${ch.id}/results`, { body, token: b.token });
     assert.equal(r.status, 400, JSON.stringify(body));
   }
   assert.equal((await call("GET", `/api/challenges/${ch.id}`)).json.status, "open");
   assert.equal((await call("GET", "/api/challenges/999999")).status, 404);
   assert.equal((await call("GET", "/api/challenges/abc")).status, 404);
-  assert.equal((await call("POST", "/api/challenges/999999/results", { body: { ticks: 1, ops: 1, code: "x" }, token: b.token })).status, 404);
+  assert.equal((await call("POST", "/api/challenges/999999/results", { body: answer(1, 1), token: b.token })).status, 404);
 });
 
 test("open challenges: newest first", async () => {
@@ -445,5 +503,273 @@ test("the DB persists across a restart (same file)", async () => {
     assert.equal((await r.json()).name, "Keeper");
   } finally {
     await s2.close();
+  }
+});
+
+// ---------- v4 phase 2: real replay verification (anti-cheat level 2) ----------
+
+const onReal = (method, path, opts = {}) => call(method, path, { ...opts, at: srv.url });
+const registerReal = (name) => register(name, srv.url);
+
+test("arena: a doctored (too-fast) claim is corrected by the server's replay", async () => {
+  const author = await registerReal("Replay-Author");
+  const seed = 4242;
+  const truth = await runSolo({ code: BOT_CODE.pro, goal: "hay500", seed });
+  assert.equal(truth.reached, true);
+  const r = await onReal("POST", "/api/challenges", { body: { goal: "hay500", seed, code: BOT_CODE.pro, authorTicks: 1, authorOps: 1 }, token: author.token });
+  assert.equal(r.status, 201, r.text);
+  assert.deepEqual([r.json.authorTicks, r.json.authorOps], [truth.ticks, truth.ops], "stored = server-measured");
+  assert.deepEqual(r.json.claimed, { ticks: 1, ops: 1 });
+  assert.equal(r.json.corrected, true);
+  assert.equal(r.json.verified, true);
+  const row = srv.db.raw.prepare("SELECT author_ticks, author_ops, verified FROM challenges WHERE id = ?").get(r.json.id);
+  assert.deepEqual({ ...row }, { author_ticks: truth.ticks, author_ops: truth.ops, verified: 1 });
+  const listed = (await onReal("GET", "/api/challenges")).json.challenges.find((c) => c.id === r.json.id);
+  assert.equal(listed.verified, true);
+  assert.equal(listed.authorTicks, truth.ticks);
+
+  // The challenger claims an impossible 1-tick win with a slower program: the
+  // replay measures the real run, so it is a loss and ELO moves accordingly.
+  const challenger = await registerReal("Replay-Challenger");
+  const slow = await runSolo({ code: BOT_CODE.rookie, goal: "hay500", seed });
+  assert.ok(slow.ticks > truth.ticks);
+  const a = await onReal("POST", `/api/challenges/${r.json.id}/results`, { body: { ticks: 1, ops: 1, code: BOT_CODE.rookie }, token: challenger.token });
+  assert.equal(a.status, 201, a.text);
+  assert.equal(a.json.result, "loss");
+  assert.deepEqual([a.json.you.ticks, a.json.you.ops], [slow.ticks, slow.ops]);
+  assert.deepEqual(a.json.you.claimed, { ticks: 1, ops: 1 });
+  assert.equal(a.json.you.delta, -16);
+  assert.equal(a.json.author.delta, 16);
+  const res = srv.db.raw.prepare("SELECT ticks, ops, verified FROM challenge_results WHERE challenge_id = ?").get(r.json.id);
+  assert.deepEqual({ ...res }, { ticks: slow.ticks, ops: slow.ops, verified: 1 });
+});
+
+test("arena: a program that doesn't reach the goal is rejected (422); hostile code too", async () => {
+  const p = await registerReal("Replay-Lazy");
+  const before = (await onReal("GET", "/api/challenges")).json.challenges.length;
+  for (const code of [
+    "harvest();",
+    "nope();",
+    "const fs = await import('node:fs'); fs.writeFileSync('/tmp/pwned', 'x');",
+    "Function('return import(\"node:child_process\")')();",
+    "globalThis.process.exit(1);",
+  ]) {
+    const r = await onReal("POST", "/api/challenges", { body: { goal: "wood800", seed: 5, code, authorTicks: 30_000, authorOps: 100 }, token: p.token });
+    assert.equal(r.status, 422, `${code} → ${r.status} ${r.text}`);
+    assert.match(r.json.error, /did not reach the goal/);
+  }
+  assert.equal((await onReal("GET", "/api/challenges")).json.challenges.length, before, "nothing was stored");
+  assert.equal((await onReal("GET", "/api/health")).json.ok, true, "the API process is unaffected");
+
+  // A challenger whose program never finishes still answers (DNF, a loss).
+  const author = await registerReal("Replay-Author2");
+  const ch = await onReal("POST", "/api/challenges", { body: { goal: "hay500", seed: 6, code: BOT_CODE.pro }, token: author.token });
+  assert.equal(ch.status, 201, ch.text);
+  const r = await onReal("POST", `/api/challenges/${ch.json.id}/results`, { body: { ticks: 10, ops: 1, code: "harvest();" }, token: p.token });
+  assert.equal(r.status, 201, r.text);
+  assert.equal(r.json.result, "loss");
+  assert.equal(r.json.you.ticks, DNF_TICKS);
+  assert.equal(r.json.you.reached, false);
+});
+
+test("an infinite loop is rejected by the wall-clock timeout without hanging (API stays up)", async () => {
+  const sub = await startServer({ port: 0, host: "127.0.0.1", dbPath: join(dir, "timeout.db"), distDir: null, verify: { timeoutMs: 1000 } });
+  try {
+    const p = await register("Looper", sub.url);
+    // Catastrophic regex backtracking inside a callback: one synchronous call
+    // that never yields, so no tick cap or loop guard can stop it — only
+    // terminating the worker can.
+    const loop = "[1].forEach(() => /(a+)+b/.test('a'.repeat(48)));";
+    const t0 = Date.now();
+    const [r, health] = await Promise.all([
+      call("POST", "/api/challenges", { body: { goal: "hay500", seed: 1, code: loop }, token: p.token, at: sub.url }),
+      // While the worker spins, the API process keeps answering.
+      new Promise((ok) => setTimeout(ok, 200)).then(() => call("GET", "/api/health", { at: sub.url })),
+    ]);
+    const ms = Date.now() - t0;
+    assert.equal(r.status, 422, r.text);
+    assert.match(r.json.error, /could not verify.*longer than 1 s/);
+    assert.ok(ms < 5000, `answered after ${ms} ms`);
+    assert.equal(health.json.ok, true);
+    assert.equal(sub.verifier.stats().running, 0, "the worker was terminated");
+    // A maze score with the same trick is rejected the same way.
+    const m = await call("POST", "/api/scores", {
+      body: { category: "maze", level: 1, ticks: 100, ops: 10, seed: 1, size: 6, sx: 0, sy: 0, code: loop },
+      token: p.token,
+      at: sub.url,
+    });
+    assert.equal(m.status, 422, m.text);
+    // The verifier still works afterwards.
+    const ok = await call("POST", "/api/challenges", { body: { goal: "hay500", seed: 2, code: BOT_CODE.pro }, token: p.token, at: sub.url });
+    assert.equal(ok.status, 201, ok.text);
+  } finally {
+    await sub.close();
+  }
+});
+
+/** Solve a maze on a small "player farm" the way the page does → its onRecord event. */
+const MAZE_SOLVER = `use_item(Items.Fertilizer);
+const seen = new Set();
+const back = { North: South, South: North, East: West, West: East };
+const key = () => get_pos_x() + "," + get_pos_y();
+function dfs() {
+  if (get_entity_type() === Entities.Treasure) { harvest(); return true; }
+  seen.add(key());
+  for (const d of [North, East, South, West]) {
+    if (!can_move(d)) continue;
+    move(d);
+    if (!seen.has(key()) && dfs()) return true;
+    move(back[d]);
+  }
+  return false;
+}
+dfs();
+`;
+async function localMazeRecord(code = MAZE_SOLVER, { n = 8, x = 3, y = 1, level = 2 } = {}) {
+  const s = W.createGame();
+  s.unlocks.Expand = WORLD_SIZES.indexOf(n);
+  s.size = n;
+  s.tiles = Array.from({ length: n * n }, W.newTile);
+  Object.assign(s.unlocks, { Senses: 1, Plant: 1, Carrots: 1, Pumpkins: 1, Fertilizer: 1, Mazes: level });
+  s.items.Fertilizer = 1;
+  [s.drone.x, s.drone.y] = [x, y];
+  W.droneTile(s).entity = { type: "Bush", progress: 1 };
+  let t = 0;
+  let ev = null;
+  const rt = createRuntime({
+    getState: () => s,
+    now: () => t,
+    sleep: (ms) => ((t += ms), new Promise((r) => setImmediate(r))),
+    yieldFn: () => new Promise((r) => setImmediate(r)),
+    rng: mulberry32(77),
+    onRecord: (e) => (ev = e),
+  });
+  await rt.run(code);
+  assert.ok(ev, "the local run set a record");
+  return ev;
+}
+
+test("maze: a fake tick count is stored with the server-measured values (✓ verified)", async () => {
+  const p = await registerReal("Maze-Faker");
+  const ev = await localMazeRecord();
+  const a = ev.attempt;
+  const body = { category: "maze", level: a.level, ticks: 1, ops: 1, seed: a.seed, size: a.size, sx: a.sx, sy: a.sy, code: ev.code };
+  const r = await onReal("POST", "/api/scores", { body, token: p.token });
+  assert.equal(r.status, 201, r.text);
+  assert.deepEqual([r.json.ticks, r.json.ops], [a.ticks, a.ops], "the replay's numbers replace the claim");
+  assert.deepEqual(r.json.claimed, { ticks: 1, ops: 1 });
+  assert.equal(r.json.corrected, true);
+  assert.equal(r.json.verified, true);
+  assert.equal(r.json.replay, "spawn");
+  const row = srv.db.raw.prepare("SELECT ticks, ops, verified, size, sx, sy, code FROM scores WHERE id = ?").get(r.json.id);
+  assert.deepEqual({ ...row }, { ticks: a.ticks, ops: a.ops, verified: 1, size: a.size, sx: a.sx, sy: a.sy, code: ev.code });
+  const lb = await onReal("GET", `/api/leaderboard?category=maze&level=${a.level}`);
+  const mine = lb.json.entries.find((e) => e.playerId === p.playerId);
+  assert.deepEqual([mine.ticks, mine.ops, mine.verified], [a.ticks, a.ops, true]);
+
+  // An honest claim is stored as is (corrected: false).
+  const honest = await onReal("POST", "/api/scores", { body: { ...body, ticks: a.ticks, ops: a.ops }, token: p.token });
+  assert.equal(honest.status, 201, honest.text);
+  assert.equal(honest.json.corrected, false);
+});
+
+test("maze: code that doesn't solve the recorded maze is rejected (422)", async () => {
+  const p = await registerReal("Maze-Bluffer");
+  const ev = await localMazeRecord();
+  const a = ev.attempt;
+  const base = { category: "maze", level: a.level, ticks: a.ticks, ops: a.ops, seed: a.seed, size: a.size, sx: a.sx, sy: a.sy };
+  for (const code of ["use_item(Items.Fertilizer);", "use_item(Items.Fertilizer); while (true) move(North);", "nope();"]) {
+    const r = await onReal("POST", "/api/scores", { body: { ...base, code }, token: p.token });
+    assert.equal(r.status, 422, `${code} → ${r.status} ${r.text}`);
+    assert.match(r.json.error, /maze score rejected/);
+  }
+  // Unverified (code-less) maze submissions are no longer accepted at all.
+  const none = await onReal("POST", "/api/scores", { body: base, token: p.token });
+  assert.equal(none.status, 400);
+  const n = srv.db.raw.prepare("SELECT COUNT(*) AS n FROM scores WHERE player_id = ?").get(p.playerId).n;
+  assert.equal(n, 0);
+});
+
+test("rate limit is per player token: two tokens from one IP each get their own bucket", async () => {
+  const sub = await startServer({ port: 0, host: "127.0.0.1", dbPath: join(dir, "rl-token.db"), distDir: null, rateLimit: { max: 3, windowMs: 60_000 }, verifier: stubVerifier() });
+  try {
+    const a = await register("Bucket-A", sub.url); // IP bucket: 1
+    const b = await register("Bucket-B", sub.url); // IP bucket: 2
+    const post = (p) => call("POST", "/api/scores", { body: { category: "dino", value: 5 }, token: p.token, at: sub.url }).then((r) => r.status);
+    const codesA = [await post(a), await post(a), await post(a), await post(a)];
+    assert.deepEqual(codesA, [201, 201, 201, 429], "A's own bucket runs out");
+    const codesB = [await post(b), await post(b), await post(b), await post(b)];
+    assert.deepEqual(codesB, [201, 201, 201, 429], "B is not affected by A (same IP)");
+    // Register is still per IP (2 used above), and so are unknown tokens.
+    const reg = [
+      (await call("POST", "/api/auth/register", { body: { name: "Bucket-C" }, at: sub.url })).status,
+      (await call("POST", "/api/auth/register", { body: { name: "Bucket-D" }, at: sub.url })).status,
+    ];
+    assert.deepEqual(reg, [201, 429]);
+    assert.equal((await call("POST", "/api/scores", { body: { category: "dino", value: 5 }, token: "c".repeat(64), at: sub.url })).status, 429);
+  } finally {
+    await sub.close();
+  }
+});
+
+test("verifier: busy queue, memory bombs and malformed jobs fail cleanly", async () => {
+  const v = createVerifier({ timeoutMs: 5000, maxConcurrent: 1, maxQueue: 0, resourceLimits: { maxOldGenerationSizeMb: 24, maxYoungGenerationSizeMb: 8 } });
+  try {
+    const bomb = "const a = []; [1].forEach(() => { for (let i = 0; i < 1e9; i++) a.push('x'.repeat(64) + i); });";
+    const [first, second] = await Promise.all([
+      v.verify({ kind: "arena", code: bomb, goal: "hay500", seed: 1 }),
+      v.verify({ kind: "arena", code: "harvest()", goal: "hay500", seed: 1 }),
+    ]);
+    assert.deepEqual([first.ok, first.code], [false, "crash"]);
+    assert.match(first.error, /memory/);
+    assert.deepEqual([second.ok, second.code], [false, "busy"]);
+    const bad = await v.verify({ kind: "chess" });
+    assert.deepEqual([bad.ok, bad.code], [false, "crash"]);
+    const ok = await v.verify({ kind: "arena", code: "harvest()", goal: "hay500", seed: 1 });
+    assert.equal(ok.ok, true);
+    assert.equal(ok.result.reached, false);
+  } finally {
+    await v.close();
+  }
+});
+
+test("a phase-1 DB file is upgraded in place (old rows count as unverified)", async () => {
+  const file = join(dir, "phase1.db");
+  const old = new DatabaseSync(file);
+  old.exec(`
+    CREATE TABLE players (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE, token_hash TEXT NOT NULL UNIQUE, elo INTEGER NOT NULL DEFAULT 1000, created_at INTEGER NOT NULL);
+    CREATE TABLE scores (id INTEGER PRIMARY KEY, player_id INTEGER NOT NULL REFERENCES players(id), category TEXT NOT NULL, level INTEGER, ticks INTEGER, ops INTEGER, value INTEGER, seed INTEGER, created_at INTEGER NOT NULL);
+    CREATE TABLE challenges (id INTEGER PRIMARY KEY, author_id INTEGER NOT NULL REFERENCES players(id), goal TEXT NOT NULL, seed INTEGER NOT NULL, code TEXT NOT NULL, author_ticks INTEGER NOT NULL, author_ops INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'open', created_at INTEGER NOT NULL);
+    CREATE TABLE challenge_results (id INTEGER PRIMARY KEY, challenge_id INTEGER NOT NULL UNIQUE REFERENCES challenges(id), player_id INTEGER NOT NULL REFERENCES players(id), ticks INTEGER NOT NULL, ops INTEGER NOT NULL, code TEXT NOT NULL, outcome TEXT NOT NULL, elo_delta INTEGER NOT NULL, created_at INTEGER NOT NULL);
+    INSERT INTO players (name, token_hash, created_at) VALUES ('Oldie', '${hashToken("d".repeat(64))}', 1);
+    INSERT INTO scores (player_id, category, level, ticks, ops, created_at) VALUES (1, 'maze', 1, 5, 1, 1);
+    INSERT INTO challenges (author_id, goal, seed, code, author_ticks, author_ops, created_at) VALUES (1, 'hay500', 1, 'x', 1, 1, 1);
+  `);
+  old.close();
+  const db = await openDb(file);
+  try {
+    assert.deepEqual(db.leaderboard("maze", 1), [], "the trust-based maze row is not on the verified board");
+    assert.equal(db.openChallenges()[0].verified, 0);
+    const id = db.addScore(1, { category: "maze", level: 1, ticks: 900, ops: 9, value: null, seed: 3, size: 6, sx: 0, sy: 0, code: "c", verified: true });
+    assert.equal(db.leaderboard("maze", 1)[0].id, id);
+  } finally {
+    db.close();
+  }
+});
+
+test("a full verifier queue answers 429 + Retry-After (not 503, which the client reads as offline)", async () => {
+  const sub = await startServer({ port: 0, host: "127.0.0.1", dbPath: join(dir, "busy.db"), distDir: null, verify: { timeoutMs: 1000, maxConcurrent: 1, maxQueue: 0 } });
+  try {
+    const p = await register("Busy-Bee", sub.url);
+    const spin = "[1].forEach(() => /(a+)+b/.test('a'.repeat(48)));";
+    const first = call("POST", "/api/challenges", { body: { goal: "hay500", seed: 1, code: spin }, token: p.token, at: sub.url });
+    await new Promise((ok) => setTimeout(ok, 150)); // the first replay is running now
+    const second = await call("POST", "/api/challenges", { body: { goal: "hay500", seed: 2, code: BOT_CODE.pro }, token: p.token, at: sub.url });
+    assert.equal(second.status, 429, second.text);
+    assert.match(second.json.error, /busy/);
+    assert.equal(second.headers.get("retry-after"), "5");
+    assert.equal((await first).status, 422);
+  } finally {
+    await sub.close();
   }
 });

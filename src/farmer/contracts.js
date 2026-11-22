@@ -51,7 +51,9 @@ export const CONTRACT_ITEMS = {
   Carrot: { tier: 1, needs: "Carrots", perTile: 2, reward: "Gold", value: 0.1 },
   Pumpkin: { tier: 2, needs: "Pumpkins", perTile: 2, reward: "Gold", value: 0.25 },
   // v3 phase 5: Rice sits between Pumpkin and Cactus (tier 2.5: budget ×3.5).
-  Rice: { tier: 2.5, needs: "Rice", perTile: 2, reward: "Gold", value: 0.375 },
+  // v4 phase 2: value 1 → 1.5 Gold per Rice delivered (was 0.375 ≈ 0.56 Gold,
+  // far below the 2 Gold of trade(Items.Rice)); its tier / budget unchanged.
+  Rice: { tier: 2.5, needs: "Rice", perTile: 2, reward: "Gold", value: 1 },
   Cactus: { tier: 3, needs: "Cactus", perTile: 2, reward: "Gold", value: 0.5 },
   Gold: { tier: 4, needs: "Mazes", perTile: 1, reward: "Bone", value: 0.5 },
   Bone: { tier: 5, needs: "Dinosaurs", perTile: 1, reward: "Bone", value: 1 },

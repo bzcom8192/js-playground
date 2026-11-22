@@ -157,6 +157,9 @@ export function createRuntime(opts) {
     // or onRecord({ kind: "dino", rec }). Display/network side effects only;
     // it must not throw into the run (errors are swallowed).
     onRecord = () => {},
+    // v4 phase 2 (server replay): time a maze that already exists when Run is
+    // pressed from the run start (normally such a maze is "not timed").
+    timeExistingMaze = false,
   } = opts;
   const notifyRecord = (ev) => {
     try {
@@ -171,11 +174,12 @@ export function createRuntime(opts) {
 
   const log = (kind, text) => onLog({ kind, text });
 
-  function makeSession(body, mapLine, program) {
+  function makeSession(body, mapLine, program, code) {
     let resolveDone;
     const donePromise = new Promise((r) => (resolveDone = r));
     return {
       body, // transformed program source, compiled once per drone
+      code, // the source as run (v4: sent along with a maze record for replay)
       mapLine,
       program, // { lines, chars } of the main file
       ops: 0, // farmer API calls, all drones combined
@@ -310,7 +314,7 @@ export function createRuntime(opts) {
       let msg = `🏁 Maze solved in ${fmt(attempt.ticks)} ticks · ${fmt(attempt.ops)} ops`;
       if (r.best) msg += ` — new best for Mazes level ${ev.level}!`;
       log("info", msg);
-      if (r.best) notifyRecord({ kind: "maze", attempt });
+      if (r.best) notifyRecord({ kind: "maze", attempt, code: session.code });
       return;
     }
     if (ev.type === "dinoHarvest") {
@@ -722,8 +726,10 @@ export function createRuntime(opts) {
     } catch (err) {
       compileError = err;
     }
-    const session = makeSession(body, mapLine, program ?? R.programSize(code));
+    const session = makeSession(body, mapLine, program ?? R.programSize(code), code);
     current = session;
+    const s0 = getState();
+    if (timeExistingMaze && s0?.maze) session.maze = { ref: s0.maze, ticks: 0, ops: 0 };
     const ctx = makeCtx(session, null);
     let compiled;
     try {

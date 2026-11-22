@@ -401,7 +401,7 @@ test("trade(Items.Rice): 1 Rice → 2 Gold, n at a time; gated by the Rice unloc
   assert.equal(W.trade(s, "toString").ok, false, "prototype keys aren't trades");
 });
 
-test("contracts: Rice joins the pool only with the Rice unlock, tier between Pumpkin and Cactus, pays Gold", () => {
+test("contracts: Rice joins the pool only with the Rice unlock, tier between Pumpkin and Cactus, pays ≈1.5 Gold per Rice", () => {
   const base = { Carrots: 1, Pumpkins: 1, Cactus: 1 };
   const without = farm(6, base);
   without.unlocks.Rice = 0;
@@ -410,7 +410,10 @@ test("contracts: Rice joins the pool only with the Rice unlock, tier between Pum
   assert.deepEqual(C.contractPool(withRice), ["Hay", "Wood", "Carrot", "Pumpkin", "Rice", "Cactus"]);
   const info = C.CONTRACT_ITEMS.Rice;
   assert.ok(info.tier > C.CONTRACT_ITEMS.Pumpkin.tier && info.tier < C.CONTRACT_ITEMS.Cactus.tier);
-  assert.ok(info.value > C.CONTRACT_ITEMS.Pumpkin.value && info.value < C.CONTRACT_ITEMS.Cactus.value);
+  // v4 phase 2: a rice contract pays 1.5 Gold per Rice (selling pays 2 → the
+  // bonus contract is now worth delivering instead of a 0.56 Gold/unit loss).
+  assert.equal(info.value * C.BONUS_FACTOR, 1.5);
+  assert.equal(C.contractReward("Rice", 100), 150);
   assert.equal(info.reward, "Gold");
   assert.equal(info.needs, "Rice");
   // Over 60 days rice shows up with the unlock and never without it.

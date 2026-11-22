@@ -3,11 +3,23 @@
 //
 // Every error is JSON { error } with a fitting status. Write endpoints (every
 // POST) need `Authorization: Bearer <token>` (except register) and share a
-// simple in-memory rate limit per client IP.
+// simple in-memory rate limit: per player when the token is valid, per client
+// IP otherwise (register, bad tokens).
+//
+// v4 phase 2 (anti-cheat level 2): arena challenges, challenge results and
+// maze scores are REPLAYED by the verifier (verifier.js: the engine in a
+// worker_thread, tick caps + a wall-clock timeout) and stored with the
+// server-measured ticks / ops; a run the replay can't reproduce is a 422.
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import { extname, join, normalize, resolve, sep } from "node:path";
+import { createVerifier } from "./verifier.js";
+import { hashToken } from "./db.js";
+import { GOALS } from "../src/farmer/arena.js";
+import { MAZE_VERIFY_TICK_CAP } from "../src/farmer/verify.js";
 import {
+  ARENA_TICK_CAP,
+  DNF_TICKS,
   eloUpdate,
   outcomeOf,
   raceScore,
@@ -139,16 +151,31 @@ function challengeOut(c) {
     authorTicks: c.author_ticks,
     authorOps: c.author_ops,
     createdAt: c.created_at,
+    verified: !!c.verified,
   };
 }
 
+// A stored score as answered (the program is not echoed back).
+const withoutCode = (s) => Object.fromEntries(Object.entries(s).filter(([k]) => k !== "code"));
+
+const fmt = (n) => Number(n || 0).toLocaleString("en-US");
+
+/** A clean claimed { ticks, ops } from a request body (or null). Claims are
+ *  only echoed back next to the server's numbers, never stored or used. */
+function claimOf(ticks, ops) {
+  const ok = (v) => Number.isInteger(v) && v >= 0;
+  return ok(ticks) && ok(ops) ? { ticks, ops } : null;
+}
+
 /**
- * createApp({ db, distDir, rateLimit, trustProxy }) → (req, res) handler.
+ * createApp({ db, distDir, rateLimit, trustProxy, verifier }) → (req, res) handler.
  *  db: an openDb() store. distDir: the built game (null = no static files).
- *  rateLimit: { max, windowMs } for write endpoints (per IP).
+ *  rateLimit: { max, windowMs } for write endpoints (per player token, per IP
+ *    without a valid token).
  *  trustProxy: take the client IP from X-Forwarded-For (behind a proxy).
+ *  verifier: a createVerifier() (default: a new one with the default limits).
  */
-export function createApp({ db, distDir = null, rateLimit = {}, trustProxy = false } = {}) {
+export function createApp({ db, distDir = null, rateLimit = {}, trustProxy = false, verifier = createVerifier() } = {}) {
   const limiter = createRateLimiter(rateLimit);
   const root = distDir ? resolve(distDir) : null;
 
@@ -160,12 +187,44 @@ export function createApp({ db, distDir = null, rateLimit = {}, trustProxy = fal
     return req.socket.remoteAddress || "?";
   };
 
+  const bearer = (req) => /^Bearer\s+([0-9a-f]{64})\s*$/i.exec(String(req.headers.authorization || ""))?.[1].toLowerCase() ?? null;
   const auth = (req) => {
-    const m = /^Bearer\s+([0-9a-f]{64})\s*$/i.exec(String(req.headers.authorization || ""));
-    if (!m) throw new HttpError(401, "missing or malformed Authorization: Bearer <token>");
-    const p = db.playerByToken(m[1].toLowerCase());
+    const token = bearer(req);
+    if (!token) throw new HttpError(401, "missing or malformed Authorization: Bearer <token>");
+    const p = db.playerByToken(token);
     if (!p) throw new HttpError(401, "unknown token");
     return p;
+  };
+  // Rate-limit bucket of a write: the player (by token hash) when the token is
+  // valid — so players behind one tunnel / NAT address don't share a bucket —
+  // else the client IP (register, missing or unknown tokens).
+  const limitKey = (req, path) => {
+    if (path !== "/api/auth/register") {
+      const token = bearer(req);
+      if (token && db.playerByToken(token)) return `t:${hashToken(token)}`;
+    }
+    return `ip:${clientIp(req)}`;
+  };
+
+  // Replay one job; verifier problems become HTTP errors: 422 (the run could
+  // not be verified), 429 (verifier queue full: retry soon — not 503, which
+  // the client reads as "server offline"), 503 (shutting down).
+  const replay = async (job) => {
+    const v = await verifier.verify(job);
+    if (v.ok) return v.result;
+    if (v.code === "busy") throw Object.assign(new HttpError(429, v.error), { retryAfter: 5 });
+    if (v.code === "closed") throw Object.assign(new HttpError(503, v.error), { retryAfter: 5 });
+    throw new HttpError(422, `could not verify the run: ${v.error}`);
+  };
+  const mazeFailText = (r, s) => {
+    if (r.reason === "wrong maze" || r.wrongStart) {
+      const at = r.wrongStart ? ` at (${r.wrongStart.x}, ${r.wrongStart.y})` : "";
+      return `the replay spawned a different maze${at}, not seed ${s.seed} at the recorded start (${s.sx}, ${s.sy})`;
+    }
+    if (r.error) return `the replay failed: ${r.error}`;
+    if (r.reason === "tick cap" || r.reason === "clock cap") return `the replay did not solve the maze within ${fmt(MAZE_VERIFY_TICK_CAP)} ticks`;
+    if (r.reason === "op budget") return "the replay was cut off (too many API calls)";
+    return "the replay ended without harvesting the treasure";
   };
 
   const intParam = (s) => (/^\d{1,15}$/.test(s) ? Number(s) : null);
@@ -174,9 +233,12 @@ export function createApp({ db, distDir = null, rateLimit = {}, trustProxy = fal
   async function api(req, res, path, url) {
     const method = req.method;
     const write = method === "POST";
-    if (write && !limiter.allow(clientIp(req))) {
-      res.setHeader("Retry-After", String(limiter.retryAfter(clientIp(req))));
-      throw new HttpError(429, "too many requests, slow down");
+    if (write) {
+      const key = limitKey(req, path);
+      if (!limiter.allow(key)) {
+        res.setHeader("Retry-After", String(limiter.retryAfter(key)));
+        throw new HttpError(429, "too many requests, slow down");
+      }
     }
     const allow = (...methods) => {
       if (!methods.includes(method)) {
@@ -224,7 +286,11 @@ export function createApp({ db, distDir = null, rateLimit = {}, trustProxy = fal
           ops: row.ops,
           value: row.value,
           seed: row.seed,
+          size: row.size ?? null,
+          sx: row.sx ?? null,
+          sy: row.sy ?? null,
           createdAt: row.created_at,
+          verified: !!row.verified,
         };
       });
       return sendJson(res, 200, { category: v.category, level: v.level, entries });
@@ -236,9 +302,24 @@ export function createApp({ db, distDir = null, rateLimit = {}, trustProxy = fal
       const body = await readJson(req);
       const v = validateScore(body);
       if (!v.ok) throw new HttpError(400, v.error);
-      // Level-2 anti-cheat would replay the run here (see RESULT14.md).
-      const id = db.addScore(player.id, v.score);
-      return sendJson(res, 201, { id, ...v.score });
+      const score = v.score;
+      if (score.category !== "maze") {
+        // Dino: level 1 (trust + sanity). The dinosaur's walk is not seeded,
+        // so a harvest can't be replayed.
+        const id = db.addScore(player.id, { ...score, verified: false });
+        return sendJson(res, 201, { id, ...withoutCode(score), verified: false });
+      }
+      const r = await replay({ kind: "maze", code: score.code, level: score.level, seed: score.seed, size: score.size, sx: score.sx, sy: score.sy });
+      if (!r.solved) throw new HttpError(422, `maze score rejected: ${mazeFailText(r, score)}`);
+      const stored = { ...score, ticks: r.ticks, ops: r.ops, verified: true };
+      const id = db.addScore(player.id, stored);
+      return sendJson(res, 201, {
+        id,
+        ...withoutCode(stored),
+        claimed: { ticks: score.ticks, ops: score.ops },
+        corrected: score.ticks !== r.ticks || score.ops !== r.ops,
+        replay: r.mode,
+      });
     }
 
     if (path === "/api/challenges") {
@@ -248,8 +329,20 @@ export function createApp({ db, distDir = null, rateLimit = {}, trustProxy = fal
       const body = await readJson(req);
       const v = validateChallenge(body);
       if (!v.ok) throw new HttpError(400, v.error);
-      const id = db.addChallenge(player.id, v.challenge);
-      return sendJson(res, 201, { ...challengeOut(db.challenge(id)), status: "open" });
+      const goal = GOALS[v.challenge.goal];
+      const r = await replay({ kind: "arena", code: v.challenge.code, goal: goal.id, seed: v.challenge.seed });
+      if (!r.reached) {
+        const why = r.error ? `it failed: ${r.error}` : `it did not reach ${goal.label} within ${fmt(ARENA_TICK_CAP)} ticks`;
+        throw new HttpError(422, `challenge rejected: the server's replay on seed ${v.challenge.seed} did not reach the goal (${why})`);
+      }
+      const id = db.addChallenge(player.id, { ...v.challenge, authorTicks: r.ticks, authorOps: r.ops, verified: true });
+      const claimed = claimOf(body.authorTicks, body.authorOps);
+      return sendJson(res, 201, {
+        ...challengeOut(db.challenge(id)),
+        status: "open",
+        claimed,
+        corrected: !!claimed && (claimed.ticks !== r.ticks || claimed.ops !== r.ops),
+      });
     }
 
     let m = /^\/api\/challenges\/([^/]+)$/.exec(path);
@@ -264,7 +357,7 @@ export function createApp({ db, distDir = null, rateLimit = {}, trustProxy = fal
         code: c.code,
         status: c.status,
         result: r
-          ? { playerId: r.player_id, name: r.name, ticks: r.ticks, ops: r.ops, outcome: r.outcome, eloDelta: r.elo_delta, createdAt: r.created_at }
+          ? { playerId: r.player_id, name: r.name, ticks: r.ticks, ops: r.ops, outcome: r.outcome, eloDelta: r.elo_delta, createdAt: r.created_at, verified: !!r.verified }
           : null,
       });
     }
@@ -281,8 +374,12 @@ export function createApp({ db, distDir = null, rateLimit = {}, trustProxy = fal
       const body = await readJson(req);
       const v = validateResult(body);
       if (!v.ok) throw new HttpError(400, v.error);
-      const r = db.closeChallenge(c.id, player.id, v.result, (ch, author, challenger) => {
-        const score = raceScore(v.result, { ticks: ch.author_ticks, ops: ch.author_ops });
+      // The challenger's program on the challenge seed, measured here. Missing
+      // the goal is a valid answer (DNF: it loses); an unverifiable run is not.
+      const rep = await replay({ kind: "arena", code: v.result.code, goal: c.goal, seed: c.seed });
+      const measured = { ticks: rep.reached ? rep.ticks : DNF_TICKS, ops: rep.ops, code: v.result.code, verified: true };
+      const r = db.closeChallenge(c.id, player.id, measured, (ch, author, challenger) => {
+        const score = raceScore(measured, { ticks: ch.author_ticks, ops: ch.author_ops });
         const e = eloUpdate(challenger.elo, author.elo, score);
         return { outcome: outcomeOf(score), deltaChallenger: e.deltaA, deltaAuthor: e.deltaB };
       });
@@ -290,7 +387,16 @@ export function createApp({ db, distDir = null, rateLimit = {}, trustProxy = fal
       return sendJson(res, 201, {
         challengeId: c.id,
         result: r.outcome, // for the challenger: "win" | "loss" | "draw"
-        you: { ticks: v.result.ticks, ops: v.result.ops, elo: r.challenger.elo, delta: r.challenger.delta },
+        verified: true,
+        you: {
+          ticks: measured.ticks,
+          ops: measured.ops,
+          reached: rep.reached,
+          error: rep.error,
+          claimed: claimOf(body.ticks, body.ops),
+          elo: r.challenger.elo,
+          delta: r.challenger.delta,
+        },
         author: { playerId: r.author.id, name: r.author.name, ticks: c.author_ticks, ops: c.author_ops, elo: r.author.elo, delta: r.author.delta },
       });
     }
@@ -363,7 +469,10 @@ export function createApp({ db, distDir = null, rateLimit = {}, trustProxy = fal
         res.destroy();
         return;
       }
-      if (err instanceof HttpError) sendJson(res, err.status, { error: err.message });
+      if (err instanceof HttpError) {
+        if (err.retryAfter) res.setHeader("Retry-After", String(err.retryAfter));
+        sendJson(res, err.status, { error: err.message });
+      }
       else {
         console.error("[farmer-online]", err);
         sendJson(res, 500, { error: "internal server error" });

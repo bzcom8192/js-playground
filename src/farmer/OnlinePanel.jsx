@@ -3,6 +3,8 @@
 // onlineApi.js). Offline-first: if the API does not answer, the window says
 // so ("เซิร์ฟเวอร์ไม่ตอบสนอง") and nothing else in the game changes. The
 // demo farm can look but not register, submit or race.
+// v4 phase 2: maze rows and friend challenges are replay-verified by the
+// server (✓); dino rows are not replayable and say so (ยังไม่ยืนยัน).
 import { useCallback, useEffect, useRef, useState } from "react";
 import { GOALS, GOAL_IDS, TICK_CAP } from "./arena.js";
 import { playSolo } from "./arenaClient.js";
@@ -41,6 +43,18 @@ function Section({ title, right, children }) {
   );
 }
 
+const UNVERIFIED_LABEL = "ยังไม่ยืนยัน";
+const VERIFIED_TITLE = "Verified: the server replayed this program and measured the run itself";
+const UNVERIFIED_TITLE = "Not verified: a dinosaur's walk is not seeded, so the server cannot replay the harvest (trust-based)";
+
+function VerifiedMark() {
+  return (
+    <span className="text-lime-700 font-bold" title={VERIFIED_TITLE} aria-label="verified">
+      ✓
+    </span>
+  );
+}
+
 const btn = "px-3 py-1 rounded text-xs font-semibold text-white hover:brightness-110 disabled:opacity-50 disabled:hover:brightness-100";
 
 function Leaderboard({ tab, board, meId }) {
@@ -54,6 +68,7 @@ function Leaderboard({ tab, board, meId }) {
           <th className="text-left font-semibold w-8 py-0.5">#</th>
           <th className="text-left font-semibold">Name</th>
           {dino ? <th className="text-right font-semibold">Bone</th> : <th className="text-right font-semibold">Ticks / ops</th>}
+          <th className="w-4" aria-label="verified" />
         </tr>
       </thead>
       <tbody>
@@ -68,6 +83,15 @@ function Leaderboard({ tab, board, meId }) {
               </td>
               <td className="px-1 text-right font-mono whitespace-nowrap">
                 {dino ? `${fmt(e.value)} ${ITEM_ICONS.Bone}` : `${fmt(e.ticks)} / ${fmt(e.ops)}`}
+              </td>
+              <td className="pl-0.5 pr-1 text-right whitespace-nowrap w-4">
+                {e.verified ? (
+                  <VerifiedMark />
+                ) : (
+                  <span className="text-[9px] font-normal text-stone-400" title={UNVERIFIED_TITLE}>
+                    {UNVERIFIED_LABEL}
+                  </span>
+                )}
               </td>
             </tr>
           );
@@ -130,6 +154,11 @@ function AnswerCard({ r }) {
       <p className="text-[10px] text-stone-400 font-mono">
         {goal?.label} · seed {r.seed} · {r.author.name} {signed(r.author.delta)} → {fmt(r.author.elo)}
       </p>
+      {r.verified && (
+        <p className="text-[10px] text-lime-700" title={VERIFIED_TITLE}>
+          ✓ verified — both runs were replayed and measured by the server
+        </p>
+      )}
       {r.authorCode && (
         <details className="text-[11px] text-stone-500">
           <summary className="cursor-pointer select-none">{r.author.name}&apos;s code</summary>
@@ -278,9 +307,14 @@ export default function OnlinePanel({ files, activeId, demo, onlineSeq = 0, push
             : `Your program did not reach ${goal.label} within ${fmt(TICK_CAP)} ticks (held ${fmt(solo.amount)}). No challenge was posted.`,
         );
       }
+      // The server replays the code and stores ITS ticks / ops (the claim is ignored).
       const c = await api.createChallenge(token, { goal: goalId, seed, code: prog.code, authorTicks: solo.ticks, authorOps: solo.ops });
-      setNotice(`Challenge #${c.id} posted: ${goal.label} in ${fmt(solo.ticks)} ticks · ${fmt(solo.ops)} ops (seed ${seed}).`);
-      pushLog("info", `🌐 Posted a friend challenge: ${goal.label} in ${fmt(solo.ticks)} ticks (${file.name})`);
+      const differs = c.authorTicks !== solo.ticks || c.authorOps !== solo.ops;
+      setNotice(
+        `Challenge #${c.id} posted ✓ verified: ${goal.label} in ${fmt(c.authorTicks)} ticks · ${fmt(c.authorOps)} ops (seed ${seed}).` +
+          (differs ? ` The server's replay differs from your run (${fmt(solo.ticks)} ticks · ${fmt(solo.ops)} ops); its numbers count.` : ""),
+      );
+      pushLog("info", `🌐 Posted a friend challenge: ${goal.label} in ${fmt(c.authorTicks)} ticks, verified (${file.name})`);
       setReloadSeq((n) => n + 1);
     });
 
@@ -311,7 +345,7 @@ export default function OnlinePanel({ files, activeId, demo, onlineSeq = 0, push
       const word = { win: "win", loss: "loss", draw: "draw" }[r.result] || r.result;
       pushLog(
         "info",
-        `🌐 Friend arena: ${word} vs ${r.author.name} (${goal.label}, ${solo.reached ? `${fmt(solo.ticks)} ticks` : "did not finish"} vs ${fmt(full.authorTicks)}) — ELO ${signed(r.you.delta)} → ${r.you.elo}`,
+        `🌐 Friend arena: ${word} vs ${r.author.name} (${goal.label}, ${r.you.ticks <= TICK_CAP ? `${fmt(r.you.ticks)} ticks` : "did not finish"} vs ${fmt(r.author.ticks)}, verified) — ELO ${signed(r.you.delta)} → ${r.you.elo}`,
       );
       setReloadSeq((n) => n + 1);
     });
@@ -424,7 +458,9 @@ export default function OnlinePanel({ files, activeId, demo, onlineSeq = 0, push
           <Leaderboard tab={tab} board={board && board.category === tab.category && board.level === tab.level ? board : null} meId={identity?.playerId} />
         </div>
         <p className="text-[10px] text-stone-400">
-          Maze: fewest ticks, then fewest ops. Dino: biggest single harvest. Best entry per player, top 50.
+          Maze: fewest ticks, then fewest ops. Dino: biggest single harvest. Best entry per player, top 50. <VerifiedMark /> = the server replayed
+          the program and measured the run itself (maze records send their code). Dino rows are {UNVERIFIED_LABEL}: the dinosaur&apos;s walk is
+          not seeded, so a harvest can&apos;t be replayed.
         </p>
       </Section>
 
@@ -473,6 +509,11 @@ export default function OnlinePanel({ files, activeId, demo, onlineSeq = 0, push
                     <span className="font-semibold">{c.authorName}</span>
                     <span className="text-stone-400"> ({c.authorElo})</span> · {GOALS[c.goal]?.label ?? c.goal}
                   </span>
+                  {c.verified && (
+                    <span className="text-[10px] text-lime-700 whitespace-nowrap" title={VERIFIED_TITLE}>
+                      ✓ verified
+                    </span>
+                  )}
                   <span className="font-mono tabular-nums text-stone-500" title={`${fmt(c.authorOps)} ops · seed ${c.seed}`}>
                     {fmt(c.authorTicks)}t
                   </span>

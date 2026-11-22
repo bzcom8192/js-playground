@@ -3,12 +3,15 @@
 // Serves the built game from dist/ and the JSON API under /api/ on one port.
 // Env: PORT (default 4188), HOST (default 0.0.0.0), FARMER_DB (default
 // server/data/farmer-online.db), FARMER_DIST (default dist/), TRUST_PROXY=1
-// (rate-limit by X-Forwarded-For), RATE_LIMIT (write requests / min / IP, 60).
+// (rate-limit by X-Forwarded-For), RATE_LIMIT (write requests / min per player
+// token, or per IP without one; 60), VERIFY_TIMEOUT_MS (wall-clock limit of
+// one replay, 10000), VERIFY_WORKERS (replays at once, 2).
 import { createServer } from "node:http";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openDb } from "./db.js";
 import { createApp } from "./app.js";
+import { createVerifier } from "./verifier.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -16,7 +19,10 @@ export const DEFAULT_PORT = 4188;
 export const DEFAULT_DB = resolve(here, "data", "farmer-online.db");
 export const DEFAULT_DIST = resolve(here, "..", "dist");
 
-/** startServer({ port, host, dbPath, distDir, rateLimit, trustProxy }) → { server, db, url, close() } */
+/** startServer({ port, host, dbPath, distDir, rateLimit, trustProxy, verify, verifier })
+ *  → { server, db, verifier, url, close() }
+ *  verify: createVerifier() options ({ timeoutMs, maxConcurrent, maxQueue }),
+ *  or pass a ready `verifier` (it is then not closed by close()). */
 export async function startServer({
   port = DEFAULT_PORT,
   host = "0.0.0.0",
@@ -24,9 +30,12 @@ export async function startServer({
   distDir = DEFAULT_DIST,
   rateLimit,
   trustProxy = false,
+  verify = {},
+  verifier: given = null,
 } = {}) {
   const db = await openDb(dbPath);
-  const server = createServer(createApp({ db, distDir, rateLimit, trustProxy }));
+  const verifier = given ?? createVerifier(verify);
+  const server = createServer(createApp({ db, distDir, rateLimit, trustProxy, verifier }));
   await new Promise((ok, fail) => {
     server.once("error", fail);
     server.listen(port, host, ok);
@@ -39,9 +48,10 @@ export async function startServer({
         db.close();
         ok();
       });
+      if (!given) void verifier.close();
       server.closeAllConnections?.();
     });
-  return { server, db, url, port: addr.port, close };
+  return { server, db, verifier, url, port: addr.port, close };
 }
 
 const isMain = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
@@ -54,6 +64,10 @@ if (isMain) {
     distDir: env.FARMER_DIST ? resolve(env.FARMER_DIST) : DEFAULT_DIST,
     rateLimit: { max: env.RATE_LIMIT ? Number(env.RATE_LIMIT) : 60, windowMs: 60_000 },
     trustProxy: env.TRUST_PROXY === "1",
+    verify: {
+      ...(env.VERIFY_TIMEOUT_MS ? { timeoutMs: Number(env.VERIFY_TIMEOUT_MS) } : {}),
+      ...(env.VERIFY_WORKERS ? { maxConcurrent: Number(env.VERIFY_WORKERS) } : {}),
+    },
   });
   console.log(`JS Farmer Online listening on ${s.url} (db ${env.FARMER_DB || DEFAULT_DB})`);
   const shutdown = () => s.close().then(() => process.exit(0));

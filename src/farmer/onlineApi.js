@@ -116,16 +116,20 @@ export function createOnlineApi({ fetchFn, base = DEFAULT_BASE, timeoutMs = DEFA
     register: (name) => request("POST", "/auth/register", { body: { name } }),
     /** → { playerId, name, elo, createdAt } */
     me: (token) => request("GET", "/players/me", { token }),
-    /** → { category, level, entries: [{ rank, playerId, name, ticks, ops, value, seed, createdAt }] } */
+    /** → { category, level, entries: [{ rank, playerId, name, ticks, ops, value, seed, size, sx, sy, createdAt, verified }] } */
     leaderboard: (category, level = null) =>
       request("GET", `/leaderboard?category=${enc(category)}${level === null || level === undefined ? "" : `&level=${enc(level)}`}`),
+    /** maze: { category, level, ticks, ops, seed, size, sx, sy, code } → the stored
+     *  score with the SERVER's ticks / ops (+ claimed, corrected, verified). */
     submitScore: (token, score) => request("POST", "/scores", { body: score, token }),
     /** → { challenges: [{ id, authorId, authorName, authorElo, goal, seed, authorTicks, authorOps, createdAt }] } */
     listChallenges: () => request("GET", "/challenges"),
     getChallenge: (id) => request("GET", `/challenges/${enc(id)}`),
-    /** body: { goal, seed, code, authorTicks, authorOps } */
+    /** body: { goal, seed, code, authorTicks?, authorOps? } (the claims are ignored:
+     *  the server replays the code) → the challenge with the server's authorTicks / authorOps */
     createChallenge: (token, body) => request("POST", "/challenges", { body, token }),
-    /** body: { ticks, ops, code } → { challengeId, result, you: { elo, delta, … }, author: { name, elo, delta, … } } */
+    /** body: { code, ticks?, ops? } (claims ignored, replayed) → { challengeId, result, verified,
+     *  you: { ticks, ops, reached, elo, delta, … }, author: { name, ticks, ops, elo, delta, … } } */
     answerChallenge: (token, id, body) => request("POST", `/challenges/${enc(id)}/results`, { body, token }),
   };
 }
@@ -136,12 +140,16 @@ export const onlineApi = createOnlineApi();
 // ---------- auto-submit of local records ----------
 
 /** A local record event (runtime onRecord) → a POST /api/scores body, or null
- *  if it is not leaderboard material (maze level outside 1–3, insane numbers). */
+ *  if it is not leaderboard material (maze level outside 1–3, insane numbers,
+ *  no program to replay).
+ *  v4 phase 2: a maze score carries what the server needs to REPLAY it — the
+ *  program as it ran (ev.code, helper files included), the seed, the farm
+ *  size and the start tile; the server keeps its own ticks / ops. */
 export function scoreForRecord(ev) {
   let score = null;
   if (ev?.kind === "maze" && ev.attempt && MAZE_LEVELS.includes(ev.attempt.level)) {
     const a = ev.attempt;
-    score = { category: "maze", level: a.level, ticks: a.ticks, ops: a.ops, seed: a.seed ?? null };
+    score = { category: "maze", level: a.level, ticks: a.ticks, ops: a.ops, seed: a.seed ?? null, size: a.size, sx: a.sx, sy: a.sy, code: ev.code };
   } else if (ev?.kind === "dino" && ev.rec) {
     score = { category: "dino", value: ev.rec.bone };
   }
@@ -150,7 +158,9 @@ export function scoreForRecord(ev) {
 
 /**
  * Fire-and-forget: send a new local record to the leaderboard if this
- * browser has an identity. Never rejects. → Promise<{ sent, reason? }>
+ * browser has an identity. Never rejects. → Promise<{ sent, score?, stored?,
+ * reason?, rejected? }> — stored: the server's answer (maze: its replayed
+ * ticks / ops); rejected: the server's replay could not reproduce it (422).
  */
 export async function submitRecord(ev, { api = onlineApi, storage, demo = false } = {}) {
   try {
@@ -159,9 +169,11 @@ export async function submitRecord(ev, { api = onlineApi, storage, demo = false 
     if (!id) return { sent: false, reason: "no identity" };
     const score = scoreForRecord(ev);
     if (!score) return { sent: false, reason: "not a leaderboard score" };
-    await api.submitScore(id.token, score);
-    return { sent: true, score };
+    const stored = await api.submitScore(id.token, score);
+    return { sent: true, score, stored: stored && typeof stored === "object" ? stored : null };
   } catch (err) {
-    return { sent: false, reason: String(err?.message || err) };
+    const out = { sent: false, reason: String(err?.message || err) };
+    if (err?.status === 422) out.rejected = true;
+    return out;
   }
 }

@@ -114,9 +114,16 @@ export default function useFarmEngine() {
       onRecord: (ev) => {
         if (demoRef.current) return;
         void submitRecord(ev).then((r) => {
-          if (!r.sent) return;
-          const what = r.score.category === "maze" ? `Maze L${r.score.level}` : "Dino";
-          logBuffer.current.push({ id: ++logId, kind: "info", text: `🌐 Sent your new best (${what}) to the online leaderboard` });
+          if (!r.sent) {
+            // The server replayed the maze run and could not reproduce it.
+            if (r.rejected) logBuffer.current.push({ id: ++logId, kind: "warn", text: `🌐 The online leaderboard did not accept this record: ${r.reason}` });
+            return;
+          }
+          const maze = r.score.category === "maze";
+          const what = maze ? `Maze L${r.score.level}` : "Dino";
+          const st = r.stored;
+          const verified = maze && st?.verified ? ` — ✓ verified by the server${st.corrected ? ` (${st.ticks.toLocaleString("en-US")} ticks · ${st.ops.toLocaleString("en-US")} ops)` : ""}` : "";
+          logBuffer.current.push({ id: ++logId, kind: "info", text: `🌐 Sent your new best (${what}) to the online leaderboard${verified}` });
           setOnlineSeq((n) => n + 1);
         });
       },

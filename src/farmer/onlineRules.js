@@ -3,12 +3,14 @@
 // DOM, no Node APIs: both sides import this file, so the server validates
 // with exactly the rules the client builds its payloads with.
 //
-// Anti-cheat is LEVEL 1 (trust + sanity): the server believes a submitted
-// run happened, it only rejects what cannot have happened (unknown category
-// or level, non-positive ticks, more ops than ticks on a maze, values past
-// the game's own ceilings). Level 2 (replaying the submitted code on the
-// server with the engine in src/farmer/) would hook in where these
-// validators are called; see RESULT14.md.
+// Anti-cheat (v4 phase 2) is LEVEL 2 for everything that can be replayed:
+// the server re-runs the submitted program with this engine (src/farmer/
+// verify.js, in a worker thread with a tick cap and a wall-clock timeout) and
+// stores only what it measured itself — friend-arena challenges and results,
+// and maze scores (which now carry their code + seed + farm size + start
+// tile). Dino scores stay LEVEL 1 (trust + the sanity rules below): the
+// dinosaur's walk is not seeded, so a harvest cannot be replayed. See
+// RESULT15.md.
 
 import { UNLOCKS, WORLD_SIZES } from "./constants.js";
 import { GOAL_IDS, eloExpected } from "./arenaRating.js";
@@ -53,6 +55,7 @@ export const CATEGORIES = Object.freeze({
 const isInt = (v) => typeof v === "number" && Number.isInteger(v);
 const isSeed = (v) => isInt(v) && v >= 0 && v <= 0xffffffff;
 const fail = (error) => ({ ok: false, error });
+const validCode = (code) => typeof code === "string" && code.trim().length > 0 && code.length <= CODE_MAX;
 
 // ---------- names ----------
 
@@ -85,11 +88,15 @@ export function validateBoardQuery(category, level) {
 }
 
 /**
- * Body of POST /api/scores → { ok, score: { category, level, ticks, ops, value, seed } }.
+ * Body of POST /api/scores → { ok, score: { category, level, ticks, ops, value, seed, … } }.
  *  maze: level 1–3, ticks ≥ 1, 1 ≤ ops ≤ ticks (every counted call but print /
  *        get_forecast costs at least one tick, see RESULT14.md), caps above.
+ *        v4 phase 2: also the replay inputs — seed (required), size (a farm
+ *        size), the start tile sx / sy and the program `code` — because the
+ *        server replays the run and keeps ITS ticks / ops (the claimed ones
+ *        are only sanity-checked). → score also has { size, sx, sy, code }.
  *  dino: no level, value = Bone of one harvest 1 … DINO_MAX_BONE; ticks / ops
- *        optional (if sent: positive and capped).
+ *        optional (if sent: positive and capped). Not replayable (level 1).
  */
 export function validateScore(body) {
   if (!body || typeof body !== "object" || Array.isArray(body)) return fail("body must be a JSON object");
@@ -98,14 +105,18 @@ export function validateScore(body) {
   const seed = body.seed === undefined || body.seed === null ? null : body.seed;
   if (seed !== null && !isSeed(seed)) return fail("seed must be a 32-bit unsigned integer");
   if (q.category === "maze") {
-    const { ticks, ops } = body;
+    const { ticks, ops, size, sx, sy, code } = body;
     if (!isInt(ticks) || ticks <= 0) return fail("ticks must be a positive integer");
     if (!isInt(ops) || ops <= 0) return fail("ops must be a positive integer");
     if (ops > ticks) return fail("ops cannot exceed ticks");
     if (ticks > MAZE_MAX_TICKS) return fail("ticks is out of range");
     if (ops > MAZE_MAX_OPS) return fail("ops is out of range");
     if (body.value !== undefined && body.value !== null) return fail("maze scores have no value");
-    return { ok: true, score: { category: "maze", level: q.level, ticks, ops, value: null, seed } };
+    if (seed === null) return fail("maze scores need the maze seed (for the replay)");
+    if (!isInt(size) || !WORLD_SIZES.includes(size)) return fail(`size must be a farm size (${WORLD_SIZES.join(", ")})`);
+    if (!isInt(sx) || !isInt(sy) || sx < 0 || sy < 0 || sx >= size || sy >= size) return fail("sx / sy must be the start tile on the farm");
+    if (!validCode(code)) return fail(`code must be a non-empty string of at most ${CODE_MAX} characters (the program, for the replay)`);
+    return { ok: true, score: { category: "maze", level: q.level, ticks, ops, value: null, seed, size, sx, sy, code } };
   }
   const { value } = body;
   if (!isInt(value) || value <= 0) return fail("value must be a positive integer");
@@ -120,7 +131,7 @@ export function validateScore(body) {
   if (t.error) return fail(t.error);
   const o = opt(body.ops, DINO_MAX_OPS, "ops");
   if (o.error) return fail(o.error);
-  return { ok: true, score: { category: "dino", level: null, ticks: t.v, ops: o.v, value, seed } };
+  return { ok: true, score: { category: "dino", level: null, ticks: t.v, ops: o.v, value, seed, size: null, sx: null, sy: null, code: null } };
 }
 
 /** Is leaderboard entry `a` better than `b` in `category`? */
@@ -133,31 +144,26 @@ export function betterScore(category, a, b) {
 
 // ---------- friend arena ----------
 
-const validCode = (code) => typeof code === "string" && code.trim().length > 0 && code.length <= CODE_MAX;
-
-/** Body of POST /api/challenges → { ok, challenge: { goal, seed, code, authorTicks, authorOps } }.
- *  The author must have reached the goal (authorTicks 1 … ARENA_TICK_CAP). */
+/** Body of POST /api/challenges → { ok, challenge: { goal, seed, code } }.
+ *  v4 phase 2: authorTicks / authorOps are still accepted (older clients send
+ *  them) but IGNORED: the server replays the code and stores its own numbers. */
 export function validateChallenge(body) {
   if (!body || typeof body !== "object" || Array.isArray(body)) return fail("body must be a JSON object");
-  const { goal, seed, code, authorTicks, authorOps } = body;
+  const { goal, seed, code } = body;
   if (!GOAL_IDS.includes(goal)) return fail(`unknown goal (use ${GOAL_IDS.join(", ")})`);
   if (!isSeed(seed)) return fail("seed must be a 32-bit unsigned integer");
   if (!validCode(code)) return fail(`code must be a non-empty string of at most ${CODE_MAX} characters`);
-  if (!isInt(authorTicks) || authorTicks <= 0) return fail("authorTicks must be a positive integer");
-  if (authorTicks > ARENA_TICK_CAP) return fail(`authorTicks must be at most ${ARENA_TICK_CAP} (the goal must be reached)`);
-  if (!isInt(authorOps) || authorOps <= 0 || authorOps > ARENA_MAX_OPS) return fail("authorOps is out of range");
-  return { ok: true, challenge: { goal, seed, code, authorTicks, authorOps } };
+  return { ok: true, challenge: { goal, seed, code } };
 }
 
-/** Body of POST /api/challenges/:id/results → { ok, result: { ticks, ops, code } }.
- *  ticks 1 … ARENA_TICK_CAP, or DNF_TICKS for "did not reach the goal". */
+/** Body of POST /api/challenges/:id/results → { ok, result: { code } }.
+ *  v4 phase 2: ticks / ops are accepted but IGNORED (the server replays the
+ *  code on the challenge seed; a run that misses the goal counts DNF_TICKS). */
 export function validateResult(body) {
   if (!body || typeof body !== "object" || Array.isArray(body)) return fail("body must be a JSON object");
-  const { ticks, ops, code } = body;
-  if (!isInt(ticks) || ticks <= 0 || ticks > DNF_TICKS) return fail(`ticks must be an integer 1 … ${DNF_TICKS} (${DNF_TICKS} = did not finish)`);
-  if (!isInt(ops) || ops < 0 || ops > ARENA_MAX_OPS) return fail("ops is out of range");
+  const { code } = body;
   if (!validCode(code)) return fail(`code must be a non-empty string of at most ${CODE_MAX} characters`);
-  return { ok: true, result: { ticks, ops, code } };
+  return { ok: true, result: { code } };
 }
 
 /** Race outcome for side A: 1 win, 0 loss, 0.5 draw. Fewer ticks wins; equal
