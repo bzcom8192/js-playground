@@ -11,6 +11,7 @@ import { mulberry32 } from "./maze.js";
 import { BOT_CODE } from "./arenaBots.js";
 import { TICK_CAP, runMatch, runSolo } from "./arena.js";
 import { buildExport, parseImport } from "./saveData.js";
+import { dinoButton, dinoResultText } from "./onlineDino.js";
 import { historyRow, historyRows, signed, ticksText, timeText } from "./onlineHistory.js";
 import {
   IDENTITY_FILE_MAX,
@@ -25,6 +26,7 @@ import {
   parseIdentityImport,
   saveIdentity,
   scoreForRecord,
+  submitDinoProgram,
   submitRecord,
   verifyIdentityImport,
 } from "./onlineApi.js";
@@ -377,6 +379,85 @@ test("submitRecord: a dino program is sent once, however often its run beats the
   reply = () => ({ status: 422, json: { error: "dino score rejected: …" } });
   assert.deepEqual(await submitRecord(ev(5), flaky), { sent: false, reason: "dino score rejected: …", rejected: true });
   assert.deepEqual(await submitRecord(ev(6), flaky), { sent: false, reason: "already sent" });
+});
+
+// ---------- the manual dino submit (BRIEF21) ----------
+
+const DINO_STORED = { id: 9, category: "dino", level: null, value: 192, ticks: 3_220_003, ops: 10_809, seed: 4188, size: 12, sx: 6, sy: 6, verified: true, claimed: null };
+
+test("manual dino submit: sends only the program, on demand and as often as asked; the answer is the server's", async () => {
+  const sent = new Map();
+  const { fn, calls } = mockFetch(() => ({ status: 201, json: DINO_STORED }));
+  const api = createOnlineApi({ fetchFn: fn });
+  for (let i = 1; i <= 2; i++) {
+    assert.deepEqual(await submitDinoProgram("harvest();", { token: TOKEN, api, sent }), DINO_STORED);
+    assert.equal(calls.length, i, "no local record is needed, and the same program may be sent again");
+  }
+  assert.deepEqual([calls[0].method, calls[0].url, calls[0].headers.Authorization], ["POST", "/api/scores", `Bearer ${TOKEN}`]);
+  assert.deepEqual(calls[0].body, { category: "dino", code: "harvest();" }, "no claims at all");
+
+  // A later local record of the same program is not sent once more; another one is.
+  const st = memStorage();
+  saveIdentity({ playerId: 1, name: "Nok", token: TOKEN }, st);
+  const ev = (code) => ({ kind: "dino", rec: { bone: 3, level: 1, cut: 1, seed: 1, size: 6, sx: 0, sy: 0, at: 1 }, code });
+  assert.equal((await submitRecord(ev("harvest();"), { api, storage: st, sent })).reason, "already sent");
+  assert.equal((await submitRecord(ev("harvest(); // 2"), { api, storage: st, sent })).sent, true);
+  // And the other way round: an automatic send never blocks the button.
+  await submitDinoProgram("harvest(); // 2", { token: TOKEN, api, sent });
+  assert.equal(calls.length, 4);
+});
+
+test("manual dino submit: refusals reach the player, nothing counts as sent, bad programs are not uploaded", async () => {
+  const sent = new Map();
+  let reply;
+  const { fn, calls } = mockFetch(() => reply);
+  const submit = (code = "harvest();") => submitDinoProgram(code, { token: TOKEN, api: createOnlineApi({ fetchFn: fn }), sent });
+  for (const [status, error] of [[422, "dino score rejected: the benchmark run ended without harvesting the dinosaur"], [429, "the replay verifier is busy, try again in a moment"], [401, "unknown token"]]) {
+    reply = { status, json: { error } };
+    await assert.rejects(submit(), (e) => e instanceof OnlineError && e.status === status && !e.offline && e.message === error);
+  }
+  reply = new TypeError("no network");
+  await assert.rejects(submit(), (e) => e.offline && e.message === OFFLINE_MESSAGE);
+  reply = { status: 200, json: { ok: true } };
+  await assert.rejects(submit(), /not understood/);
+  assert.equal(sent.size, 0);
+  const before = calls.length;
+  for (const code of ["", "  \n", null, "x".repeat(100_001)]) await assert.rejects(submit(code), /code/);
+  assert.equal(calls.length, before, "checked before the request");
+});
+
+test("a score waits for its replay longer than other requests do", async () => {
+  const fn = (_, init) => new Promise((ok, fail) => {
+    const t = setTimeout(() => ok({ ok: true, status: 201, json: async () => DINO_STORED }), 60);
+    init.signal.addEventListener("abort", () => (clearTimeout(t), fail(new Error("aborted"))));
+  });
+  const api = createOnlineApi({ fetchFn: fn, timeoutMs: 15, replayTimeoutMs: 2000 });
+  assert.equal((await submitDinoProgram("harvest();", { token: TOKEN, api, sent: new Map() })).value, 192);
+  await assert.rejects(api.leaderboard("dino"), (e) => e.offline);
+});
+
+test("manual dino submit: the button is off in the demo, offline, without an identity and while busy", () => {
+  const identity = { playerId: 1, name: "Nok", token: TOKEN };
+  assert.equal(dinoButton({ identity }).enabled, true);
+  for (const [state, hint] of [
+    [{}, /Join above/],
+    [{ identity, demo: true }, /demo/],
+    [{ demo: true }, /demo/],
+    [{ identity, offline: true }, /offline/],
+    [{ identity, badIdentity: true }, /does not know/],
+    [{ identity, busy: true }, /Wait/],
+  ]) {
+    const b = dinoButton(state);
+    assert.equal(b.enabled, false, JSON.stringify(state));
+    assert.match(b.hint, hint);
+  }
+});
+
+test("manual dino submit: the message shows the measured result and whether an earlier best still counts", () => {
+  const opts = (value) => ({ fileName: "main", meId: 1, entries: [{ playerId: 2, value: 9999 }, ...(value === undefined ? [] : [{ playerId: 1, value }])] });
+  assert.equal(dinoResultText(DINO_STORED, opts()), "✓ main: 192 Bone on the benchmark farm (3,220,003 ticks · 10,809 ops). Your first dino score on the board.");
+  assert.match(dinoResultText(DINO_STORED, opts(75)), /New best \(it was 75\)\.$/);
+  for (const v of [192, 1200]) assert.match(dinoResultText(DINO_STORED, opts(v)), new RegExp(`Your earlier ${v.toLocaleString("en-US")} Bone still counts\\.$`));
 });
 
 // ---------- the runtime hook ----------

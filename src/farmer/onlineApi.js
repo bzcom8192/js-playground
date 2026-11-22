@@ -20,6 +20,8 @@ export const IDENTITY_KEY = "farmer_online_v1";
 export const OFFLINE_MESSAGE = "เซิร์ฟเวอร์ไม่ตอบสนอง";
 export const DEFAULT_BASE = "/api";
 export const DEFAULT_TIMEOUT_MS = 10_000;
+/** A score is answered only after its replay (10 s at most, plus the queue). */
+export const REPLAY_TIMEOUT_MS = 30_000;
 
 export class OnlineError extends Error {
   constructor(message, { status = 0, offline = false } = {}) {
@@ -119,20 +121,20 @@ export async function verifyIdentityImport(text, api = onlineApi) {
 // ---------- HTTP ----------
 
 /**
- * createOnlineApi({ fetchFn, base, timeoutMs }) → the API methods (all async).
+ * createOnlineApi({ fetchFn, base, timeoutMs, replayTimeoutMs }) → the API methods (all async).
  *  fetchFn defaults to the global fetch (looked up per call, so a page
  *  without fetch just reports offline).
  */
-export function createOnlineApi({ fetchFn, base = DEFAULT_BASE, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+export function createOnlineApi({ fetchFn, base = DEFAULT_BASE, timeoutMs = DEFAULT_TIMEOUT_MS, replayTimeoutMs = REPLAY_TIMEOUT_MS } = {}) {
   const doFetch = fetchFn || ((...a) => globalThis.fetch(...a));
   const root = base.replace(/\/+$/, "");
 
-  async function request(method, path, { body, token } = {}) {
+  async function request(method, path, { body, token, wait = timeoutMs } = {}) {
     const headers = { Accept: "application/json" };
     if (body !== undefined) headers["Content-Type"] = "application/json";
     if (token) headers.Authorization = `Bearer ${token}`;
     const ctrl = typeof AbortController === "function" ? new AbortController() : null;
-    const timer = ctrl && timeoutMs > 0 ? setTimeout(() => ctrl.abort(), timeoutMs) : null;
+    const timer = ctrl && wait > 0 ? setTimeout(() => ctrl.abort(), wait) : null;
     let res;
     try {
       res = await doFetch(root + path, {
@@ -187,7 +189,7 @@ export function createOnlineApi({ fetchFn, base = DEFAULT_BASE, timeoutMs = DEFA
      *  SERVER's value (Bone) / ticks / ops (+ claimed, verified).
      *  daily: { category, code } → the stored race result: the SERVER's date, seed,
      *  ticks / ops (+ best: my best today?, rank: my rank today). */
-    submitScore: (token, score) => request("POST", "/scores", { body: score, token }),
+    submitScore: (token, score) => request("POST", "/scores", { body: score, token, wait: replayTimeoutMs }),
     /** → { date, seed, size, level, sx, sy, board: [{ rank, playerId, name, ticks, ops, createdAt, verified }],
      *  me (with a token: my best today, the same shape, or null), yesterday: { date, winner } | null } */
     daily: (token) => request("GET", "/daily", { token }),
@@ -258,4 +260,21 @@ export async function submitRecord(ev, { api = onlineApi, storage, demo = false,
     else undo(); // it never got there: the next record may try again
     return out;
   }
+}
+
+/**
+ * The "ส่งคะแนน Dino" button: send a program for the dino benchmark now, whatever
+ * the local records are (and also if it was sent before). → the stored result
+ * with the SERVER's value / ticks / ops. Rejects with an OnlineError (422: the
+ * program harvests nothing there). A later record of the same program is then
+ * not sent again: its result is known.
+ */
+export async function submitDinoProgram(code, { token, api = onlineApi, sent = lastSent } = {}) {
+  const score = { category: "dino", code };
+  const ok = validateScore(score);
+  if (!ok.ok) throw new OnlineError(ok.error);
+  const stored = await api.submitScore(token, score);
+  if (!Number.isInteger(stored?.value)) throw new OnlineError("The server's answer was not understood.");
+  sent.set(sentKey(token, score), code);
+  return stored;
 }

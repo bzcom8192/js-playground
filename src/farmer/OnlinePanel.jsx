@@ -10,6 +10,7 @@
 // v5: identity export / import (its own file, not Save Data), challenges
 // expire after 7 days, and a match history (ประวัติ) with the ELO changes.
 // v5 phase 3: the daily maze race (แข่งวงกตประจำวัน, DailyRace.jsx).
+// BRIEF21: "ส่งคะแนน Dino" sends the current program to the dino benchmark.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { GOALS, GOAL_IDS, TICK_CAP } from "./arena.js";
 import { playSolo } from "./arenaClient.js";
@@ -29,9 +30,11 @@ import {
   loadIdentity,
   onlineApi,
   saveIdentity,
+  submitDinoProgram,
   verifyIdentityImport,
 } from "./onlineApi.js";
 import { dailyView } from "./onlineDaily.js";
+import { dinoButton, dinoResultText } from "./onlineDino.js";
 import { historyRows, signed, timeText } from "./onlineHistory.js";
 
 const fmt = (n) => Number(n || 0).toLocaleString("en-US");
@@ -236,8 +239,9 @@ export default function OnlinePanel({ files, activeId, demo, onlineSeq = 0, push
   const [daily, setDaily] = useState(null); // GET /api/daily; null: loading, false: not available
   const [dailyRun, setDailyRun] = useState(null); // my last local run on the race course
   const [dailyMsg, setDailyMsg] = useState(null); // { ok, text }: the outcome of a run / submit
+  const [dinoMsg, setDinoMsg] = useState(null); // { ok, text }: the outcome of a manual dino submit
   const [nameText, setNameText] = useState("");
-  const [busy, setBusy] = useState(null); // "register" | "import" | "create" | "daily:run" | "daily:submit" | `accept:<id>`
+  const [busy, setBusy] = useState(null); // "register" | "import" | "create" | "daily:run" | "daily:submit" | "dino" | `accept:<id>`
   const [idMsg, setIdMsg] = useState(null); // { ok, text }: the outcome of an export / import
   const [progress, setProgress] = useState(null);
   const [goalId, setGoalId] = useState("hay500");
@@ -316,6 +320,7 @@ export default function OnlinePanel({ files, activeId, demo, onlineSeq = 0, push
     setNotice(null);
     setIdMsg(null);
     setDailyMsg(null);
+    setDinoMsg(null);
     try {
       await fn();
     } catch (err) {
@@ -335,6 +340,7 @@ export default function OnlinePanel({ files, activeId, demo, onlineSeq = 0, push
     setHistory(null);
     setAnswer(null);
     setDailyMsg(null);
+    setDinoMsg(null);
     setNameText("");
     setReloadSeq((n) => n + 1);
   };
@@ -481,15 +487,27 @@ export default function OnlinePanel({ files, activeId, demo, onlineSeq = 0, push
       setReloadSeq((n) => n + 1);
     });
 
-  // Daily race errors show in its own section (offline still blanks the window).
-  const runRace = (kind, fn) =>
+  // Errors of the daily race and of a dino submit show in their own section
+  // (offline still blanks the window).
+  const runIn = (setMsg) => (kind, fn) =>
     run(kind, async () => {
       try {
         await fn();
       } catch (err) {
         if (err?.offline) throw err;
-        setDailyMsg({ ok: false, text: String(err?.message || err) });
+        setMsg({ ok: false, text: String(err?.message || err) });
       }
+    });
+  const runRace = runIn(setDailyMsg);
+
+  // The current program on the server's dino benchmark, on demand.
+  const submitDino = () =>
+    runIn(setDinoMsg)("dino", async () => {
+      if (demo || !token) return;
+      const s = await submitDinoProgram(program().code, { token, api });
+      setDinoMsg({ ok: true, text: dinoResultText(s, { fileName: file.name, entries: board?.category === "dino" ? board.entries : [], meId: identity.playerId }) });
+      pushLog("info", `🌐 Dino benchmark: ${fmt(s.value)} Bone, verified (${file.name})`);
+      setReloadSeq((n) => n + 1);
     });
 
   const runDaily = () =>
@@ -538,6 +556,7 @@ export default function OnlinePanel({ files, activeId, demo, onlineSeq = 0, push
 
   const locked = demo || !!busy;
   const elo = profile?.elo;
+  const dino = dinoButton({ demo, offline, busy: !!busy, identity, badIdentity });
   const race = daily ? dailyView(daily, identity?.playerId ?? null) || false : daily;
   const raceReady = !!dailyRun?.solved && !!race && dailyRun.date === race.date;
 
@@ -660,6 +679,21 @@ export default function OnlinePanel({ files, activeId, demo, onlineSeq = 0, push
         <div className="rounded-lg border border-stone-200 bg-white p-1.5 max-h-56 overflow-y-auto">
           <Leaderboard tab={tab} board={board && board.category === tab.category && board.level === tab.level ? board : null} meId={identity?.playerId} />
         </div>
+        {tab.category === "dino" && (
+          <div className="space-y-1">
+            <div className="flex items-center gap-1.5">
+              <button onClick={submitDino} disabled={!dino.enabled} className={btn} style={{ background: TEAL }} title={dino.hint}>
+                {busy === "dino" ? "Running…" : "ส่งคะแนน Dino"}
+              </button>
+              <span className="min-w-0 truncate text-[11px] text-stone-400">{dino.enabled || busy ? file.name : dino.hint}</span>
+            </div>
+            {dinoMsg && (
+              <p className={`text-xs break-words ${dinoMsg.ok ? "text-lime-700" : "text-red-600"}`} aria-live="polite">
+                {dinoMsg.text}
+              </p>
+            )}
+          </div>
+        )}
         <p className="text-[10px] text-stone-400">
           Maze: fewest ticks, then fewest ops. Dino: biggest single harvest. Best entry per player, top 50. <VerifiedMark /> = the server ran
           the program and measured it itself (records send their code). Maze programs of a level all run on the same hidden{" "}
