@@ -428,6 +428,12 @@ export class FarmScene {
 
     // Growth + planting pops.
     for (const rec of this.tiles) {
+      // A full-size hedge hides the whole tile under it: two draws saved per wall.
+      const covered = !!rec.model && rec.e.type === "Hedge" && rec.pop >= 1;
+      if (rec.tile.visible === covered) {
+        rec.tile.visible = !covered;
+        moving = true;
+      }
       if (!rec.model) continue;
       const target = Math.min(1, rec.e.progress);
       let dirty = false;

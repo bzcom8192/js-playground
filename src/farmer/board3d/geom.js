@@ -1,10 +1,8 @@
 // Geometry helpers for the 3D board models (three.js only, no DOM).
 //
-// Two kinds of parts exist:
-//  part()   non-indexed, for the flat-shaded set pieces (hedge, chest, dinosaur)
-//  piece()  indexed with smooth normals, for the crops, the bot and the planter.
-//           Vertices are shared, so a smooth model costs fewer vertex-shader
-//           runs than a flat one with half its triangles.
+// Every model is merged from piece()s: indexed, with smooth normals. Vertices are
+// shared, so a smooth model costs fewer vertex-shader runs than a flat-shaded
+// one with half its triangles.
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
 import { mergeGeometries, mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
@@ -56,20 +54,8 @@ function keepOnly(g, names) {
 }
 
 /**
- * Prepare one primitive for merging: non-indexed, transformed, with a flat
- * colour (or a per-vertex colour function) and only position/normal/color.
- */
-export function part(geo, color, matrix, colorFn) {
-  const g = geo.index ? geo.toNonIndexed() : geo;
-  if (g !== geo) geo.dispose();
-  if (matrix) g.applyMatrix4(matrix);
-  paint(g, color, colorFn);
-  keepOnly(g, ["position", "normal", "color"]);
-  return g;
-}
-
-/**
- * Like part(), but indexed and with the primitive's own (smooth) normals.
+ * Prepare one primitive for merging: indexed, transformed, with its own (smooth)
+ * normals and a flat colour (or a per-vertex colour function).
  * `color` null keeps colours the geometry already carries; `uv` keeps its UVs.
  * colorFn sees the position before `matrix` is applied.
  */
@@ -254,15 +240,10 @@ export function lobe(radius, seed, { detail = 2, lump = 0.07, squash = 1 } = {})
  */
 export function leafScatter(lobes, count, size, seed, { shade = [0.68, 1.34], minUp = -0.35 } = {}) {
   const r = rng(seed);
-  const pos = [];
-  const nor = [];
-  const col = [];
-  const index = [];
   const n = new THREE.Vector3();
-  const u = new THREE.Vector3();
-  const w = new THREE.Vector3();
   const p = new THREE.Vector3();
   const c = new THREE.Color();
+  const sheet = leafBuilder();
   for (let i = 0; i < count; i++) {
     const [x, y, z, rad, color, squash = 1] = lobes[i % lobes.length];
     const ny = minUp + (1 - minUp) * r();
@@ -271,12 +252,33 @@ export function leafScatter(lobes, count, size, seed, { shade = [0.68, 1.34], mi
     n.set(Math.cos(a) * s, ny, Math.sin(a) * s);
     p.set(x + n.x * rad * 1.06, y + n.y * rad * squash * 1.06, z + n.z * rad * 1.06);
     if (lobes.some((l) => Math.hypot(p.x - l[0], (p.y - l[1]) / (l[5] ?? 1), p.z - l[2]) < l[3] * 1.02)) continue;
+    sheet.add(p, n, size, r, () => c.set(color).multiplyScalar(shade[0] + (shade[1] - shade[0]) * r()));
+  }
+  return sheet.build();
+}
+
+/** Single leaves where the caller wants them: [{ p, n (unit normal), color }]. */
+export function leafSheet(spots, size, r) {
+  const sheet = leafBuilder();
+  for (const { p, n, color } of spots) sheet.add(p, n, size, r, () => color);
+  return sheet.build();
+}
+
+/** Collects leaves, each one diamond lying on the plane with normal n at p. */
+function leafBuilder() {
+  const pos = [];
+  const nor = [];
+  const col = [];
+  const index = [];
+  const u = new THREE.Vector3();
+  const w = new THREE.Vector3();
+  const add = (p, n, size, r, colorOf) => {
     // A random direction in the tangent plane, tipped outward a little.
     u.set(r() - 0.5, r() - 0.5, r() - 0.5);
     u.addScaledVector(n, -u.dot(n)).normalize();
     w.crossVectors(n, u);
     const len = size * (0.75 + r() * 0.5);
-    c.set(color).multiplyScalar(shade[0] + (shade[1] - shade[0]) * r());
+    const c = colorOf();
     const b = pos.length / 3;
     const corner = (fu, fw, fn) =>
       pos.push(
@@ -293,13 +295,16 @@ export function leafScatter(lobes, count, size, seed, { shade = [0.68, 1.34], mi
       col.push(c.r, c.g, c.b);
     }
     index.push(b, b + 1, b + 2, b, b + 2, b + 3);
-  }
-  const g = new THREE.BufferGeometry();
-  g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
-  g.setAttribute("normal", new THREE.Float32BufferAttribute(nor, 3));
-  g.setAttribute("color", new THREE.Float32BufferAttribute(col, 3));
-  g.setIndex(index);
-  return g;
+  };
+  const build = () => {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute("normal", new THREE.Float32BufferAttribute(nor, 3));
+    g.setAttribute("color", new THREE.Float32BufferAttribute(col, 3));
+    g.setIndex(index);
+    return g;
+  };
+  return { add, build };
 }
 
 /** Sphere with vertical lobes (pumpkin ribs), squashed, with a dimpled top. */
