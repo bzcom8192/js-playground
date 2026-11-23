@@ -160,3 +160,59 @@ test("playthrough: a plain player gets from the first tile to pumpkins in about 
   await earn("Pumpkin", 140);
   assert.ok(total < 1200, `${Math.round(total)} s to the first pumpkin upgrade`);
 });
+
+test("playthrough (BRIEF22): Megafarm comes after Cactus and is paid from pumpkin and cactus income in about the old Megafarm's farm time", async () => {
+  // A mid-game farm (8×8, Overclock 3), everything earned on the farm, seeds
+  // included. The old price (1400 Bone + 2400 Gold) took 820–3,527 s from the
+  // same farm on the BRIEF21 engine (RESULT22.md); this one ≈1,700 s.
+  const rng = mulberry32(3);
+  const s = W.createGame();
+  Object.assign(s.unlocks, { Plant: 1, Senses: 1, Speed: 3, Grass: 2, Carrots: 2, Trees: 1, Pumpkins: 2, Expand: 7 });
+  s.size = C.WORLD_SIZES[7];
+  W.clearFarm(s);
+  const n = s.size * s.size;
+  const sweep = (body) => `const n = get_world_size();\nwhile (true) { for (let x = 0; x < n; x++) { for (let y = 0; y < n; y++) { ${body} move(North); } move(East); } }`;
+  const programs = {
+    Hay: sweep("if (can_harvest()) harvest();"),
+    Wood: sweep("const want = (x + y) % 2 === 0 ? Entities.Tree : Entities.Bush; if (can_harvest()) harvest(); if (get_entity_type() !== want) plant(want);"),
+    Carrot: EXAMPLES.find((e) => e.id === "carrots").code,
+    Pumpkin: EXAMPLES.find((e) => e.id === "pumpkins").code,
+    Cactus: EXAMPLES.find((e) => e.id === "cactus").code,
+  };
+  let total = 0;
+  let last = null;
+  const earn = async (item, amount) => {
+    for (let k = 0; s.items[item] < amount; k++) {
+      assert.ok(k < 60, `stuck on ${item}`);
+      const seed = C.ENTITY_INFO[item]?.cost ?? {};
+      for (const [sitem, per] of Object.entries(seed)) if (s.items[sitem] < per * n * 2) await earn(sitem, per * n * 8);
+      if (last !== item) {
+        W.clearFarm(s);
+        last = item;
+      }
+      const out = () => Object.entries(seed).some(([sitem, per]) => s.items[sitem] < per);
+      total += await play(s, programs[item], () => s.items[item] >= amount || out(), rng);
+    }
+  };
+  const buy = async (id) => {
+    const cost = W.unlockCost(s, id);
+    for (const [item, amount] of Object.entries(cost)) await earn(item, amount);
+    for (const [item, amount] of Object.entries(cost)) if (s.items[item] < amount) await earn(item, amount); // seeds may have eaten into an earlier one
+    const r = W.buyUnlock(s, id);
+    assert.equal(r.ok, true, `${id}: ${r.msg}`);
+  };
+  Object.assign(s.items, { Pumpkin: 40_000, Cactus: 30_000 });
+  assert.equal(W.buyUnlock(s, "Megafarm").locked, "Cactus", "blocked until the Cactus Bench");
+  Object.assign(s.items, { Pumpkin: 0, Cactus: 0 });
+  await buy("Cactus");
+  const before = total;
+  await buy("Megafarm");
+  const grind = total - before;
+  assert.ok(grind > 1000 && grind < 2500, `Megafarm took ${Math.round(grind)} s of farm time`);
+  // And the crew works: example 7 fills every column.
+  const ex = EXAMPLES.find((e) => e.id === "megafarm").code;
+  W.clearFarm(s);
+  let bots = 0;
+  await play(s, ex, () => (bots = W.allDrones(s).length) === s.size, rng);
+  assert.equal(bots, s.size);
+});
