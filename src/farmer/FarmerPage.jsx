@@ -581,12 +581,6 @@ export default function FarmerPage() {
     fm.deleteFile(id);
   };
 
-  // The daily race's practice link: its seed into the Almanac's replay-seed box.
-  const practiceSeed = (seed) => {
-    setSeedDraft(String(seed));
-    fm.setOpen("records", true);
-  };
-
   const toggleWindow = (key) => fm.setOpen(key, !windows[key]?.open);
 
   const power = game.items.Power > 0 ? 2 : 1;
@@ -751,10 +745,8 @@ export default function FarmerPage() {
           files={files}
           activeId={activeFile.id}
           demo={demo}
-          onlineSeq={engine.onlineSeq}
           pushLog={pushLog}
           onExitDemo={exitDemo}
-          onPracticeSeed={practiceSeed}
         />
       </div>
     </FloatingWindow>
@@ -766,7 +758,7 @@ export default function FarmerPage() {
     ["records", "Almanac", "Your best maze and dinosaur runs, attempts, replay seed"],
     ["contracts", "Contracts", `Today's orders${deliverable ? ` (${deliverable} ready to deliver)` : ""}`, deliverable],
     ["arena", "Arena", "Race a program against a rival (ELO rating)"],
-    ["online", "Online", "Shared leaderboard, daily maze race and friend arena"],
+    ["online", "Online", "Your online identity, friend challenges and match history"],
   ];
 
   return (

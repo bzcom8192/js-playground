@@ -26,7 +26,6 @@ Examples below use `/opt/js-farmer` for the checkout, `/var/lib/js-farmer` for t
 | `RATE_LIMIT` | `60` | writes per minute per player token (per address without a valid token) |
 | `VERIFY_TIMEOUT_MS` | `10000` | time limit of one replay |
 | `VERIFY_WORKERS` | `2` | replays at the same time |
-| `FARMER_SECRET` | a random one, made once and kept in the DB | what the hidden mazes of the maze leaderboard are derived from (at least 16 characters). Setting or changing it changes the current week's maze |
 
 ## Install
 
@@ -107,12 +106,11 @@ sudo systemctl restart farmer-server
 ```
 To go forward again: `git checkout farmer-game`, then Update.
 - A v4 server (phase 2) runs fine on a DB that v5 has opened: the new columns are nullable, and v5 fills in the rows a v4 server added. The v4 server does not know about challenge expiry, so expired challenges are open again while it runs.
-- A server from before the hidden weekly maze runs on this DB too: it ignores the column `period`, and the maze scores it stores count as legacy after the next update.
-- A v5 server from before the daily race ignores its entries (column `race_date`); they are back after the next update.
+- A server from before BRIEF22 runs on this DB too, and serves the old maze, daily and dino rows again while it runs (it recreates the `scores` / `settings` tables if the DB never had them). What it stores there is unserved again after the next update.
 - Going back further than that has not been tested.
 
 ## Database and backup
-Everything the server stores is in **one SQLite file**, `/var/lib/js-farmer/farmer-online.db`: players (only token *hashes*), scores, challenges and results. While the server runs, two helper files are next to it (`-wal`, `-shm`), so don't copy just the `.db` of a running server.
+Everything the server stores is in **one SQLite file**, `/var/lib/js-farmer/farmer-online.db`: players (only token *hashes*), challenges and results (and the unserved scores of before BRIEF22). While the server runs, two helper files are next to it (`-wal`, `-shm`), so don't copy just the `.db` of a running server.
 
 ```bash
 sudo install -d -o farmer -g farmer -m 0750 /var/backups/js-farmer
@@ -145,13 +143,8 @@ bore local 4188 --to <bore-server>        # forwards to localhost:4188
 - To reach it directly from another machine (LAN, Tailscale): `HOST=0.0.0.0 npm run server`.
 - Port 4188 must be free. A `python3 -m http.server 4188` that still serves the old static build has to be stopped first (`ss -ltnp | grep 4188`), or use another `PORT`.
 
-## Daily maze race
-The race date is the Bangkok calendar date, computed from the server clock (the time zone setting of the machine does not matter). Keep the clock synchronised (`timedatectl`): a wrong clock means the wrong course. There is nothing to schedule; a new day starts by itself.
-
-## Maze leaderboard
-Everybody's maze program runs on a hidden 12×12 maze that only the server knows, one per level and Bangkok ISO week (a new one every Monday 00:00 Bangkok time). Its seed is derived from the server secret, is never stored with the scores and never sent out. Nothing has to be scheduled.
-- The secret is in the DB (table `settings`), so **a backup of the DB contains it**: whoever has it can work out the mazes. Keep backups private. A restored backup keeps the same mazes; a new DB gets new ones.
-- Scores from before this rule have no `period`. They stay in the table and on the board, unranked and marked as legacy.
+## Removed score categories
+The `maze`, `daily` and `dino` score categories (with the Daily Maze Race, `GET /api/daily` and the hidden weekly maze) were removed in BRIEF22; their old rows (and the old `settings` secret) remain in the DB, unserved.
 
 ## Troubleshooting
 - **Apache answers 503:** the service is not running, or not on the port in `ProxyPass` (`systemctl status farmer-server`).

@@ -1,26 +1,19 @@
-// Online window (v4 phase 1): identity, the shared leaderboard and the friend
-// arena, all against the Node server in server/ (same-origin /api; see
-// onlineApi.js). Offline-first: if the API does not answer, the window says
-// so ("เซิร์ฟเวอร์ไม่ตอบสนอง") and nothing else in the game changes. The
-// demo farm can look but not register, submit or race.
-// v4 phase 2: maze rows and friend challenges are replay-verified by the
-// server (✓); v5 phase 2: so are dino rows (the program's benchmark run).
-// Maze rows are benchmark runs too, on the server's hidden maze of the week;
-// older rows (a maze the player chose) follow unranked, marked "legacy".
+// Online window (v4 phase 1): identity and the friend arena, against the Node
+// server in server/ (same-origin /api; see onlineApi.js). Offline-first: if the
+// API does not answer, the window says so ("เซิร์ฟเวอร์ไม่ตอบสนอง") and nothing
+// else in the game changes. The demo farm can look but not register or race.
+// v4 phase 2: friend challenges are replay-verified by the server (✓).
 // v5: identity export / import (its own file, not Save Data), challenges
 // expire after 7 days, and a match history (ประวัติ) with the ELO changes.
-// v5 phase 3: the daily maze race (แข่งวงกตประจำวัน, DailyRace.jsx).
-// BRIEF21: "ส่งคะแนน Dino" sends the current program to the dino benchmark.
+// BRIEF22: the maze / dino leaderboard and the daily maze race are gone.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { GOALS, GOAL_IDS, TICK_CAP } from "./arena.js";
 import { playSolo } from "./arenaClient.js";
 import { ITEM_ICONS } from "./constants.js";
-import DailyRace from "./DailyRace.jsx";
-import { playDaily } from "./dailyClient.js";
 import { randomSeed } from "./maze.js";
 import { buildProgram } from "./program.js";
 import { TEAL } from "./farmerUi.jsx";
-import { CODE_MAX, DINO_BENCHMARK, MAZE_BENCHMARK, NAME_MAX } from "./onlineRules.js";
+import { CODE_MAX, NAME_MAX } from "./onlineRules.js";
 import {
   IDENTITY_FILE_MAX,
   OFFLINE_MESSAGE,
@@ -30,21 +23,11 @@ import {
   loadIdentity,
   onlineApi,
   saveIdentity,
-  submitDinoProgram,
   verifyIdentityImport,
 } from "./onlineApi.js";
-import { dailyView } from "./onlineDaily.js";
-import { dinoButton, dinoResultText } from "./onlineDino.js";
 import { historyRows, signed, timeText } from "./onlineHistory.js";
 
 const fmt = (n) => Number(n || 0).toLocaleString("en-US");
-
-const TABS = [
-  { id: "maze1", label: "Maze L1", category: "maze", level: 1 },
-  { id: "maze2", label: "Maze L2", category: "maze", level: 2 },
-  { id: "maze3", label: "Maze L3", category: "maze", level: 3 },
-  { id: "dino", label: "Dino", category: "dino", level: null },
-];
 
 const OUTCOME = {
   win: { title: "🏆 You win!", cls: "text-lime-700" },
@@ -66,59 +49,7 @@ function Section({ title, right, children }) {
 
 const VERIFIED_TITLE = "Verified: the server replayed this program and measured the run itself";
 
-function VerifiedMark() {
-  return (
-    <span className="text-lime-700 font-bold" title={VERIFIED_TITLE} aria-label="verified">
-      ✓
-    </span>
-  );
-}
-
 const btn = "px-3 py-1 rounded text-xs font-semibold text-white hover:brightness-110 disabled:opacity-50 disabled:hover:brightness-100";
-
-function Leaderboard({ tab, board, meId }) {
-  if (!board) return <p className="text-center text-stone-400 text-xs py-3">Loading…</p>;
-  if (!board.entries.length) return <p className="text-center text-stone-400 text-xs py-3">No entries yet. Be the first!</p>;
-  const dino = tab.category === "dino";
-  return (
-    <table className="w-full text-[11px] tabular-nums">
-      <thead>
-        <tr className="text-[10px] uppercase tracking-wider text-stone-400">
-          <th className="text-left font-semibold w-8 py-0.5">#</th>
-          <th className="text-left font-semibold">Name</th>
-          {dino ? <th className="text-right font-semibold">Bone</th> : <th className="text-right font-semibold">Ticks / ops</th>}
-          <th className="w-4" aria-label="verified" />
-        </tr>
-      </thead>
-      <tbody>
-        {board.entries.map((e) => {
-          const mine = e.playerId === meId;
-          return (
-            <tr key={`${e.playerId}${e.legacy ? "-legacy" : ""}`} className={mine ? "bg-lime-100 font-semibold text-lime-900" : "odd:bg-white even:bg-stone-50 text-stone-700"}>
-              <td className="px-1 py-0.5 font-mono">{e.rank ?? "–"}</td>
-              <td className="truncate max-w-0 w-full" title={e.period ? `Maze of ${e.period}` : undefined}>
-                {e.name}
-                {mine ? " (you)" : ""}
-                {e.legacy && (
-                  <span className="text-[10px] font-normal text-stone-400" title="From before the weekly hidden maze, on a maze the player chose: kept, but not ranked">
-                    {" "}
-                    legacy
-                  </span>
-                )}
-              </td>
-              <td className={`px-1 text-right font-mono whitespace-nowrap ${e.legacy ? "text-stone-400" : ""}`}>
-                {dino ? `${fmt(e.value)} ${ITEM_ICONS.Bone}` : `${fmt(e.ticks)} / ${fmt(e.ops)}`}
-              </td>
-              <td className="pl-0.5 pr-1 text-right whitespace-nowrap w-4">
-                {e.verified && <VerifiedMark />}
-              </td>
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
-  );
-}
 
 const smallBtn = "px-2 py-0.5 rounded text-[11px] font-semibold border border-stone-300 bg-white text-stone-600 hover:border-stone-500 disabled:opacity-50 disabled:hover:border-stone-300";
 const TONE = { good: "text-lime-700", bad: "text-red-600", even: "text-stone-500", muted: "text-stone-400" };
@@ -223,25 +154,17 @@ function AnswerCard({ r }) {
 
 /**
  * Props: files, activeId (the main program = the active file, run with its
- * helper files like ▶), demo, onlineSeq (bumped after an auto-submit),
- * pushLog(kind, text), onExitDemo(), onPracticeSeed(seed): the daily seed into
- * the Records window's replay-seed box.
+ * helper files like ▶), demo, pushLog(kind, text), onExitDemo().
  */
-export default function OnlinePanel({ files, activeId, demo, onlineSeq = 0, pushLog = () => {}, onExitDemo, onPracticeSeed = () => {}, api = onlineApi }) {
+export default function OnlinePanel({ files, activeId, demo, pushLog = () => {}, onExitDemo, api = onlineApi }) {
   const [identity, setIdentity] = useState(() => loadIdentity());
   const [profile, setProfile] = useState(null);
   const [badIdentity, setBadIdentity] = useState(false);
   const [offline, setOffline] = useState(false);
-  const [tabId, setTabId] = useState("maze1");
-  const [board, setBoard] = useState(null);
   const [challenges, setChallenges] = useState(null);
   const [history, setHistory] = useState(null); // null: loading, false: not available, else rows
-  const [daily, setDaily] = useState(null); // GET /api/daily; null: loading, false: not available
-  const [dailyRun, setDailyRun] = useState(null); // my last local run on the race course
-  const [dailyMsg, setDailyMsg] = useState(null); // { ok, text }: the outcome of a run / submit
-  const [dinoMsg, setDinoMsg] = useState(null); // { ok, text }: the outcome of a manual dino submit
   const [nameText, setNameText] = useState("");
-  const [busy, setBusy] = useState(null); // "register" | "import" | "create" | "daily:run" | "daily:submit" | "dino" | `accept:<id>`
+  const [busy, setBusy] = useState(null); // "register" | "import" | "create" | `accept:<id>`
   const [idMsg, setIdMsg] = useState(null); // { ok, text }: the outcome of an export / import
   const [progress, setProgress] = useState(null);
   const [goalId, setGoalId] = useState("hay500");
@@ -252,7 +175,6 @@ export default function OnlinePanel({ files, activeId, demo, onlineSeq = 0, push
   const busyRef = useRef(false);
   const importRef = useRef(null);
 
-  const tab = TABS.find((t) => t.id === tabId) || TABS[0];
   const file = files.find((f) => f.id === activeId) || files[0];
   const token = identity?.token;
 
@@ -262,14 +184,13 @@ export default function OnlinePanel({ files, activeId, demo, onlineSeq = 0, push
     else setError(String(err?.message || err));
   }, []);
 
-  // Load everything the window shows (on open, Retry, tab change, auto-submit).
+  // Load everything the window shows (on open, Retry, after a change).
   // All state updates happen after the awaits (never synchronously in the effect).
   useEffect(() => {
     let alive = true;
     (async () => {
       try {
-        const [lb, list, me, hist, race] = await Promise.all([
-          api.leaderboard(tab.category, tab.level),
+        const [list, me, hist] = await Promise.all([
           api.listChallenges(),
           token
             ? api.me(token).catch((err) => {
@@ -283,17 +204,11 @@ export default function OnlinePanel({ files, activeId, demo, onlineSeq = 0, push
                 return false; // unknown token, or a server without the endpoint: the rest still works
               })
             : Promise.resolve(null),
-          api.daily(token).catch((err) => {
-            if (err?.offline) throw err;
-            return false; // a server without the endpoint: the rest still works
-          }),
         ]);
         if (!alive) return;
         setOffline(false);
-        setBoard(lb);
         setChallenges(list.challenges || []);
         setHistory(hist);
-        setDaily(race);
         if (me !== undefined) {
           setProfile(me);
           setBadIdentity(me === null);
@@ -305,7 +220,7 @@ export default function OnlinePanel({ files, activeId, demo, onlineSeq = 0, push
     return () => {
       alive = false;
     };
-  }, [api, tab.category, tab.level, token, onlineSeq, reloadSeq, handle]);
+  }, [api, token, reloadSeq, handle]);
 
   const reload = () => {
     setError(null);
@@ -319,8 +234,6 @@ export default function OnlinePanel({ files, activeId, demo, onlineSeq = 0, push
     setError(null);
     setNotice(null);
     setIdMsg(null);
-    setDailyMsg(null);
-    setDinoMsg(null);
     try {
       await fn();
     } catch (err) {
@@ -339,8 +252,6 @@ export default function OnlinePanel({ files, activeId, demo, onlineSeq = 0, push
     setBadIdentity(false);
     setHistory(null);
     setAnswer(null);
-    setDailyMsg(null);
-    setDinoMsg(null);
     setNameText("");
     setReloadSeq((n) => n + 1);
   };
@@ -487,59 +398,6 @@ export default function OnlinePanel({ files, activeId, demo, onlineSeq = 0, push
       setReloadSeq((n) => n + 1);
     });
 
-  // Errors of the daily race and of a dino submit show in their own section
-  // (offline still blanks the window).
-  const runIn = (setMsg) => (kind, fn) =>
-    run(kind, async () => {
-      try {
-        await fn();
-      } catch (err) {
-        if (err?.offline) throw err;
-        setMsg({ ok: false, text: String(err?.message || err) });
-      }
-    });
-  const runRace = runIn(setDailyMsg);
-
-  // The current program on the server's dino benchmark, on demand.
-  const submitDino = () =>
-    runIn(setDinoMsg)("dino", async () => {
-      if (demo || !token) return;
-      const s = await submitDinoProgram(program().code, { token, api });
-      setDinoMsg({ ok: true, text: dinoResultText(s, { fileName: file.name, entries: board?.category === "dino" ? board.entries : [], meId: identity.playerId }) });
-      pushLog("info", `🌐 Dino benchmark: ${fmt(s.value)} Bone, verified (${file.name})`);
-      setReloadSeq((n) => n + 1);
-    });
-
-  const runDaily = () =>
-    runRace("daily:run", async () => {
-      if (demo) return;
-      setDailyRun(null);
-      const prog = program();
-      const today = await api.daily(token); // the window may have been open since yesterday
-      setDaily(today);
-      const course = dailyView(today);
-      if (!course) throw new Error("The server's answer was not understood.");
-      const r = await playDaily({ code: prog.code, segments: prog.segments, seed: course.seed });
-      setDailyRun({ ...r, date: course.date, fileName: file.name, code: prog.code });
-    });
-
-  // Submits the program of the run on show, even if the file was edited since.
-  const submitDaily = () =>
-    runRace("daily:submit", async () => {
-      if (demo || !token || !dailyRun?.solved) return;
-      try {
-        const s = await api.submitScore(token, { category: "daily", code: dailyRun.code });
-        const numbers = `${fmt(s.ticks)} ticks · ${fmt(s.ops)} ops`;
-        let text = `✓ ${s.date}: ${numbers}, rank ${s.rank}${s.best ? "" : " (your earlier best counts)"}.`;
-        if (s.date !== dailyRun.date) text += " A new day has started, so the server ran it on the new course.";
-        else if (s.ticks !== dailyRun.ticks || s.ops !== dailyRun.ops) text += " The server's numbers differ from your run; they count.";
-        setDailyMsg({ ok: true, text });
-        pushLog("info", `🌐 Daily race ${s.date}: ${numbers}, verified, rank ${s.rank} (${dailyRun.fileName})`);
-      } finally {
-        setReloadSeq((n) => n + 1); // the board; after a refusal also the date
-      }
-    });
-
   if (offline) {
     return (
       <div className="p-4 space-y-3 text-sm text-stone-700">
@@ -556,15 +414,12 @@ export default function OnlinePanel({ files, activeId, demo, onlineSeq = 0, push
 
   const locked = demo || !!busy;
   const elo = profile?.elo;
-  const dino = dinoButton({ demo, offline, busy: !!busy, identity, badIdentity });
-  const race = daily ? dailyView(daily, identity?.playerId ?? null) || false : daily;
-  const raceReady = !!dailyRun?.solved && !!race && dailyRun.date === race.date;
 
   return (
     <div className="p-3 space-y-4 text-sm text-stone-800">
       {demo && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800 flex items-center justify-between gap-2">
-          <span>Demo farm: you can look around, but joining, submitting and racing are off.</span>
+          <span>Demo farm: you can look around, but joining and racing are off.</span>
           {onExitDemo && (
             <button onClick={onExitDemo} className="shrink-0 font-semibold underline">
               Back to my farm
@@ -613,7 +468,7 @@ export default function OnlinePanel({ files, activeId, demo, onlineSeq = 0, push
         )}
         {identity && !badIdentity && (
           <p className="text-[10px] text-stone-400 leading-relaxed">
-            New local maze (L1–L3) and dinosaur records are sent automatically. Your token is stored on this browser only (not in Save Data);
+            Your token is stored on this browser only (not in Save Data);
             export it to play as {identity.name} elsewhere or to keep a backup.{" "}
             <button onClick={forget} className="underline hover:text-stone-600" disabled={!!busy}>
               Forget identity
@@ -632,75 +487,6 @@ export default function OnlinePanel({ files, activeId, demo, onlineSeq = 0, push
           <input ref={importRef} type="file" accept=".json,application/json" onChange={importIdentity} className="hidden" aria-label="Identity file" />
         </div>
         {idMsg && <p className={`text-[11px] break-words ${idMsg.ok ? "text-lime-700" : "text-red-600"}`}>{idMsg.text}</p>}
-      </Section>
-
-      <Section title="🏁 แข่งวงกตประจำวัน">
-        <DailyRace
-          view={race}
-          run={dailyRun}
-          msg={dailyMsg}
-          busy={busy?.startsWith("daily:") ? busy.slice(6) : null}
-          canRun={!locked}
-          canSubmit={!locked && !!identity && !badIdentity && raceReady}
-          submitHint={!identity ? "Join above to submit" : raceReady ? "Send the program of this run; the server runs it again and keeps its own numbers" : "Finish today's course first"}
-          fileName={file.name}
-          onRun={runDaily}
-          onSubmit={submitDaily}
-          onPractice={onPracticeSeed}
-        />
-      </Section>
-
-      <Section
-        title="Leaderboard"
-        right={
-          <button onClick={reload} className="text-[11px] text-stone-400 hover:text-stone-700" title="Refresh">
-            ↻
-          </button>
-        }
-      >
-        <div className="flex gap-1" role="tablist">
-          {TABS.map((t) => (
-            <button
-              key={t.id}
-              role="tab"
-              aria-selected={t.id === tabId}
-              onClick={() => {
-                setBoard(null);
-                setTabId(t.id);
-              }}
-              className={`px-2 py-0.5 rounded text-[11px] font-semibold border ${
-                t.id === tabId ? "bg-stone-800 text-white border-stone-800" : "bg-white text-stone-600 border-stone-300 hover:border-stone-500"
-              }`}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
-        <div className="rounded-lg border border-stone-200 bg-white p-1.5 max-h-56 overflow-y-auto">
-          <Leaderboard tab={tab} board={board && board.category === tab.category && board.level === tab.level ? board : null} meId={identity?.playerId} />
-        </div>
-        {tab.category === "dino" && (
-          <div className="space-y-1">
-            <div className="flex items-center gap-1.5">
-              <button onClick={submitDino} disabled={!dino.enabled} className={btn} style={{ background: TEAL }} title={dino.hint}>
-                {busy === "dino" ? "Running…" : "ส่งคะแนน Dino"}
-              </button>
-              <span className="min-w-0 truncate text-[11px] text-stone-400">{dino.enabled || busy ? file.name : dino.hint}</span>
-            </div>
-            {dinoMsg && (
-              <p className={`text-xs break-words ${dinoMsg.ok ? "text-lime-700" : "text-red-600"}`} aria-live="polite">
-                {dinoMsg.text}
-              </p>
-            )}
-          </div>
-        )}
-        <p className="text-[10px] text-stone-400">
-          Maze: fewest ticks, then fewest ops. Dino: biggest single harvest. Best entry per player, top 50. <VerifiedMark /> = the server ran
-          the program and measured it itself (records send their code). Maze programs of a level all run on the same hidden{" "}
-          {MAZE_BENCHMARK.size}×{MAZE_BENCHMARK.size} maze, a new one every Monday (Bangkok time): the bot starts on ({MAZE_BENCHMARK.sx}, {MAZE_BENCHMARK.sy}) on a ripe
-          Bush, and the clock runs from the start of the program. Dino programs all run on the server&apos;s benchmark farm:{" "}
-          {DINO_BENCHMARK.size}×{DINO_BENCHMARK.size}, dinosaur seed {DINO_BENCHMARK.seed}, {fmt(DINO_BENCHMARK.worldTicks / 10)} s of farm time.
-        </p>
       </Section>
 
       <Section title="Friend Arena">

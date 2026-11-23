@@ -8,7 +8,6 @@ import { createDemoGame, isDemoHash } from "./demo.js";
 import * as C from "./contracts.js";
 import { BOTS, GOALS, deltaText, recordMatch } from "./arena.js";
 import { tickEventLines } from "./weather.js";
-import { submitRecord } from "./onlineApi.js";
 
 export const SAVE_KEY = "farmer_save_v1";
 const FRAME_MS = 33; // UI refresh (~30 fps)
@@ -56,8 +55,6 @@ export default function useFarmEngine() {
   const [logs, setLogs] = useState([]);
   // Bumped on every drone error, also while other drones keep running (Megafarm).
   const [errorSeq, setErrorSeq] = useState(0);
-  // Bumped after an auto-submitted online score (the Online window refreshes).
-  const [onlineSeq, setOnlineSeq] = useState(0);
   const [view, setView] = useState(() => ({
     game: initial.game,
     stats: { running: false, ticks: 0, actions: 0, elapsed: 0, lastMeasure: null, runTicks: 0, ops: 0, lines: 0, chars: 0 },
@@ -109,29 +106,6 @@ export default function useFarmEngine() {
         }
       },
       onDroneError: () => setErrorSeq((n) => n + 1),
-      // v4 Online: a new LOCAL best goes to the leaderboard if this browser
-      // has an identity. Fire-and-forget: failures are silent, gameplay never
-      // waits on the network (a demo farm never records, so never submits).
-      onRecord: (ev) => {
-        if (demoRef.current) return;
-        void submitRecord(ev).then((r) => {
-          if (!r.sent) {
-            // The program has no result on the server's benchmark.
-            if (r.rejected) logBuffer.current.push({ id: ++logId, kind: "warn", text: `🌐 The online leaderboard did not accept this record: ${r.reason}` });
-            return;
-          }
-          const maze = r.score.category === "maze";
-          const what = maze ? `Maze L${r.score.level}` : "Dino";
-          const st = r.stored;
-          const num = (n) => Number(n || 0).toLocaleString("en-US");
-          let verified = "";
-          // The board counts the program's run on the server's benchmark, not the local record.
-          if (st?.verified && maze) verified = ` — ✓ ${num(st.ticks)} ticks · ${num(st.ops)} ops on the server's maze of the week`;
-          else if (st?.verified) verified = ` — ✓ ${num(st.value)} Bone on the server's benchmark farm`;
-          logBuffer.current.push({ id: ++logId, kind: "info", text: `🌐 Sent your new best (${what}) to the online leaderboard${verified}` });
-          setOnlineSeq((n) => n + 1);
-        });
-      },
       onStatus: (s) => {
         setStatus(s);
         if (s !== "running") {
@@ -395,7 +369,6 @@ export default function useFarmEngine() {
     view,
     status,
     errorSeq,
-    onlineSeq,
     logs,
     paused,
     setPaused,

@@ -5,7 +5,7 @@
 //  - `srv` replays for real (the worker-thread verifier, anti-cheat level 2):
 //    the verification tests at the bottom run against it.
 //  - `stub` has a stand-in verifier that reads the "measured" numbers from a
-//    comment in the submitted code (stubCode()), so the HTTP / leaderboard /
+//    comment in the submitted code (stubCode()), so the HTTP / challenge /
 //    ELO plumbing tests can pick exact tick counts without writing programs
 //    that hit them. It goes through exactly the same routes and storage.
 import { test, before, after } from "node:test";
@@ -21,38 +21,27 @@ import { DatabaseSync } from "node:sqlite";
 import { startServer } from "./index.js";
 import { createRateLimiter } from "./app.js";
 import { hashToken, openDb } from "./db.js";
-import { mazeBenchmark, mazeSeed } from "./mazeBenchmark.js";
 import { createVerifier } from "./verifier.js";
-import { CHALLENGE_TTL_MS, DINO_BENCHMARK, DINO_MAX_BONE, DNF_TICKS, HISTORY_LIMIT, RULES_VERSION, eloUpdate } from "../src/farmer/onlineRules.js";
+import { CHALLENGE_TTL_MS, DNF_TICKS, HISTORY_LIMIT, RULES_VERSION, eloUpdate } from "../src/farmer/onlineRules.js";
 import { BOT_CODE } from "../src/farmer/arenaBots.js";
 import { TICK_CAP, runSolo } from "../src/farmer/arena.js";
-import { verifyDaily, verifyDino, verifyMaze } from "../src/farmer/verify.js";
-import { dailyCourse } from "../src/farmer/dailyRace.js";
 
 let dir;
 let srv; // real replay verification
 let stub; // stand-in verifier (see the header)
 let base;
 
-/** Code the stub verifier "measures" as { ticks, ops } (reached / solved iff ticks ≤ the cap);
- *  a dino benchmark run measures `bone`. */
-const stubCode = (ticks, ops, bone = 1) => `// stub ticks=${ticks} ops=${ops} bone=${bone}\nharvest();`;
-const dinoScore = (bone, claim = {}) => ({ category: "dino", code: stubCode(1000, 10, bone), ...claim });
+/** Code the stub verifier "measures" as { ticks, ops } (reached iff ticks ≤ the cap). */
+const stubCode = (ticks, ops) => `// stub ticks=${ticks} ops=${ops}\nharvest();`;
 function stubVerifier() {
   return {
     async verify(job) {
       const m = /ticks=(\d+) ops=(\d+)/.exec(job.code);
       const ticks = m ? Number(m[1]) : DNF_TICKS;
       const ops = m ? Number(m[2]) : 0;
-      if (job.kind === "arena") {
-        const reached = ticks <= TICK_CAP;
-        return { ok: true, result: { kind: "arena", reached, ticks: reached ? ticks : DNF_TICKS, ops, reason: reached ? "goal" : "cap", error: null } };
-      }
-      if (job.kind === "dino") {
-        const bone = Number(/bone=(\d+)/.exec(job.code)?.[1] ?? 0);
-        return { ok: true, result: { kind: "dino", harvested: bone > 0, bone: bone || null, ticks: m ? ticks : null, ops: m ? ops : null, reason: "ended", error: null } };
-      }
-      return { ok: true, result: { kind: "maze", solved: !!m, mode: "spawn", ticks: m ? ticks : null, ops: m ? ops : null, reason: m ? "solved" : "ended", error: null } };
+      if (job.kind !== "arena") return { ok: false, code: "crash", error: `unknown verification kind ${job.kind}` };
+      const reached = ticks <= TICK_CAP;
+      return { ok: true, result: { kind: "arena", reached, ticks: reached ? ticks : DNF_TICKS, ops, reason: reached ? "goal" : "cap", error: null } };
     },
     close: async () => {},
   };
@@ -161,113 +150,37 @@ test("auth rejection: missing, malformed and unknown tokens → 401 JSON", async
   assert.equal((await call("POST", "/api/challenges/1/results", { body: {} })).status, 401);
 });
 
-// ---------- scores ----------
+// ---------- scores (BRIEF22: every category removed) ----------
 
-/** A maze score body whose stub replay measures exactly `ticks` / `ops`. */
-const mazeScore = (level, ticks, ops) => ({ category: "maze", level, code: stubCode(ticks, ops) });
-
-test("score sanity rejections", async () => {
+test("removed categories: maze, daily and dino scores and boards are refused like any unknown category; GET /api/daily is gone", async () => {
   const { token } = await register();
-  const bad = [
-    { category: "chess", ticks: 10, ops: 1 },
-    { category: "maze", level: 0, ticks: 10, ops: 1 },
-    { category: "maze", level: 4, ticks: 10, ops: 1 },
-    { category: "maze", ticks: 10, ops: 1 }, // no level
-    { category: "maze", level: 1 }, // no program, no score
-    { category: "maze", level: 1, ticks: 2400, ops: 12, seed: 7, size: 6, sx: 0, sy: 0 },
-    { category: "maze", level: 1, code: "" },
-    { category: "maze", level: 1, code: "   " },
-    { category: "maze", level: 1, code: 42 },
-    { category: "maze", level: 1, code: "x".repeat(100_001) },
-    { category: "maze", level: 4, code: "harvest();" },
-    { category: "maze", code: "harvest();" }, // no level
-    { ...dinoScore(10), level: 1 }, // dino has no level
-    { category: "dino" }, // v5 phase 2: no program, no score
-    { category: "dino", value: 10 },
-    { category: "dino", value: 10, ticks: 100, ops: 10, seed: 4188 },
-    { category: "dino", value: 10, code: "" },
-    { category: "dino", value: 10, code: "   " },
-    { category: "dino", value: 10, code: 42 },
-    { category: "dino", value: 10, code: "x".repeat(100_001) },
+  const bodies = [
+    { category: "maze", level: 1, code: "harvest();" },
+    { category: "maze", level: 2, ticks: 10, ops: 1 },
+    { category: "daily", code: "harvest();" },
+    { category: "dino", code: "harvest();", value: 48 },
+    { category: "chess", ticks: 10, ops: 1 }, // never was one
+    {},
   ];
-  for (const body of bad) {
+  for (const body of bodies) {
     const r = await call("POST", "/api/scores", { body, token });
-    assert.equal(r.status, 400, `${JSON.stringify(body)} → ${r.status} ${r.text}`);
-    assert.equal(typeof r.json.error, "string");
+    assert.deepEqual([r.status, r.json], [400, { error: "unknown category" }], JSON.stringify(body));
   }
+  // The token is still checked first, and a bad body is still a bad body.
+  assert.equal((await call("POST", "/api/scores", { body: bodies[0] })).status, 401);
   assert.equal((await call("POST", "/api/scores", { body: "{not json", token })).status, 400);
-  assert.equal((await call("POST", "/api/scores", { body: [1, 2], token })).status, 400);
-  const good = mazeScore(1, 2400, 12);
-  const ok = await call("POST", "/api/scores", { body: good, token });
-  assert.equal(ok.status, 201, ok.text);
-  assert.equal(ok.json.verified, true);
-  assert.equal(ok.json.code, undefined, "the program is not echoed back");
-  const dino = await call("POST", "/api/scores", { body: dinoScore(48, { value: 7 }), token });
-  assert.equal(dino.status, 201, dino.text);
-  assert.equal(dino.json.verified, true);
-  assert.equal(dino.json.value, 48, "measured, not claimed");
-  assert.equal(dino.json.code, undefined, "the program is not echoed back");
-});
-
-test("leaderboard: best entry per player, maze = fewest ticks then ops, dino = most Bone", async () => {
-  const a = await register("LB-A");
-  const b = await register("LB-B");
-  const c = await register("LB-C");
-  const post = (p, body) => call("POST", "/api/scores", { body, token: p.token }).then((r) => assert.equal(r.status, 201, r.text));
-  // Level 2 is only used by this test.
-  await post(a, mazeScore(2, 5000, 40));
-  await post(a, mazeScore(2, 3000, 50)); // a's best
-  await post(a, mazeScore(2, 9000, 10));
-  await post(b, mazeScore(2, 3000, 45)); // same ticks, fewer ops → ahead of a
-  await post(c, mazeScore(2, 2000, 900));
-  await post(c, mazeScore(3, 100, 1)); // other level: ignored
-  const lb = await call("GET", "/api/leaderboard?category=maze&level=2");
-  assert.equal(lb.status, 200);
-  assert.equal(lb.json.category, "maze");
-  assert.equal(lb.json.level, 2);
-  assert.deepEqual(
-    lb.json.entries.map((e) => [e.rank, e.name, e.ticks, e.ops]),
-    [
-      [1, "LB-C", 2000, 900],
-      [2, "LB-B", 3000, 45],
-      [3, "LB-A", 3000, 50],
-    ],
-  );
-  assert.equal(lb.json.entries[0].playerId, c.playerId);
-  assert.ok(lb.json.entries.every((e) => e.verified === true), "maze rows are replay-verified");
-  assert.deepEqual([lb.json.entries[0].size, lb.json.entries[0].sx, lb.json.entries[0].sy], [12, 0, 0]);
-  assert.equal(lb.json.entries[0].code, undefined);
-
-  const d = await register("LB-D");
-  for (const [p, v] of [[a, 50], [a, 400], [b, 400], [d, 90], [d, 12]]) await post(p, dinoScore(v));
-  const dino = await call("GET", "/api/leaderboard?category=dino");
-  const mine = dino.json.entries.filter((e) => [a, b, d].some((p) => p.playerId === e.playerId));
-  assert.deepEqual(
-    mine.map((e) => [e.name, e.value]),
-    [
-      ["LB-A", 400],
-      ["LB-B", 400],
-      ["LB-D", 90],
-    ],
-  );
-  // equal Bone shares a rank
-  assert.equal(mine[0].rank, mine[1].rank);
-  assert.ok(mine.every((e) => e.verified === true), "dino rows are benchmark runs");
-
-  for (const q of ["category=maze", "category=maze&level=9", "category=dino&level=1", "category=x", ""]) {
+  assert.equal((await call("GET", "/api/scores")).status, 405);
+  for (const q of ["category=maze&level=1", "category=maze&level=3", "category=dino", "category=daily", "category=chess", ""]) {
     const r = await call("GET", `/api/leaderboard?${q}`);
-    assert.equal(r.status, 400, q);
+    assert.deepEqual([r.status, r.json], [400, { error: "unknown category" }], q);
   }
-});
-
-test("leaderboard is capped at 50 entries", async () => {
-  for (let i = 0; i < 53; i++) {
-    const p = await register(`cap${i}`);
-    const r = await call("POST", "/api/scores", { body: mazeScore(3, 10_000 + i, 5), token: p.token });
-    assert.equal(r.status, 201);
+  for (const method of ["GET", "POST"]) {
+    const r = await call(method, "/api/daily", { token, ...(method === "POST" && { body: { category: "daily", code: "harvest();" } }) });
+    assert.deepEqual([r.status, r.json], [404, { error: "no such endpoint" }], method);
   }
-  const lb = await call("GET", "/api/leaderboard?category=maze&level=3");
-  assert.equal(lb.json.entries.length, 50);
+  // A new DB has no scores (or settings) table at all: nothing could be stored.
+  const tables = stub.db.raw.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all().map((t) => t.name);
+  assert.deepEqual(tables, ["challenge_results", "challenges", "players"]);
 });
 
 // ---------- challenges + ELO ----------
@@ -599,16 +512,6 @@ test("an infinite loop is rejected by the wall-clock timeout without hanging (AP
     assert.ok(ms < 5000, `answered after ${ms} ms`);
     assert.equal(health.json.ok, true);
     assert.equal(sub.verifier.stats().running, 0, "the worker was terminated");
-    // A maze or dino score with the same trick is rejected the same way.
-    const d = await call("POST", "/api/scores", { body: { category: "dino", value: 100, code: loop }, token: p.token, at: sub.url });
-    assert.equal(d.status, 422, d.text);
-    assert.match(d.json.error, /could not verify/);
-    const m = await call("POST", "/api/scores", {
-      body: { category: "maze", level: 1, ticks: 100, ops: 10, seed: 1, size: 6, sx: 0, sy: 0, code: loop },
-      token: p.token,
-      at: sub.url,
-    });
-    assert.equal(m.status, 422, m.text);
     // The verifier still works afterwards.
     const ok = await call("POST", "/api/challenges", { body: { goal: "hay500", seed: 2, code: BOT_CODE.pro }, token: p.token, at: sub.url });
     assert.equal(ok.status, 201, ok.text);
@@ -617,295 +520,13 @@ test("an infinite loop is rejected by the wall-clock timeout without hanging (AP
   }
 });
 
-const MAZE_SOLVER = `use_item(Items.Fertilizer);
-const seen = new Set();
-const back = { North: South, South: North, East: West, West: East };
-const key = () => get_pos_x() + "," + get_pos_y();
-function dfs() {
-  if (get_entity_type() === Entities.Treasure) { harvest(); return true; }
-  seen.add(key());
-  for (const d of [North, East, South, West]) {
-    if (!can_move(d)) continue;
-    move(d);
-    if (!seen.has(key()) && dfs()) return true;
-    move(back[d]);
-  }
-  return false;
-}
-dfs();
-`;
-
-// ---------- maze: the hidden weekly benchmark (BRIEF21) ----------
-
-const WEEK = "2026-W47";
-const NEXT_WEEK = "2026-W48";
-const MONDAY = Date.UTC(2026, 10, 22, 17); // Monday 2026-11-23, 00:00 in Bangkok
-const SECRET = "a test secret that nobody else has";
-const mazeTruth = (level, period = WEEK, secret = SECRET) => verifyMaze({ code: MAZE_SOLVER, level, seed: mazeSeed(secret, period, level) });
-
-/** A real (or given-verifier) server with a fixed secret and a settable clock. */
-async function withWeek(name, fn, verifier) {
-  const clock = { t: MONDAY - 1000 };
-  const opts = { port: 0, host: "127.0.0.1", dbPath: join(dir, `${name}.db`), distDir: null, secret: SECRET, now: () => clock.t, rateLimit: { max: 10_000, windowMs: 60_000 } };
-  const sub = await startServer({ ...opts, ...(verifier && { verifier }) });
-  try {
-    await fn({ at: sub.url, clock, db: sub.db, post: (p, body) => call("POST", "/api/scores", { body, token: p.token, at: sub.url }) });
-  } finally {
-    await sub.close();
-  }
-}
-
-test("maze seed: from secret, week and level only; not computable without the secret", () => {
-  const seeds = new Set();
-  for (const week of [WEEK, NEXT_WEEK, "2027-W01"]) for (const level of [1, 2, 3]) {
-    const seed = mazeSeed(SECRET, week, level);
-    assert.ok(Number.isInteger(seed) && seed >= 0 && seed <= 0xffffffff);
-    assert.equal(mazeSeed(SECRET, week, level), seed);
-    assert.notEqual(mazeSeed(`${SECRET}!`, week, level), seed);
-    seeds.add(seed);
-  }
-  assert.equal(seeds.size, 9, "another week or level, another maze");
-  const a = mazeBenchmark(SECRET, MONDAY - 1);
-  assert.deepEqual([a.period, a.seed(2)], [WEEK, mazeSeed(SECRET, WEEK, 2)]);
-  assert.equal(mazeBenchmark(SECRET, MONDAY).period, NEXT_WEEK);
-  for (const bad of [undefined, null, "", "short"]) assert.throws(() => mazeSeed(bad, WEEK, 1), /secret/);
-});
-
-test("maze: every submission of a week runs on the same hidden maze; the next week has another", () => {
-  const jobs = [];
-  const real = createVerifier();
-  const spy = { verify: (job) => (jobs.push(job), real.verify(job)), close: () => real.close() };
-  return withWeek(
-    "maze-week",
-    async ({ at, clock, db, post }) => {
-      const [a, b] = [await register("Week-A", at), await register("Week-B", at)];
-      clock.t = MONDAY - 6 * 24 * 3600 * 1000; // Tuesday … Sunday 23:59:59.999
-      const first = await post(a, { category: "maze", level: 2, code: MAZE_SOLVER });
-      clock.t = MONDAY - 1;
-      const second = await post(b, { category: "maze", level: 2, code: MAZE_SOLVER });
-      const truth = await mazeTruth(2);
-      for (const r of [first, second]) {
-        assert.equal(r.status, 201, r.text);
-        assert.deepEqual([r.json.ticks, r.json.ops, r.json.period, r.json.verified], [truth.ticks, truth.ops, WEEK, true]);
-      }
-      assert.equal(jobs[0].seed, jobs[1].seed, "the same maze");
-      const board = async () => (await call("GET", "/api/leaderboard?category=maze&level=2", { at })).json;
-      assert.deepEqual((await board()).entries.map((e) => [e.rank, e.period, e.legacy]), [[1, WEEK, false], [1, WEEK, false]]);
-      assert.equal((await board()).period, WEEK);
-      clock.t = MONDAY;
-      const third = await post(a, { category: "maze", level: 2, code: MAZE_SOLVER });
-      const next = await mazeTruth(2, NEXT_WEEK);
-      assert.deepEqual([third.json.ticks, third.json.ops, third.json.period], [next.ticks, next.ops, NEXT_WEEK]);
-      assert.notEqual(jobs[2].seed, jobs[0].seed);
-      assert.equal((await board()).period, NEXT_WEEK);
-      const other = await post(a, { category: "maze", level: 1, code: MAZE_SOLVER });
-      assert.equal(other.status, 201, other.text);
-      assert.notEqual(jobs[3].seed, jobs[2].seed, "each level has its own maze");
-      const rows = db.raw.prepare("SELECT period, seed, size, sx, sy FROM scores ORDER BY id").all().map((r) => ({ ...r }));
-      assert.deepEqual(rows, [WEEK, WEEK, NEXT_WEEK, NEXT_WEEK].map((period) => ({ period, seed: null, size: 12, sx: 0, sy: 0 })), "the seed is not even stored");
-      await real.close();
-    },
-    spy,
-  );
-});
-
-test("maze: the client's numbers, seed, farm and week are ignored (✓ verified)", () =>
-  withWeek("maze-claims", async ({ at, db, post }) => {
-    const p = await register("Maze-Faker", at);
-    const truth = await mazeTruth(3);
-    assert.equal(truth.solved, true, JSON.stringify(truth));
-    const claims = [{}, { ticks: 1, ops: 1 }, { seed: 7, size: 1, sx: 0, sy: 0 }, { seed: 7, size: 6, sx: 5, sy: 2, period: "2020-W01", ticks: -3 }];
-    for (const claim of claims) {
-      const r = await post(p, { category: "maze", level: 3, code: MAZE_SOLVER, ...claim });
-      assert.equal(r.status, 201, `${JSON.stringify(claim)} → ${r.text}`);
-      assert.deepEqual([r.json.ticks, r.json.ops, r.json.period, r.json.replay], [truth.ticks, truth.ops, WEEK, "spawn"]);
-      assert.deepEqual(r.json.claimed, claim.ops ? { ticks: 1, ops: 1 } : null);
-      const row = db.raw.prepare("SELECT ticks, ops, verified, period, seed, code FROM scores WHERE id = ?").get(r.json.id);
-      assert.deepEqual({ ...row }, { ticks: truth.ticks, ops: truth.ops, verified: 1, period: WEEK, seed: null, code: MAZE_SOLVER });
-    }
-  }));
-
-test("maze: the seed and the layout never reach a client, whatever the program does", () => {
-  // Every way a program can put its own text into an answer, with what it has seen of the maze.
-  const look = `use_item(Items.Fertilizer);\nconst seen = "LEAK" + [North, East, South, West].map((d) => can_move(d) ? 1 : 0).join("") + measure();\n`;
-  const programs = [
-    `${look}throw new Error(seen);`,
-    `${look}throw seen;`,
-    `${look}class LEAK extends Error { get name() { return seen; } }\nthrow new LEAK(seen);`,
-    `${look}print(seen); console.error(seen); quick_print(seen);`,
-    `${look}setTimeout(() => { throw new Error(seen); }, 0);\nwhile (true) spin_in_place();`,
-    `${look}Promise.reject(new Error(seen));\nwhile (true) move(North);`,
-    `${look}nope();`,
-    "let x = ;",
-    "move(East); move(East); use_item(Items.Fertilizer); throw new Error('LEAK');",
-  ];
-  return withWeek("maze-leak", async ({ at, db, post }) => {
-    const p = await register("Maze-Spy", at);
-    const seed = String(mazeSeed(SECRET, WEEK, 1));
-    const texts = [];
-    for (const code of programs) {
-      const r = await post(p, { category: "maze", level: 1, code });
-      assert.equal(r.status, 422, `${code} → ${r.status} ${r.text}`);
-      assert.match(r.json.error, /^(maze score rejected: |could not verify the run: the replay crashed$)/);
-      texts.push(r.text);
-    }
-    assert.equal(db.raw.prepare("SELECT COUNT(*) AS n FROM scores").get().n, 0, "nothing is stored");
-    const ok = await post(p, { category: "maze", level: 1, code: MAZE_SOLVER });
-    assert.equal(ok.status, 201, ok.text);
-    assert.equal(ok.json.seed, null);
-    texts.push(ok.text);
-    for (const path of ["/api/leaderboard?category=maze&level=1", "/api/daily", "/api/health", "/api/players/me", "/api/players/me/history", "/api/challenges", "/api/settings"]) {
-      texts.push((await call("GET", path, { token: p.token, at })).text);
-    }
-    for (const text of texts) {
-      assert.ok(!text.includes(seed), text);
-      assert.ok(!text.includes(SECRET), text);
-      assert.ok(!/LEAK|is not defined|Unexpected token|treasure":/.test(text), text);
-    }
-  });
-});
-
-test("maze: code that doesn't solve the maze is rejected (422); a program is required", () =>
-  withWeek("maze-bluff", async ({ at, db, post }) => {
-    const p = await register("Maze-Bluffer", at);
-    const maze = { category: "maze", level: 1, ticks: 900, ops: 9, seed: 5, size: 6, sx: 0, sy: 0 };
-    for (const [code, why] of [
-      ["use_item(Items.Fertilizer);", /ended without harvesting the treasure/],
-      ["use_item(Items.Fertilizer); while (true) move(North);", /within 5,000,000 ticks/],
-      ["nope();", /failed with an error/],
-      ["move(East); use_item(Items.Fertilizer);", /away from the start tile \(0, 0\)/],
-    ]) {
-      const r = await post(p, { ...maze, code });
-      assert.equal(r.status, 422, `${code} → ${r.status} ${r.text}`);
-      assert.match(r.json.error, /^maze score rejected: /);
-      assert.match(r.json.error, why);
-    }
-    assert.equal((await post(p, maze)).status, 400);
-    assert.equal(db.raw.prepare("SELECT COUNT(*) AS n FROM scores").get().n, 0);
-  }));
-
-test("maze: an entry counts for the week it arrived in, even if its replay ends after Monday midnight", () => {
-  let tick = () => {};
-  const stubbed = stubVerifier();
-  const slow = { close: stubbed.close, verify: (job) => (tick(), stubbed.verify(job)) };
-  return withWeek(
-    "maze-midnight",
-    async ({ at, clock, post }) => {
-      const p = await register("Late-Owl", at);
-      clock.t = MONDAY - 1;
-      tick = () => (clock.t = MONDAY + 5000);
-      assert.equal((await post(p, mazeScore(1, 4000, 30))).json.period, WEEK);
-    },
-    slow,
-  );
-});
-
-test("the server secret: made once, kept in the DB, different for every DB; a given one must be long enough", async () => {
-  const file = join(dir, "secret.db");
-  const a = await openDb(file);
-  const secret = a.secret();
-  assert.match(secret, /^[0-9a-f]{64}$/);
-  assert.equal(a.secret(), secret);
-  a.close();
-  const again = await openDb(file);
-  assert.equal(again.secret(), secret, "it survives a restart, so the week's maze does too");
-  again.close();
-  const other = await openDb(":memory:");
-  assert.notEqual(other.secret(), secret);
-  other.close();
-  await assert.rejects(startServer({ port: 0, dbPath: ":memory:", distDir: null, secret: "short" }), /secret/);
-});
-
-test("maze board: legacy entries (no period) stay, after the ranked ones and without a rank", async () => {
-  const file = join(dir, "legacy.db");
-  const old = new DatabaseSync(file); // as the BRIEF20 server left it
-  old.exec(`
-    CREATE TABLE players (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE, token_hash TEXT NOT NULL UNIQUE, elo INTEGER NOT NULL DEFAULT 1000, created_at INTEGER NOT NULL);
-    CREATE TABLE scores (id INTEGER PRIMARY KEY, player_id INTEGER NOT NULL REFERENCES players(id), category TEXT NOT NULL, level INTEGER, ticks INTEGER, ops INTEGER, value INTEGER, seed INTEGER, created_at INTEGER NOT NULL, verified INTEGER NOT NULL DEFAULT 0, size INTEGER, sx INTEGER, sy INTEGER, code TEXT, race_date TEXT);
-    INSERT INTO players (name, token_hash, created_at) VALUES ('Parker', '${hashToken("e".repeat(64))}', 1), ('Honest', 'h2', 1);
-  `);
-  const insert = "INSERT INTO scores (player_id, category, level, ticks, ops, value, seed, created_at, verified, size, sx, sy, code, race_date) VALUES (?, 'maze', 1, ?, 2, NULL, 424242, 1, 1, 12, 0, 0, 'c', NULL)";
-  old.prepare(insert).run(1, 1);
-  old.prepare(insert).run(1, 7);
-  old.prepare(insert).run(2, 900);
-  old.close();
-  const sub = await startServer({ port: 0, host: "127.0.0.1", dbPath: file, distDir: null, verifier: stubVerifier(), now: () => MONDAY - 1 });
-  try {
-    const board = async () => (await call("GET", "/api/leaderboard?category=maze&level=1", { at: sub.url })).json.entries.map((e) => [e.rank, e.name, e.ticks, e.period, e.legacy, e.seed]);
-    const legacy = [[null, "Parker", 1, null, true, 424242], [null, "Honest", 900, null, true, 424242]];
-    assert.deepEqual(await board(), legacy);
-    const r = await call("POST", "/api/scores", { body: mazeScore(1, 24_000, 600), token: "e".repeat(64), at: sub.url });
-    assert.equal(r.status, 201, r.text);
-    assert.deepEqual(await board(), [[1, "Parker", 24_000, WEEK, false, null], ...legacy], "a legacy time doesn't hide the new one");
-    sub.db.raw.prepare(insert).run(2, 800); // a rolled-back server's INSERT: legacy again
-    assert.deepEqual((await board()).at(-1), [null, "Honest", 800, null, true, 424242]);
-    assert.equal(sub.db.raw.prepare("SELECT COUNT(*) AS n FROM scores").get().n, 5, "nothing was deleted");
-  } finally {
-    await sub.close();
-  }
-});
-
-// Waits for the dinosaur to grow, then cuts it wherever the sweep meets it.
-const DINO_SWEEP = `const n = get_world_size();
-while (get_time() < 100) spin_in_place();
-for (let x = 0; x < n; x++) {
-  for (let y = 0; y < n; y++) {
-    if (get_entity_type() === Entities.Dinosaur) harvest();
-    move(North);
-  }
-  move(East);
-}
-`;
-
-test("dino: a known program gets the server-measured Bone; tampered client numbers are ignored", async () => {
-  const p = await registerReal("Dino-Faker");
-  const truth = await verifyDino({ code: DINO_SWEEP });
-  assert.ok(truth.bone >= 27, JSON.stringify(truth));
-  const row = (id) => ({ ...srv.db.raw.prepare("SELECT category, level, value, ticks, ops, seed, size, sx, sy, verified, code FROM scores WHERE id = ?").get(id) });
-  const { seed, size, x, y } = DINO_BENCHMARK;
-  const expected = { category: "dino", level: null, value: truth.bone, ticks: truth.ticks, ops: truth.ops, seed, size, sx: x, sy: y, verified: 1, code: DINO_SWEEP };
-  const claims = [{}, { value: DINO_MAX_BONE, ticks: 1, ops: 1 }, { value: 1, seed: 5, size: 3, sx: 0, sy: 0, verified: false }, { value: -5, ticks: "x" }];
-  for (const claim of claims) {
-    const r = await onReal("POST", "/api/scores", { body: { category: "dino", code: DINO_SWEEP, ...claim }, token: p.token });
-    assert.equal(r.status, 201, `${JSON.stringify(claim)} → ${r.text}`);
-    assert.deepEqual([r.json.value, r.json.ticks, r.json.ops, r.json.verified], [truth.bone, truth.ticks, truth.ops, true]);
-    assert.deepEqual(r.json.claimed, claim.value > 0 ? { value: claim.value } : null);
-    assert.equal(r.json.code, undefined);
-    assert.deepEqual(row(r.json.id), expected, "stored = server-measured");
-  }
-  const mine = (await onReal("GET", "/api/leaderboard?category=dino")).json.entries.find((e) => e.playerId === p.playerId);
-  assert.deepEqual([mine.value, mine.ticks, mine.ops, mine.seed, mine.verified], [truth.bone, truth.ticks, truth.ops, seed, true]);
-  assert.equal(mine.code, undefined);
-});
-
-test("dino: no code is a 400; a program that harvests no dinosaur on the benchmark is a 422; nothing is stored", async () => {
-  const p = await registerReal("Dino-Bluffer");
-  const none = await onReal("POST", "/api/scores", { body: { category: "dino", value: 5000, ticks: 100, ops: 10 }, token: p.token });
-  assert.equal(none.status, 400);
-  assert.match(none.json.error, /code/);
-  for (const [code, why] of [
-    ["harvest();", /ended without harvesting/],
-    ["while (true) spin_in_place();", /3,000 world ticks/],
-    ["nope();", /failed: .*nope/],
-    ["let x = ;", /failed: /],
-    ["while (true) { move(North); for (let i = 0; i < 200; i++) get_pos_x(); }", /too many API calls/],
-    ["const fs = await import('node:fs'); fs.writeFileSync('/tmp/pwned', 'x');", /failed: /],
-    ["Array.prototype.splice = () => ({ length: 144 }); harvest();", /failed: /],
-  ]) {
-    const r = await onReal("POST", "/api/scores", { body: { category: "dino", value: 5000, code }, token: p.token });
-    assert.equal(r.status, 422, `${code} → ${r.status} ${r.text}`);
-    assert.match(r.json.error, /^dino score rejected: /);
-    assert.match(r.json.error, why, code);
-  }
-  assert.equal(srv.db.raw.prepare("SELECT COUNT(*) AS n FROM scores WHERE player_id = ?").get(p.playerId).n, 0);
-});
-
 test("rate limit is per player token: two tokens from one IP each get their own bucket", async () => {
   const sub = await startServer({ port: 0, host: "127.0.0.1", dbPath: join(dir, "rl-token.db"), distDir: null, rateLimit: { max: 3, windowMs: 60_000 }, verifier: stubVerifier() });
   try {
     const a = await register("Bucket-A", sub.url); // IP bucket: 1
     const b = await register("Bucket-B", sub.url); // IP bucket: 2
-    const post = (p) => call("POST", "/api/scores", { body: dinoScore(5), token: p.token, at: sub.url }).then((r) => r.status);
+    const challenge = { goal: "hay500", seed: 1, code: stubCode(50_000, 300) };
+    const post = (p) => call("POST", "/api/challenges", { body: challenge, token: p.token, at: sub.url }).then((r) => r.status);
     const codesA = [await post(a), await post(a), await post(a), await post(a)];
     assert.deepEqual(codesA, [201, 201, 201, 429], "A's own bucket runs out");
     const codesB = [await post(b), await post(b), await post(b), await post(b)];
@@ -916,7 +537,7 @@ test("rate limit is per player token: two tokens from one IP each get their own 
       (await call("POST", "/api/auth/register", { body: { name: "Bucket-D" }, at: sub.url })).status,
     ];
     assert.deepEqual(reg, [201, 429]);
-    assert.equal((await call("POST", "/api/scores", { body: dinoScore(5), token: "c".repeat(64), at: sub.url })).status, 429);
+    assert.equal((await call("POST", "/api/challenges", { body: challenge, token: "c".repeat(64), at: sub.url })).status, 429);
   } finally {
     await sub.close();
   }
@@ -943,7 +564,7 @@ test("verifier: busy queue, memory bombs and malformed jobs fail cleanly", async
   }
 });
 
-test("a phase-1 DB file is upgraded in place (old rows count as unverified)", async () => {
+test("a phase-1 DB file is upgraded in place (old rows count as unverified); its score rows are left alone", async () => {
   const file = join(dir, "phase1.db");
   const old = new DatabaseSync(file);
   old.exec(`
@@ -959,15 +580,11 @@ test("a phase-1 DB file is upgraded in place (old rows count as unverified)", as
   old.close();
   const db = await openDb(file, { now: () => 2 }); // (its challenge is from time 1: not expired yet)
   try {
-    assert.deepEqual(db.leaderboard("maze", 1), [], "the trust-based maze row is not on the verified board");
     assert.equal(db.openChallenges()[0].verified, 0);
-    const id = db.addScore(1, { category: "maze", level: 1, ticks: 900, ops: 9, value: null, seed: 3, size: 6, sx: 0, sy: 0, code: "c", verified: true });
-    assert.equal(db.leaderboard("maze", 1)[0].id, id);
-    // v5 phase 2: the same for dino. The old row is kept, only not ranked.
-    assert.deepEqual(db.leaderboard("dino", null), [], "the trust-based dino row is not on the verified board");
-    const d = db.addScore(1, { category: "dino", level: null, ticks: 900, ops: 9, value: 48, seed: 4188, size: 12, sx: 6, sy: 6, code: "c", verified: true });
-    assert.deepEqual(db.leaderboard("dino", null).map((r) => [r.id, r.value]), [[d, 48]]);
-    assert.equal(db.raw.prepare("SELECT value FROM scores WHERE category = 'dino' AND verified = 0").get().value, 62208);
+    // BRIEF22: the scores table is not upgraded any more, nor emptied.
+    const cols = db.raw.prepare("PRAGMA table_info(scores)").all().map((c) => c.name);
+    assert.deepEqual(cols, ["id", "player_id", "category", "level", "ticks", "ops", "value", "seed", "created_at"]);
+    assert.deepEqual(db.raw.prepare("SELECT category, value FROM scores ORDER BY id").all().map((r) => [r.category, r.value]), [["maze", null], ["dino", 62208]]);
   } finally {
     db.close();
   }
@@ -1210,225 +827,57 @@ test("history: auth required, GET only, only your own events, latest 20 by closi
     assert.equal(CHALLENGE_TTL_MS, 7 * DAY);
   }));
 
-// ---------- v5 phase 3: the daily maze race ----------
+// ---------- BRIEF22: a DB from before the removal ----------
 
-const RACE_DAY = "2026-11-01"; // Bangkok: T0 is 07:00 there
-const NEXT_DAY = "2026-11-02";
-/** Bangkok midnight that starts NEXT_DAY. */
-const MIDNIGHT = Date.UTC(2026, 10, 1, 17);
-const daily = async (at, token) => {
-  const r = await call("GET", "/api/daily", { at, token });
-  assert.equal(r.status, 200, r.text);
-  return r.json;
-};
-const enter = (at, p, code, extra = {}) => call("POST", "/api/scores", { body: { category: "daily", code, ...extra }, token: p.token, at });
-
-test("daily: the same date and seed all Bangkok day, a new one at Bangkok midnight", () =>
-  withClock("daily-seed", async ({ at, clock }) => {
-    const first = await daily(at);
-    assert.deepEqual(first, { date: RACE_DAY, seed: dailyCourse(RACE_DAY).seed, size: 8, level: 1, sx: 0, sy: 0, board: [], me: null, yesterday: null });
-    for (const t of [Date.UTC(2026, 9, 31, 17), T0 + 1, Date.UTC(2026, 10, 1, 12), MIDNIGHT - 1]) {
-      clock.t = t;
-      assert.deepEqual(await daily(at), first, new Date(t).toISOString());
-    }
-    clock.t = Date.UTC(2026, 9, 31, 17) - 1;
-    assert.equal((await daily(at)).date, "2026-10-31");
-    clock.t = MIDNIGHT;
-    const next = await daily(at);
-    assert.deepEqual([next.date, next.seed], [NEXT_DAY, dailyCourse(NEXT_DAY).seed]);
-    assert.notEqual(next.seed, first.seed);
-    assert.equal((await call("POST", "/api/daily", { at, body: {} })).status, 405);
-  }));
-
-test("daily: no code is a 400, no token a 401; the board is not a leaderboard category", () =>
-  withClock("daily-bad", async ({ at, db }) => {
-    const p = await register("Daily-Bad", at);
-    for (const body of [{}, { code: "" }, { code: "  " }, { code: 42 }, { code: "x".repeat(100_001) }, { ticks: 100, ops: 10, seed: 5, date: RACE_DAY }]) {
-      const r = await call("POST", "/api/scores", { body: { category: "daily", ...body }, token: p.token, at });
-      assert.equal(r.status, 400, r.text);
-      assert.match(r.json.error, /code/);
-    }
-    assert.equal((await call("POST", "/api/scores", { body: { category: "daily", code: stubCode(1, 1) }, at })).status, 401);
-    assert.equal((await call("GET", "/api/leaderboard?category=daily", { at })).status, 400);
-    assert.equal(db.raw.prepare("SELECT COUNT(*) AS n FROM scores").get().n, 0);
-  }));
-
-test("daily: a working program is replayed on the server's own course of the day; the client's date, seed and numbers are ignored", () => {
-  const real = createVerifier();
-  return withClock(
-    "daily-real",
-    async ({ at, clock, db }) => {
-      const p = await register("Daily-Runner", at);
-      const { seed } = dailyCourse(RACE_DAY);
-      const truth = await verifyDaily({ code: MAZE_SOLVER, seed });
-      assert.equal(truth.solved, true);
-      const r = await enter(at, p, MAZE_SOLVER, { date: NEXT_DAY, seed: 12345, size: 3, sx: 2, sy: 2, level: 3, ticks: 1, ops: 1, verified: false });
-      assert.equal(r.status, 201, r.text);
-      assert.deepEqual(r.json, {
-        id: r.json.id, category: "daily", date: RACE_DAY, seed, size: 8, level: 1, sx: 0, sy: 0,
-        ticks: truth.ticks, ops: truth.ops, value: null, verified: true, best: true, rank: 1,
-      });
-      const row = db.raw.prepare("SELECT category, level, ticks, ops, value, seed, size, sx, sy, verified, code, race_date, created_at FROM scores WHERE id = ?").get(r.json.id);
-      assert.deepEqual({ ...row }, {
-        category: "daily", level: 1, ticks: truth.ticks, ops: truth.ops, value: null, seed, size: 8, sx: 0, sy: 0,
-        verified: 1, code: MAZE_SOLVER, race_date: RACE_DAY, created_at: T0,
-      });
-      const board = (await daily(at)).board;
-      assert.deepEqual(board, [{ rank: 1, playerId: p.playerId, name: "Daily-Runner", ticks: truth.ticks, ops: truth.ops, createdAt: T0, verified: true }]);
-
-      // The next day: another maze, an empty board.
-      clock.t = MIDNIGHT;
-      assert.deepEqual((await daily(at)).board, []);
-      const next = await verifyDaily({ code: MAZE_SOLVER, seed: dailyCourse(NEXT_DAY).seed });
-      const r2 = await enter(at, p, MAZE_SOLVER, { date: RACE_DAY, seed });
-      assert.deepEqual([r2.status, r2.json.date, r2.json.ticks, r2.json.ops], [201, NEXT_DAY, next.ticks, next.ops]);
-      assert.notDeepEqual([next.ticks, next.ops], [truth.ticks, truth.ops]);
-    },
-    real,
-  ).finally(() => real.close());
-});
-
-test("daily: a program that doesn't reach the treasure is a 422 and stores nothing", () => {
-  const real = createVerifier();
-  return withClock(
-    "daily-dnf",
-    async ({ at, db }) => {
-      const p = await register("Daily-DNF", at);
-      for (const [code, why] of [
-        ["harvest();", /ended without harvesting the treasure/],
-        ["while (true) move(North);", /tick limit/],
-        ["nope();", /failed: .*nope/],
-        ["const fs = await import('node:fs'); fs.writeFileSync('/tmp/pwned', 'x');", /failed: /],
-        [`clear(); plant(Entities.Bush); while (!can_harvest()) spin_in_place();\n${MAZE_SOLVER}`, /another maze/],
-      ]) {
-        const r = await enter(at, p, code, { ticks: 1, ops: 1 });
-        assert.equal(r.status, 422, `${code} → ${r.status} ${r.text}`);
-        assert.match(r.json.error, /^daily race rejected: /);
-        assert.match(r.json.error, why, code);
-      }
-      assert.equal(db.raw.prepare("SELECT COUNT(*) AS n FROM scores").get().n, 0);
-      assert.deepEqual((await daily(at)).board, []);
-    },
-    real,
-  ).finally(() => real.close());
-});
-
-test("daily: best entry per player (ticks, then ops), shared ranks, my own rank, at most 50 rows", () =>
-  withClock("daily-board", async ({ at, db }) => {
-    const [a, b, c, d] = [await register("Day-A", at), await register("Day-B", at), await register("Day-C", at), await register("Day-D", at)];
-    const post = async (p, ticks, ops) => {
-      const r = await enter(at, p, stubCode(ticks, ops));
-      assert.equal(r.status, 201, r.text);
-      return [r.json.best, r.json.rank];
-    };
-    assert.deepEqual(await post(a, 5000, 40), [true, 1]);
-    assert.deepEqual(await post(a, 3000, 50), [true, 1]);
-    assert.deepEqual(await post(a, 9000, 10), [false, 1], "a worse run does not replace the best");
-    assert.deepEqual(await post(b, 3000, 45), [true, 1], "same ticks, fewer ops");
-    assert.deepEqual(await post(c, 3000, 50), [true, 2], "a tie shares the rank");
-    assert.deepEqual(await post(c, 3000, 50), [false, 2], "the earlier of two equal runs stays the best");
-    assert.deepEqual(await post(d, 8000, 1), [true, 4]);
-    const board = (await daily(at)).board;
-    assert.deepEqual(
-      board.map((e) => [e.rank, e.name, e.ticks, e.ops, e.verified]),
-      [
-        [1, "Day-B", 3000, 45, true],
-        [2, "Day-A", 3000, 50, true], // earlier than Day-C
-        [2, "Day-C", 3000, 50, true],
-        [4, "Day-D", 8000, 1, true],
-      ],
-    );
-    assert.equal(board[0].code, undefined);
-    assert.equal((await daily(at)).me, null);
-    assert.deepEqual((await daily(at, c.token)).me, board[2]);
-    assert.equal((await daily(at, "e".repeat(64))).me, null, "an unknown token still gets the public answer");
-
-    // Other categories share the table but never the board.
-    assert.equal((await call("POST", "/api/scores", { body: mazeScore(1, 10, 1), token: d.token, at })).status, 201);
-    assert.deepEqual(await daily(at).then((x) => x.board), board);
-    const maze = await call("GET", "/api/leaderboard?category=maze&level=1", { at });
-    assert.deepEqual(maze.json.entries.map((e) => [e.name, e.ticks]), [["Day-D", 10]]);
-    assert.deepEqual({ ...db.raw.prepare("SELECT race_date FROM scores WHERE category = 'maze'").get() }, { race_date: null });
-
-    for (let i = 0; i < 50; i++) await post(await register(`day${i}`, at), 4000 + i, 5);
-    const full = await daily(at, d.token);
-    assert.equal(full.board.length, 50);
-    assert.ok(!full.board.some((e) => e.name === "Day-D"));
-    assert.deepEqual([full.me.name, full.me.rank, full.me.ticks], ["Day-D", 54, 8000], "off the board, but told");
-  }));
-
-test("daily: yesterday's winner is the best of the previous Bangkok day only", () =>
-  withClock("daily-yesterday", async ({ at, clock }) => {
-    const a = await register("Yes-A", at);
-    const b = await register("Yes-B", at);
-    const c = await register("Yes-C", at);
-    assert.equal((await daily(at)).yesterday, null);
-    for (const [p, ticks, ops] of [[a, 5000, 40], [b, 4000, 60], [b, 4000, 50], [c, 4000, 50], [a, 4100, 20]]) {
-      assert.equal((await enter(at, p, stubCode(ticks, ops))).status, 201);
-    }
-    assert.equal((await daily(at)).yesterday, null, "today's entries are not yesterday's");
-    clock.t = MIDNIGHT - 1; // the last millisecond still counts for the old day
-    assert.equal((await enter(at, a, stubCode(4500, 1))).json.date, RACE_DAY);
-    clock.t = MIDNIGHT;
-    const won = { date: RACE_DAY, winner: { playerId: b.playerId, name: "Yes-B", ticks: 4000, ops: 50 } }; // before Yes-C, who tied later
-    assert.deepEqual((await daily(at)).yesterday, won);
-    // A faster run on the new day does not touch it.
-    assert.equal((await enter(at, c, stubCode(100, 1))).status, 201);
-    const today = await daily(at);
-    assert.deepEqual(today.yesterday, won);
-    assert.deepEqual(today.board.map((e) => e.name), ["Yes-C"]);
-    clock.t = MIDNIGHT + DAY;
-    assert.deepEqual((await daily(at)).yesterday, { date: NEXT_DAY, winner: { playerId: c.playerId, name: "Yes-C", ticks: 100, ops: 1 } });
-    clock.t = MIDNIGHT + 2 * DAY; // nobody raced the day before
-    assert.equal((await daily(at)).yesterday, null);
-  }));
-
-test("daily: an entry counts for the day it arrived, even if its replay ends after midnight", () => {
-  const jobs = [];
-  let tick = () => {};
-  const stubbed = stubVerifier();
-  const slow = { close: stubbed.close, verify: (job) => (jobs.push(job), tick(), stubbed.verify(job)) };
-  return withClock(
-    "daily-midnight",
-    async ({ at, clock }) => {
-      const p = await register("Night-Owl", at);
-      clock.t = MIDNIGHT - 1;
-      tick = () => (clock.t = MIDNIGHT + 5000);
-      const r = await enter(at, p, stubCode(4000, 30));
-      assert.deepEqual([r.status, r.json.date, r.json.rank], [201, RACE_DAY, 1]);
-      assert.deepEqual(jobs, [{ kind: "daily", code: stubCode(4000, 30), seed: dailyCourse(RACE_DAY).seed }]);
-      const after = await daily(at);
-      assert.deepEqual([after.date, after.board, after.yesterday.winner.name], [NEXT_DAY, [], "Night-Owl"]);
-    },
-    slow,
-  );
-});
-
-test("a v5 phase 2 DB file gets the race date column in place; old rows and a rolled-back server keep working", async () => {
-  const file = join(dir, "v5p2.db");
-  const old = new DatabaseSync(file);
+test("a BRIEF21 DB file with maze, daily and dino rows and the maze secret: nothing is deleted or changed, nothing of it is served", async () => {
+  const file = join(dir, "brief21.db");
+  const old = new DatabaseSync(file); // as the BRIEF21 server left it
   old.exec(`
     CREATE TABLE players (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE, token_hash TEXT NOT NULL UNIQUE, elo INTEGER NOT NULL DEFAULT 1000, created_at INTEGER NOT NULL);
-    CREATE TABLE scores (id INTEGER PRIMARY KEY, player_id INTEGER NOT NULL REFERENCES players(id), category TEXT NOT NULL, level INTEGER, ticks INTEGER, ops INTEGER, value INTEGER, seed INTEGER, created_at INTEGER NOT NULL, verified INTEGER NOT NULL DEFAULT 0, size INTEGER, sx INTEGER, sy INTEGER, code TEXT);
-    INSERT INTO players (name, token_hash, created_at) VALUES ('Old', 'h1', 1);
+    CREATE TABLE scores (id INTEGER PRIMARY KEY, player_id INTEGER NOT NULL REFERENCES players(id), category TEXT NOT NULL, level INTEGER, ticks INTEGER, ops INTEGER, value INTEGER, seed INTEGER, created_at INTEGER NOT NULL, verified INTEGER NOT NULL DEFAULT 0, size INTEGER, sx INTEGER, sy INTEGER, code TEXT, race_date TEXT, period TEXT);
+    CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    CREATE INDEX scores_board ON scores(category, level, player_id);
+    CREATE INDEX scores_daily ON scores(race_date, player_id) WHERE race_date IS NOT NULL;
+    INSERT INTO players (name, token_hash, created_at) VALUES ('Veteran', '${hashToken("f".repeat(64))}', 1);
+    INSERT INTO scores (player_id, category, level, ticks, ops, value, seed, created_at, verified, size, sx, sy, code, race_date, period) VALUES
+      (1, 'maze', 1, 23919, 400, NULL, NULL, 1, 1, 12, 0, 0, 'm', NULL, '2026-W47'),
+      (1, 'maze', 2, 1, 2, NULL, 424242, 1, 1, 12, 0, 0, 'p', NULL, NULL),
+      (1, 'daily', 1, 900, 9, NULL, 77, 1, 1, 8, 0, 0, 'd', '2026-11-22', NULL),
+      (1, 'dino', NULL, 3000, 50, 192, 4188, 1, 1, 12, 6, 6, 'b', NULL, NULL);
+    INSERT INTO settings (key, value) VALUES ('secret', '${"ab".repeat(32)}');
   `);
-  const insert = "INSERT INTO scores (player_id, category, level, ticks, ops, value, seed, created_at, verified, size, sx, sy, code) VALUES (1, ?, ?, ?, 9, ?, 3, 1, 1, 8, 0, 0, 'c')";
-  old.prepare(insert).run("maze", 1, 900, null);
-  old.prepare(insert).run("dino", null, 900, 48);
   old.close();
-  for (let open = 0; open < 2; open++) {
-    const db = await openDb(file);
+  const dump = (db) => ({
+    scores: db.prepare("SELECT * FROM scores ORDER BY id").all().map((r) => ({ ...r })),
+    settings: db.prepare("SELECT * FROM settings").all().map((r) => ({ ...r })),
+    schema: db.prepare("SELECT type, name, sql FROM sqlite_master ORDER BY name").all().map((r) => ({ ...r })).filter((r) => /scores|settings/.test(r.name)),
+  });
+  const before = (() => {
+    const raw = new DatabaseSync(file);
     try {
-      assert.equal(db.raw.prepare("PRAGMA table_info(scores)").all().filter((c) => c.name === "race_date").length, 1);
-      assert.deepEqual(db.leaderboard("maze", 1).map((r) => r.ticks), [900 - open]);
-      assert.deepEqual(db.leaderboard("dino", null).map((r) => r.value), [48]);
-      db.addScore(1, { category: "daily", level: 1, ticks: 500 - open, ops: 9, value: null, seed: 3, size: 8, sx: 0, sy: 0, code: "c", verified: true, date: RACE_DAY });
-      assert.deepEqual(db.dailyBoard(RACE_DAY).map((r) => [r.rank, r.name, r.ticks]), [[1, "Old", 500 - open]]);
-      assert.equal(db.dailyEntry(NEXT_DAY, 1), null);
-      if (!open) db.raw.prepare(insert).run("maze", 1, 899, null); // the old server's INSERT
+      return dump(raw);
     } finally {
-      db.close();
+      raw.close();
     }
+  })();
+  assert.equal(before.scores.length, 4);
+  const sub = await startServer({ port: 0, host: "127.0.0.1", dbPath: file, distDir: null, verifier: stubVerifier() });
+  try {
+    const token = "f".repeat(64);
+    assert.equal((await call("GET", "/api/players/me", { token, at: sub.url })).json.name, "Veteran", "players and their tokens carry on");
+    for (const q of ["category=maze&level=1", "category=maze&level=2", "category=dino"]) {
+      assert.equal((await call("GET", `/api/leaderboard?${q}`, { at: sub.url })).status, 400, q);
+    }
+    assert.equal((await call("GET", "/api/daily", { token, at: sub.url })).status, 404);
+    assert.equal((await call("POST", "/api/scores", { body: { category: "maze", level: 1, code: "x" }, token, at: sub.url })).status, 400);
+    const texts = [];
+    for (const path of ["/api/players/me", "/api/players/me/history", "/api/challenges", "/api/health"]) texts.push((await call("GET", path, { token, at: sub.url })).text);
+    for (const text of texts) assert.ok(!text.includes("ab".repeat(32)) && !text.includes("23919") && !text.includes("424242"), text);
+    // The arena still works on the old file.
+    assert.equal((await call("POST", "/api/challenges", { body: { goal: "hay500", seed: 1, code: stubCode(50_000, 300) }, token, at: sub.url })).status, 201);
+    assert.deepEqual(dump(sub.db.raw), before, "every old row, the secret and the old schema are untouched");
+  } finally {
+    await sub.close();
   }
 });
 

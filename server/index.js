@@ -6,16 +6,13 @@
 // (default server/data/farmer-online.db), FARMER_DIST (default dist/),
 // TRUST_PROXY=1 (rate-limit by X-Forwarded-For), RATE_LIMIT (write requests /
 // min per player token, or per IP without one; 60), VERIFY_TIMEOUT_MS
-// (wall-clock limit of one replay, 10000), VERIFY_WORKERS (replays at once, 2),
-// FARMER_SECRET (what the hidden maze seeds come from; default: a random one
-// made once and kept in the DB).
+// (wall-clock limit of one replay, 10000), VERIFY_WORKERS (replays at once, 2).
 // Deploying it (systemd + Apache): server/README.md.
 import { createServer } from "node:http";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { openDb } from "./db.js";
 import { createApp } from "./app.js";
-import { checkSecret } from "./mazeBenchmark.js";
 import { createVerifier } from "./verifier.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -25,13 +22,11 @@ export const DEFAULT_HOST = "127.0.0.1";
 export const DEFAULT_DB = resolve(here, "data", "farmer-online.db");
 export const DEFAULT_DIST = resolve(here, "..", "dist");
 
-/** startServer({ port, host, dbPath, distDir, rateLimit, trustProxy, verify, verifier, secret, now })
+/** startServer({ port, host, dbPath, distDir, rateLimit, trustProxy, verify, verifier, now })
  *  → { server, db, verifier, url, close() }
  *  verify: createVerifier() options ({ timeoutMs, maxConcurrent, maxQueue }),
  *  or pass a ready `verifier` (it is then not closed by close()).
- *  secret: instead of the one kept in the DB.
- *  now: the clock of the stored timestamps, the challenge expiry, the daily
- *  race date and the benchmark week (tests). */
+ *  now: the clock of the stored timestamps and the challenge expiry (tests). */
 export async function startServer({
   port = DEFAULT_PORT,
   host = DEFAULT_HOST,
@@ -41,13 +36,11 @@ export async function startServer({
   trustProxy = false,
   verify = {},
   verifier: given = null,
-  secret,
   now = Date.now,
 } = {}) {
-  if (secret !== undefined) checkSecret(secret);
   const db = await openDb(dbPath, { now });
   const verifier = given ?? createVerifier(verify);
-  const server = createServer(createApp({ db, distDir, rateLimit, trustProxy, verifier, secret: secret ?? db.secret(), now }));
+  const server = createServer(createApp({ db, distDir, rateLimit, trustProxy, verifier }));
   await new Promise((ok, fail) => {
     server.once("error", fail);
     server.listen(port, host, ok);
@@ -76,7 +69,6 @@ if (isMain) {
     distDir: env.FARMER_DIST ? resolve(env.FARMER_DIST) : DEFAULT_DIST,
     rateLimit: { max: env.RATE_LIMIT ? Number(env.RATE_LIMIT) : 60, windowMs: 60_000 },
     trustProxy: env.TRUST_PROXY === "1",
-    secret: env.FARMER_SECRET || undefined,
     verify: {
       ...(env.VERIFY_TIMEOUT_MS ? { timeoutMs: Number(env.VERIFY_TIMEOUT_MS) } : {}),
       ...(env.VERIFY_WORKERS ? { maxConcurrent: Number(env.VERIFY_WORKERS) } : {}),
