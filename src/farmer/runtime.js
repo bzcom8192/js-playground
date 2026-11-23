@@ -24,8 +24,6 @@
 //    timeline is its own tick count (get_tick_count) plus the spawner's clock
 //    when it was spawned, so with one drone it is exactly drone 0's ticks.
 //  - program size of the main file (non-empty lines, characters).
-// Maze records use the counters at the maze spawn vs at the treasure harvest
-// (both inside the same run; see worldEvent).
 //
 // Contracts (v3 phase 2): the run clock also drives the save's farm clock
 // (state.clock): whenever the run clock grows, the farm clock grows by the
@@ -133,7 +131,6 @@ export function errorLine(err) {
  *  onLog(entry) → { kind: "print"|"warn"|"error"|"info"|"clear", text }
  *  onStatus(status, info) → "running" | "done" | "stopped" | "error"
  *  onDroneError(info) → one drone's program failed (Megafarm: others keep going)
- *  onRecord(ev) → a new local best maze / dino record (v4 Online auto-submit)
  */
 export function createRuntime(opts) {
   const {
@@ -148,35 +145,18 @@ export function createRuntime(opts) {
     now = defaultNow,
     yieldFn = defaultYield,
     rng = Math.random,
-    // Wall clock for record timestamps.
+    // Wall clock: today's date for the daily contracts.
     wallClock = Date.now,
     // Today's local date "YYYY-MM-DD" (which daily contracts are current).
     today = () => C.localDate(new Date(wallClock())),
     // Arena (v3 phase 3): the match goal { item, amount } that get_arena_goal()
     // returns. An arena run has no daily contracts (get_contracts() is [] and
-    // deliver_contract() fails), so its Gold/Bone can't depend on the date.
+    // deliver_contract() fails), so its rewards can't depend on the date.
     arenaGoal = null,
     // Arena: a seeded replacement for Math.random inside the program (the
     // program gets its own frozen `Math` whose random() is this function).
     mathRandom = null,
-    // v4 Online: a run just set a new LOCAL best → onRecord({ kind: "maze", attempt })
-    // or onRecord({ kind: "dino", rec }), both with `code`, the program as it ran.
-    // Display/network side effects only; it must not throw into the run (errors are swallowed).
-    onRecord = () => {},
-    // v4 phase 2 (server replay): time a maze that already exists when Run is
-    // pressed from the run start (normally such a maze is "not timed").
-    timeExistingMaze = false,
-    // Server maze benchmark: time every maze from the run start, also one the
-    // program grows itself (so nothing done before it exists is free).
-    timeFromRunStart = false,
   } = opts;
-  const notifyRecord = (ev) => {
-    try {
-      onRecord(ev);
-    } catch (e) {
-      void e;
-    }
-  };
 
   let current = null; // the current session
   let paused = false;
@@ -189,11 +169,9 @@ export function createRuntime(opts) {
     return {
       body, // transformed program source, compiled once per drone
       ownNames: topLevelNames(code), // top-level names the program declares itself (see LATER_NAMES)
-      code, // the source as run (v4: sent along with a maze record for replay)
       mapLine,
       program, // { lines, chars } of the main file
       ops: 0, // farmer API calls, all drones combined
-      maze: null, // { ref, ticks, ops } — counters when this run spawned the current maze
       clockMark: 0, // run clock already added to the farm clock (state.clock)
       ctxs: [],
       stopped: false,
@@ -291,65 +269,6 @@ export function createRuntime(opts) {
     for (const line of C.rolloverLines(C.ensureContracts(s, today()))) log("info", line);
   }
 
-  // A score-relevant world event during one of this run's actions.
-  function worldEvent(ctx, s, ev) {
-    const session = ctx.session;
-    if (ev.type === "mazeSpawn") {
-      session.maze = timeFromRunStart ? { ref: ev.maze, ticks: 0, ops: 0 } : { ref: ev.maze, ticks: runTicks(session), ops: session.ops };
-      log("info", `Maze seed: ${ev.seed}${ev.replay ? " (replay)" : ""}`);
-      return;
-    }
-    if (ev.type === "mazeSolve") {
-      const snap = session.maze && session.maze.ref === ev.maze ? session.maze : null;
-      session.maze = null;
-      const seed = ev.maze?.seed;
-      if (!snap || seed === null || seed === undefined) {
-        log("info", "🏁 Maze solved — not timed (it was spawned before this run)");
-        return;
-      }
-      const attempt = {
-        level: ev.level,
-        seed,
-        size: ev.size,
-        sx: ev.maze.start?.x ?? 0,
-        sy: ev.maze.start?.y ?? 0,
-        ticks: Math.round(runTicks(session) - snap.ticks),
-        ops: session.ops - snap.ops,
-        lines: session.program.lines,
-        chars: session.program.chars,
-        at: wallClock(),
-      };
-      const r = R.addMazeAttempt(s, attempt);
-      const fmt = (n) => n.toLocaleString("en-US");
-      let msg = `🏁 Maze solved in ${fmt(attempt.ticks)} ticks · ${fmt(attempt.ops)} ops`;
-      if (r.best) msg += ` — new best for Mazes level ${ev.level}!`;
-      log("info", msg);
-      if (r.best) notifyRecord({ kind: "maze", attempt, code: session.code });
-      return;
-    }
-    if (ev.type === "dinoHatch") {
-      log("info", `Dinosaur seed: ${ev.seed}${ev.replay ? " (replay)" : ""}`);
-      return;
-    }
-    if (ev.type === "dinoHarvest") {
-      const rec = {
-        bone: ev.bone,
-        level: ev.level,
-        cut: ev.cut,
-        seed: ev.seed,
-        size: ev.size,
-        sx: ev.start?.x ?? null,
-        sy: ev.start?.y ?? null,
-        at: wallClock(),
-      };
-      const r = R.addDinoHarvest(s, rec);
-      if (r.best) {
-        log("info", `🦴 New best dinosaur harvest: ${ev.bone.toLocaleString("en-US")} Bone (${ev.cut} cut)`);
-        notifyRecord({ kind: "dino", rec, code: session.code });
-      }
-    }
-  }
-
   // "Bot 2: " in front of errors from spawned bots (bot 0 logs without a prefix).
   const dronePrefix = (ctx) => (ctx.index > 0 ? `Bot ${ctx.index}: ` : "");
 
@@ -434,9 +353,7 @@ export function createRuntime(opts) {
         ctx.busy = true;
         try {
           const s = state();
-          const [raw, events] = W.withEvents(() => asDrone(s, () => fn(s, ...args)));
-          const res = report(name, raw);
-          for (const ev of events) worldEvent(ctx, s, ev);
+          const res = report(name, asDrone(s, () => fn(s, ...args)));
           addTicks(ctx, s, ticks);
           ctx.actions++;
           ctx.guardsSinceAction = 0;
@@ -541,11 +458,7 @@ export function createRuntime(opts) {
       spawn_drone: action("spawn_drone", spawnBot),
 
       // senses (need the Senses unlock)
-      // Apples are never harvestable (only the dinosaur eats them).
-      can_harvest: sense("can_harvest", (s) => {
-        const e = W.droneTile(s).entity;
-        return W.isGrown(e) && e.type !== "Apple";
-      }),
+      can_harvest: sense("can_harvest", (s) => W.isGrown(W.droneTile(s).entity)),
       get_entity_type: sense("get_entity_type", (s) => W.droneTile(s).entity?.type ?? null),
       get_ground_type: sense("get_ground_type", (s) => W.droneTile(s).ground),
       get_pos_x: sense("get_pos_x", (s) => s.drone.x),
@@ -559,7 +472,7 @@ export function createRuntime(opts) {
       }),
 
       // always available
-      // Open field: always true. In a maze: false into a Hedge or across the edge.
+      // Always true for a direction: nothing on the farm blocks the bot.
       can_move: sense("can_move", (s, dir) => !!DIR_DELTA[dir] && W.canMove(s, dir), false),
       get_world_size: sense("get_world_size", (s) => s.size, false),
       num_items: sense("num_items", (s, item) => s.items[item] ?? 0, false),
@@ -759,8 +672,6 @@ export function createRuntime(opts) {
     }
     const session = makeSession(body, mapLine, program ?? R.programSize(code), code);
     current = session;
-    const s0 = getState();
-    if (timeExistingMaze && s0?.maze) session.maze = { ref: s0.maze, ticks: 0, ops: 0 };
     const ctx = makeCtx(session, null);
     let compiled;
     try {

@@ -43,7 +43,7 @@ const GLOBALS_CACHE = new Map();
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 
 // Store room order: what grows, then what helps it grow, then what it buys.
-const INVENTORY = ["Hay", "Wood", "Carrot", "Pumpkin", "Cactus", "Rice", "Water", "Fertilizer", "Power", "Gold", "Bone"];
+const INVENTORY = ["Hay", "Wood", "Carrot", "Pumpkin", "Cactus", "Rice", "Water", "Fertilizer", "Power", "Gold"];
 // Rice shares Hay's 🌾 icon; a green-gold tint tells the two slots apart.
 const ITEM_TINT = { Rice: "hue-rotate(38deg) saturate(1.25)" };
 
@@ -399,7 +399,6 @@ export default function FarmerPage() {
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [toast, setToast] = useState(null);
-  const [seedDraft, setSeedDraft] = useState(""); // the Almanac's replay-seed box
 
   useEffect(() => {
     if (!toast) return;
@@ -703,7 +702,7 @@ export default function FarmerPage() {
   const recordsWindow = windows.records?.open && (
     <FloatingWindow key="records" title="Almanac" rect={windows.records} {...windowProps("records")} bodyClass="bg-[#fdf6ea] flex flex-col" mobileBodyClass="h-[28rem]">
       <div className="flex-1 overflow-y-auto min-h-0 bg-stone-50">
-        <RecordsPanel game={game} stats={view.stats} seedDraft={seedDraft} onSeedDraft={setSeedDraft} onSetSeed={engine.setPendingSeed} onSetDinoSeed={engine.setPendingDinoSeed} />
+        <RecordsPanel game={game} stats={view.stats} />
       </div>
     </FloatingWindow>
   );
@@ -755,7 +754,7 @@ export default function FarmerPage() {
   const tabs = [
     ["info", "Field Guide", "How everything works, program output, files, weather"],
     ["unlocks", "Workshop", `Upgrades${affordable ? ` (${affordable} within reach)` : ""}`, affordable],
-    ["records", "Almanac", "Your best maze and dinosaur runs, attempts, replay seed"],
+    ["records", "Almanac", "This run's ticks and ops, contract totals"],
     ["contracts", "Contracts", `Today's orders${deliverable ? ` (${deliverable} ready to deliver)` : ""}`, deliverable],
     ["arena", "Arena", "Race a program against a rival (ELO rating)"],
     ["online", "Online", "Your online identity, friend challenges and match history"],

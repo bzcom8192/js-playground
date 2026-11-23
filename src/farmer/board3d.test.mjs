@@ -395,85 +395,25 @@ test("shadow map is redrawn only when a shadow caster changes", () => {
   fs.dispose();
 });
 
-// ---------- set pieces (BRIEF21) ----------
+// ---------- BRIEF22: the set pieces are gone ----------
 
-test("set pieces are smooth, indexed and shared, like the crops", () => {
+test("no hedge, chest, apple or dinosaur models are left; a stray old tile type builds nothing and hides no ground", () => {
   const kit = createModelKit();
-  const meshOf = (obj) => {
-    let mesh;
-    obj.traverse((o) => o.isMesh && (mesh = o));
-    return mesh;
-  };
-  const build = {
-    Hedge: () => kit.buildEntity({ type: "Hedge", progress: 1 }, 1),
-    Treasure: () => kit.buildEntity({ type: "Treasure", progress: 1 }, 0),
-    Apple: () => kit.buildEntity({ type: "Apple", progress: 1 }, 2),
-    ...Object.fromEntries(["head", "body", "legs", "tail"].map((p) => [p, () => kit.buildDinoSegment(p)])),
-  };
-  for (const [name, make] of Object.entries(build)) {
-    const m = meshOf(make());
-    assert.ok(m.geometry.index, `${name} shares vertices`);
-    assert.ok(!m.material.flatShading, `${name} is smooth-shaded`);
-    assert.equal(m.geometry, meshOf(make()).geometry, `${name}: one geometry, not one per tile`);
-    const count = m.geometry.attributes.position.count;
-    assert.ok(m.geometry.index.array.every((i) => i < count), `${name} index`);
-    for (const attr of ["position", "normal", "color"]) {
-      assert.equal(m.geometry.attributes[attr].count, count, `${name} ${attr}`);
-      assert.ok(m.geometry.attributes[attr].array.every(Number.isFinite), `${name} ${attr} is finite`);
-    }
-    assert.ok(m.geometry.boundingBox.min.y > -0.08 && m.geometry.boundingBox.min.y < 0.2, `${name} stands on the ground`);
-  }
-  // The joints: every bridge ends inside the segment ahead, past its rump.
-  const body = meshOf(build.body()).geometry.boundingBox;
-  for (const p of ["body", "legs", "tail"]) assert.ok(meshOf(build[p]()).geometry.boundingBox.max.z > 1 + body.min.z + 0.1, `${p} reaches into the next segment`);
+  for (const type of ["Hedge", "Treasure", "Apple", "Dinosaur"]) assert.equal(kit.buildEntity({ type, progress: 1 }, 0), null, type);
+  assert.equal(kit.buildDinoSegment, undefined);
+  assert.equal(kit.setDinoPart, undefined);
   kit.dispose();
-});
-
-test("set piece budget: 12×12 of hedges or of one dinosaur < 300k triangles, a 12×12 maze < 180k", () => {
-  const count = (game) => {
-    const fs = new FarmScene();
-    fs.sync(game);
-    fs.update(1 / 60);
-    const tris = countTriangles(fs.scene);
-    fs.dispose();
-    return tris;
-  };
-  const hedges = count(farm12("Hedge"));
-  assert.ok(hedges < 300_000, `hedges: ${hedges}`);
-  const dino = farm12("Grass");
-  const body = Array.from({ length: 144 }, (_, i) => ({ x: Math.floor(i / 12) % 2 ? 11 - (i % 12) : i % 12, y: Math.floor(i / 12) }));
-  dino.dino = { body, dir: "West" };
-  for (const t of dino.tiles) t.entity = { type: "Dinosaur", progress: 1 };
-  const all = count(dino);
-  assert.ok(all < 300_000, `dinosaur: ${all}`);
-  const maze = farm12();
-  W.spawnMaze(maze, () => 0.5);
-  const m = count(maze);
-  assert.ok(m < 180_000, `maze: ${m}`);
-});
-
-test("a hedge hides the ground tile under it, but not while it pops in or after it is gone", () => {
+  // A hand-made state with an old entity on a tile (a save never loads one): nothing drawn, the ground stays.
   const game = W.createGame();
   game.size = 2;
   game.tiles = Array.from({ length: 4 }, W.newTile);
-  const fs = new FarmScene();
-  const frames = (n) => {
-    for (let i = 0; i < n; i++) {
-      fs.sync(game);
-      fs.update(1 / 60);
-    }
-  };
-  frames(2);
-  const tile = fs.tiles[1].tile;
-  assert.equal(tile.visible, true);
   game.tiles[1].entity = { type: "Hedge", progress: 1 };
-  frames(2);
-  assert.equal(tile.visible, true, "still growing in");
-  frames(60);
-  assert.equal(tile.visible, false);
-  assert.ok(fs.tiles.every((r) => r.tile === tile || r.tile.visible), "only under the hedge");
-  game.tiles[1].entity = null;
-  frames(1);
-  assert.equal(tile.visible, true, "bare ground again at once");
+  const fs = new FarmScene();
+  for (let i = 0; i < 60; i++) {
+    fs.sync(game);
+    fs.update(1 / 60);
+  }
+  assert.ok(fs.tiles.every((r) => r.tile.visible));
+  assert.equal(fs.tiles[1].model, null);
   fs.dispose();
 });

@@ -2,7 +2,7 @@
 //
 // A contract is a delivery order: "deliver N of item X within T ticks → earn a
 // bonus". Every day brings CONTRACTS_PER_DAY of them, generated from a DAILY
-// seed (a hash of the local date "YYYY-MM-DD") with mulberry32 from maze.js, so
+// seed (a hash of the local date "YYYY-MM-DD") with mulberry32 from rng.js, so
 // every player with the same unlocks and farm size gets exactly the same
 // contracts on the same day, on any machine. Nothing is random per player.
 //
@@ -27,7 +27,7 @@
 //   budget = ceil1000(BUDGET_BASE + amount × TICKS_PER_UNIT × (tier + 1))
 //   deadlineTick = clock at generation + budget
 
-import { mulberry32 } from "./maze.js";
+import { mulberry32 } from "./rng.js";
 import { canRecord, addContractDone } from "./records.js";
 
 export const CONTRACTS_PER_DAY = 3;
@@ -36,27 +36,27 @@ export const MIN_AMOUNT = 5;
 export const BUDGET_BASE = 20_000;
 export const TICKS_PER_UNIT = 400;
 export const STATUSES = ["active", "done", "expired"];
-export const REWARD_ITEMS = ["Gold", "Bone"];
+export const REWARD_ITEMS = ["Pumpkin", "Cactus"];
 
 /**
  * Contract item table, lowest tier first.
  *  needs:   the unlock that lets you produce it (null = always: Hay / Wood).
  *  perTile: amount per farm tile (before jitter).
  *  reward / value: the reward item and one unit's worth in it (× BONUS_FACTOR).
- * Gold is the contract currency; Gold and Bone contracts (top tiers) pay Bone.
+ * Pumpkin is the contract currency; the top tier (Cactus) pays Cactus, the
+ * highest crop there is (Expand 9, the Cactus levels, the Bot Crew).
+ * BRIEF22: until then the currency was Gold and the top tiers (Gold and Bone
+ * contracts) paid Bone. The values are the old Gold ones at this table's own
+ * rates (1 Gold = 4 Pumpkin = 2 Cactus), so every reward is worth what it was.
  */
 export const CONTRACT_ITEMS = {
-  Hay: { tier: 0, needs: null, perTile: 4, reward: "Gold", value: 0.02 },
-  Wood: { tier: 0, needs: null, perTile: 3, reward: "Gold", value: 0.03 },
-  Carrot: { tier: 1, needs: "Carrots", perTile: 2, reward: "Gold", value: 0.1 },
-  Pumpkin: { tier: 2, needs: "Pumpkins", perTile: 2, reward: "Gold", value: 0.25 },
+  Hay: { tier: 0, needs: null, perTile: 4, reward: "Pumpkin", value: 0.08 },
+  Wood: { tier: 0, needs: null, perTile: 3, reward: "Pumpkin", value: 0.12 },
+  Carrot: { tier: 1, needs: "Carrots", perTile: 2, reward: "Pumpkin", value: 0.4 },
+  Pumpkin: { tier: 2, needs: "Pumpkins", perTile: 2, reward: "Pumpkin", value: 1 },
   // v3 phase 5: Rice sits between Pumpkin and Cactus (tier 2.5: budget ×3.5).
-  // Delivering must beat selling: 0.75 × 2 = 1.5 Gold per Rice, against the
-  // 1 Gold of trade(Items.Rice).
-  Rice: { tier: 2.5, needs: "Rice", perTile: 2, reward: "Gold", value: 0.75 },
-  Cactus: { tier: 3, needs: "Cactus", perTile: 2, reward: "Gold", value: 0.5 },
-  Gold: { tier: 4, needs: "Mazes", perTile: 1, reward: "Bone", value: 0.5 },
-  Bone: { tier: 5, needs: "Dinosaurs", perTile: 1, reward: "Bone", value: 1 },
+  Rice: { tier: 2.5, needs: "Rice", perTile: 2, reward: "Pumpkin", value: 3 },
+  Cactus: { tier: 3, needs: "Cactus", perTile: 2, reward: "Cactus", value: 1 },
 };
 const ITEMS = Object.keys(CONTRACT_ITEMS);
 
@@ -239,14 +239,18 @@ const nonNeg = (v) => {
   return Number.isFinite(n) && n >= 0 ? Math.floor(n) : null;
 };
 
+// The item decides the reward item. A contract saved before BRIEF22 paid Gold
+// or Bone: it now pays what its item pays (the reward a fresh one would have).
+// A contract for Gold or Bone itself is dropped (the day keeps its others).
 function cleanContract(c) {
   if (!c || typeof c !== "object" || typeof c.id !== "string" || !c.id || c.id.length > 40) return null;
-  if (!CONTRACT_ITEMS[c.item] || !REWARD_ITEMS.includes(c.rewardItem) || !STATUSES.includes(c.status)) return null;
+  if (!Object.hasOwn(CONTRACT_ITEMS, c.item) || !STATUSES.includes(c.status)) return null;
   const amount = nonNeg(c.amount);
-  const reward = nonNeg(c.reward);
+  const rewardItem = CONTRACT_ITEMS[c.item].reward;
+  const reward = c.rewardItem === rewardItem ? nonNeg(c.reward) : amount && contractReward(c.item, amount);
   const deadlineTick = nonNeg(c.deadlineTick);
   if (!amount || !reward || deadlineTick === null) return null;
-  return { id: c.id, item: c.item, amount, rewardItem: c.rewardItem, reward, deadlineTick, status: c.status };
+  return { id: c.id, item: c.item, amount, rewardItem, reward, deadlineTick, status: c.status };
 }
 
 /** Clean contracts from a save → { date, contracts } or null (→ generated afresh). */

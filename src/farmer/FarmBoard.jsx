@@ -106,52 +106,7 @@ function Plant({ t, scale = 1, bottom = 0.14, z, children, className = "" }) {
 // Positions are relative to a t×t box whose bottom edge is the plant's base.
 const at = (t, x, b, extra = {}) => ({ left: t * x, bottom: t * b, ...extra });
 
-/** One dinosaur segment (2D): the head is 🦖 facing its way, body/tail are violet blobs. */
-function DinoSegment({ part, dir, t, z }) {
-  if (part === "head") {
-    // The emoji looks West; mirror it when heading East. North/South keep the side view.
-    const flip = dir === "East" ? "scaleX(-1)" : "none";
-    return (
-      <Plant t={t} z={z + 1} bottom={0.04}>
-        <span className="absolute rounded-full" style={{ ...at(t, 0.14, 0.02), width: t * 0.72, height: t * 0.2, background: "rgba(0,0,0,.18)", filter: "blur(2px)" }} />
-        <E size={t * 0.8} style={at(t, 0.1, 0.04, { transform: flip })}>🦖</E>
-      </Plant>
-    );
-  }
-  const tail = part === "tail";
-  const w = tail ? 0.46 : 0.66;
-  return (
-    <Plant t={t} z={z} bottom={0.06}>
-      <span
-        className="absolute rounded-[45%]"
-        style={{
-          ...at(t, (1 - w) / 2, 0.06),
-          width: t * w,
-          height: t * w * 0.72,
-          background: "radial-gradient(circle at 40% 30%, #b29ce0 0%, #8b6fc0 55%, #5a4390 100%)",
-          boxShadow: "inset 0 -3px 0 rgba(0,0,0,.2), 0 2px 3px rgba(0,0,0,.3)",
-        }}
-      />
-      {!tail &&
-        [0.38, 0.5, 0.62].map((x) => (
-          <span
-            key={x}
-            className="absolute"
-            style={{
-              ...at(t, x - 0.05, 0.06 + w * 0.68),
-              width: 0,
-              height: 0,
-              borderLeft: `${t * 0.05}px solid transparent`,
-              borderRight: `${t * 0.05}px solid transparent`,
-              borderBottom: `${t * 0.1}px solid #ff9d7a`,
-            }}
-          />
-        ))}
-    </Plant>
-  );
-}
-
-function Crop({ type, p, t, z, dinoPart, dinoDir }) {
+function Crop({ type, p, t, z }) {
   const grow = 0.3 + 0.7 * Math.min(1, p);
   switch (type) {
     case "Grass":
@@ -268,47 +223,16 @@ function Crop({ type, p, t, z, dinoPart, dinoDir }) {
           {p >= 1 && <span className="farmer-flower" style={{ ...at(t, 0.44, 0.7), width: t * 0.14, height: t * 0.14 }} />}
         </Plant>
       );
-    case "Hedge":
-      // Maze wall: a dark-green clipped hedge block filling the tile.
-      return (
-        <div
-          className="absolute pointer-events-none rounded-[3px]"
-          style={{
-            inset: -1,
-            bottom: t * 0.04,
-            zIndex: z,
-            background: "linear-gradient(180deg, #3c8078 0%, #2a5f5a 45%, #1d4743 100%)",
-            boxShadow: "inset 0 2px 0 rgba(170,225,205,.35), inset 0 -3px 0 rgba(0,0,0,.25), 0 3px 4px rgba(0,0,0,.3)",
-            transform: `translateY(${-t * 0.12}px)`,
-          }}
-          title="Hedge"
-        />
-      );
-    case "Treasure":
-      return (
-        <Plant t={t} z={z} bottom={0.08}>
-          <span className="absolute rounded-full" style={{ ...at(t, 0.12, 0.02), width: t * 0.76, height: t * 0.76, background: "radial-gradient(circle, rgba(255,215,90,.75), rgba(255,215,90,0) 70%)" }} />
-          <E size={t * 0.62} style={at(t, 0.19, 0.06)}>💰</E>
-        </Plant>
-      );
-    case "Dinosaur":
-      return <DinoSegment part={dinoPart || "body"} dir={dinoDir} t={t} z={z} />;
-    case "Apple":
-      return (
-        <Plant t={t} z={z} bottom={0.1}>
-          <E size={t * 0.46} style={at(t, 0.27, 0.02)}>🍎</E>
-        </Plant>
-      );
     default:
       return null;
   }
 }
 
-const Tile = memo(function Tile({ ground, type, p, water, t, z, hideCrop, dinoPart, dinoDir }) {
+const Tile = memo(function Tile({ ground, type, p, water, t, z, hideCrop }) {
   return (
     <div className={`relative farm-tile ${ground === "Soil" ? "farm-soil" : "farm-grass"}`}>
       {water > 0 && <div className="absolute inset-0 farm-water pointer-events-none" style={{ opacity: Math.min(0.9, 0.25 + water * 0.9) }} />}
-      {type && !hideCrop && <Crop type={type} p={p} t={t} z={z} dinoPart={dinoPart} dinoDir={dinoDir} />}
+      {type && !hideCrop && <Crop type={type} p={p} t={t} z={z} />}
     </div>
   );
 });
@@ -387,12 +311,6 @@ export default function FarmBoard({ game, moveMs, paused, status }) {
 
   const giants = findGiantPumpkins(game);
   const hidden = new Set(giants.flatMap((g) => g.cells));
-  // Dinosaur segments by tile: "head" | "body" | "tail".
-  const dinoParts = new Map();
-  const body = game.dino?.body ?? [];
-  body.forEach((seg, i) => {
-    dinoParts.set(seg.y * n + seg.x, i === 0 ? "head" : i === body.length - 1 ? "tail" : "body");
-  });
 
   const tiles = [];
   for (let row = n - 1; row >= 0; row--) {
@@ -411,8 +329,6 @@ export default function FarmBoard({ game, moveMs, paused, status }) {
           t={t}
           z={fromTop * 2 + 1}
           hideCrop={hidden.has(k)}
-          dinoPart={dinoParts.get(k)}
-          dinoDir={dinoParts.get(k) === "head" ? game.dino.dir : undefined}
         />,
       );
     }

@@ -10,7 +10,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { GOALS, GOAL_IDS, TICK_CAP } from "./arena.js";
 import { playSolo } from "./arenaClient.js";
 import { ITEM_ICONS } from "./constants.js";
-import { randomSeed } from "./maze.js";
+import { randomSeed } from "./rng.js";
 import { buildProgram } from "./program.js";
 import { TEAL } from "./farmerUi.jsx";
 import { CODE_MAX, NAME_MAX } from "./onlineRules.js";

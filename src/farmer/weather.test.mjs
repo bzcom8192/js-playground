@@ -286,15 +286,11 @@ test("Storm: seeded lightning strikes destroy a few crops at seeded moments (gro
   assert.deepEqual(v.tiles.map((t) => t.entity?.type ?? null), types());
 });
 
-test("Storm: no crops → nothing struck, no event; inside a maze nothing is struck", () => {
+test("Storm: no crops → nothing struck, no event", () => {
   const seed = seedWith("Storm");
   const s = farm(3, seed, { crops: null, ground: "Grassland" });
   const events = run(s, SEGMENT_TICKS / TPS - 0.1);
   assert.deepEqual(events.filter((e) => e.type === "strike"), []);
-  const m = farm(3, seed, { crops: "Tree" });
-  m.maze = { treasure: { x: 2, y: 2 }, seed: 1, start: null };
-  assert.deepEqual(run(m, SEGMENT_TICKS / TPS - 0.1).filter((e) => e.type === "strike"), []);
-  assert.ok(m.tiles.every((t) => t.entity?.type === "Tree"));
 });
 
 // ---------- API ----------

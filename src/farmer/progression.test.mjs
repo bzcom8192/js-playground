@@ -1,6 +1,7 @@
 // The progression curve (BRIEF21 item 3): the whole price list, what must not move
 // with it (order, requirements, level counts, tick counting), and that the curve
-// holds together. The old → new table is in RESULT21.md.
+// holds together. The old → new table is in RESULT21.md. BRIEF22 removed Mazes
+// and Dinosaurs and re-chained / re-priced Megafarm (RESULT22.md).
 // Run with: npm run test:farmer
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -8,7 +9,7 @@ import * as C from "./constants.js";
 import * as W from "./world.js";
 import { BONUS_FACTOR, CONTRACT_ITEMS } from "./contracts.js";
 import { EXAMPLES } from "./examples.js";
-import { mulberry32 } from "./maze.js";
+import { mulberry32 } from "./rng.js";
 import { ACTION_TICKS, FLIP_TICKS, SENSE_TICKS, createRuntime } from "./runtime.js";
 
 const costs = (id) => Array.from({ length: C.UNLOCK_BY_ID[id].maxLevel }, (_, l) => C.UNLOCK_BY_ID[id].cost(l));
@@ -38,25 +39,18 @@ test("price list: every level of every upgrade", () => {
     Fertilizer: [{ Pumpkin: 180 }],
     Rice: [{ Pumpkin: 1800, Carrot: 800 }, { Pumpkin: 4200, Gold: 260 }],
     Cactus: [{ Pumpkin: 320 }, { Pumpkin: 900, Cactus: 160 }, { Pumpkin: 2600, Cactus: 700 }],
-    Mazes: [{ Cactus: 2400, Pumpkin: 3000 }, { Cactus: 6500, Gold: 500 }, { Cactus: 16000, Gold: 1800 }],
-    Dinosaurs: [{ Gold: 1100, Cactus: 7000 }, { Gold: 2600, Bone: 650 }, { Gold: 7500, Bone: 2400 }],
-    Megafarm: [{ Bone: 1400, Gold: 2400 }],
+    Megafarm: [{ Pumpkin: 40000, Cactus: 30000 }],
   });
 });
 
-test("the retune moved numbers only: order, requirements, level counts, farm sizes and tick costs are as before", () => {
+test("the retune moved numbers only: order, requirements, level counts, farm sizes and tick costs are as before (BRIEF22: minus Mazes / Dinosaurs)", () => {
   assert.deepEqual(
     C.UNLOCKS.map((u) => `${u.id}:${u.requires}:${u.maxLevel}`),
     ["Speed:null:5", "Expand:null:9", "Plant:null:1", "Senses:null:1", "Grass:Plant:5", "Carrots:Plant:5", "Trees:Carrots:5", "Watering:Carrots:3", "Pumpkins:Carrots:5",
-      "Sunflowers:Pumpkins:1", "Fertilizer:Pumpkins:1", "Rice:Pumpkins:2", "Cactus:Pumpkins:3", "Mazes:Cactus:3", "Dinosaurs:Mazes:3", "Megafarm:Dinosaurs:1"],
+      "Sunflowers:Pumpkins:1", "Fertilizer:Pumpkins:1", "Rice:Pumpkins:2", "Cactus:Pumpkins:3", "Megafarm:Cactus:1"],
   );
   assert.deepEqual(C.WORLD_SIZES, [1, 2, 3, 4, 5, 6, 7, 8, 10, 12]);
   assert.deepEqual([ACTION_TICKS, FLIP_TICKS, SENSE_TICKS], [200, 600, 1]);
-  // What the dino benchmark depends on has not moved either.
-  assert.deepEqual([C.DINO_STEP_SECONDS, C.APPLE_SPAWN_SECONDS, C.appleCap(12)], [0.3, 1.5, 9]);
-  const s = W.createGame();
-  s.unlocks.Dinosaurs = 3;
-  assert.equal(W.boneFor(s, 8), 192, "segments² × level");
 });
 
 test("curve: every level costs more than the last and no level pays less; every price can be earned by then", () => {
@@ -66,16 +60,16 @@ test("curve: every level costs more than the last and no level pays less; every 
       for (const [item, n] of Object.entries(list[l])) if (item in list[l - 1]) assert.ok(n > list[l - 1][item], `${u.id} ${l + 1}: ${item}`);
     }
   }
-  for (const t of [C.HAY_YIELD, C.BUSH_YIELD, C.TREE_YIELD, C.CARROT_YIELD, C.PUMPKIN_FACTOR, C.CACTUS_FACTOR, C.MAZE_GOLD_PER_TILE, C.RICE_YIELD]) {
+  for (const t of [C.HAY_YIELD, C.BUSH_YIELD, C.TREE_YIELD, C.CARROT_YIELD, C.PUMPKIN_FACTOR, C.CACTUS_FACTOR, C.RICE_YIELD]) {
     for (let l = 1; l < t.length; l++) assert.ok(t[l] >= t[l - 1], String(t));
     assert.ok(t.at(-1) > t[1]);
     assert.deepEqual([C.byLevel(t, -1), C.byLevel(t, 99)], [t[0], t.at(-1)]);
   }
-  for (const [table, id] of [[C.HAY_YIELD, "Grass"], [C.TREE_YIELD, "Trees"], [C.CARROT_YIELD, "Carrots"], [C.PUMPKIN_FACTOR, "Pumpkins"], [C.CACTUS_FACTOR, "Cactus"], [C.MAZE_GOLD_PER_TILE, "Mazes"], [C.RICE_YIELD, "Rice"]]) {
+  for (const [table, id] of [[C.HAY_YIELD, "Grass"], [C.TREE_YIELD, "Trees"], [C.CARROT_YIELD, "Carrots"], [C.PUMPKIN_FACTOR, "Pumpkins"], [C.CACTUS_FACTOR, "Cactus"], [C.RICE_YIELD, "Rice"]]) {
     assert.equal(table.length, C.UNLOCK_BY_ID[id].maxLevel + 1, id);
   }
   // Level 1 of an upgrade is paid in what its requirements (and no later upgrade) give.
-  const makes = { Hay: null, Wood: "Plant", Carrot: "Carrots", Pumpkin: "Pumpkins", Cactus: "Cactus", Gold: "Mazes", Bone: "Dinosaurs" };
+  const makes = { Hay: null, Wood: "Plant", Carrot: "Carrots", Pumpkin: "Pumpkins", Cactus: "Cactus", Gold: "Rice" };
   const needs = (id, seen = new Set()) => {
     for (let r = C.UNLOCK_BY_ID[id].requires; r; r = C.UNLOCK_BY_ID[r].requires) seen.add(r);
     return seen;
@@ -91,10 +85,11 @@ test("economy: seeds pay back, buying beats nothing for free, contracts beat the
   // The smallest fused block pays more pumpkins than it took, and a sorted 3×3 bench more cacti than pumpkins.
   assert.ok(8 * C.PUMPKIN_FACTOR[1] > 4 && 81 * C.CACTUS_FACTOR[1] > 9 * C.ENTITY_INFO.Cactus.cost.Pumpkin);
   assert.ok(C.RICE_YIELD[1] * C.RICE_GOLD > C.ENTITY_INFO.Rice.cost.Carrot / 2);
-  // One treasure of the smallest farm that can hold a maze of more than one cell pays for its Fertilizer and grows an egg soon.
-  assert.ok(64 * C.MAZE_GOLD_PER_TILE[1] >= 5 * C.ENTITY_INFO.Dinosaur.cost.Gold);
   assert.equal(BONUS_FACTOR, 2);
-  assert.ok(CONTRACT_ITEMS.Rice.value * BONUS_FACTOR > C.RICE_GOLD);
+  // A rice contract pays more (in Pumpkins, 4 to the Gold at the table's own rates) than selling it.
+  assert.ok((CONTRACT_ITEMS.Rice.value * BONUS_FACTOR) / 4 > C.RICE_GOLD);
+  // Gold is still made (selling Rice) and still spent (Flooded Paddy level 2), so it stays.
+  assert.deepEqual([W.TRADES.Rice.gives, C.UNLOCK_BY_ID.Rice.cost(1).Gold], [{ Gold: C.RICE_GOLD }, 260]);
 });
 
 /** Run `code` on `s` in virtual time until `done()` → seconds of farm time. */

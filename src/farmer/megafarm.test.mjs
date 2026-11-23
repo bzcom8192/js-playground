@@ -120,14 +120,14 @@ const positions = (s) => s.drones.map((d) => [d.x, d.y]);
 
 // ---------- unlock & content ----------
 
-test("Megafarm is a real unlock after Dinosaurs; no future unlocks; API declared", () => {
+test("Megafarm is a real unlock after Cactus (BRIEF22); no future unlocks; API declared", () => {
   const ids = UNLOCKS.map((u) => u.id);
-  assert.equal(ids.indexOf("Megafarm"), ids.indexOf("Dinosaurs") + 1);
+  assert.equal(ids.indexOf("Megafarm"), ids.indexOf("Cactus") + 1);
   assert.equal(ids[ids.length - 1], "Megafarm");
   const u = UNLOCK_BY_ID.Megafarm;
-  assert.equal(u.requires, "Dinosaurs");
+  assert.equal(u.requires, "Cactus");
   assert.equal(u.maxLevel, 1);
-  assert.deepEqual(u.cost(0), { Bone: 1400, Gold: 2400 });
+  assert.deepEqual(u.cost(0), { Pumpkin: 40000, Cactus: 30000 });
   assert.equal(Unlocks.Megafarm, "Megafarm");
   assert.deepEqual(FUTURE_UNLOCKS, []);
   for (const n of ["spawn_bot", "spin_in_place", "spawn_drone", "do_a_flip"]) assert.ok(ACTIONS.includes(n), `${n} is auto-awaited`);
@@ -137,15 +137,15 @@ test("Megafarm is a real unlock after Dinosaurs; no future unlocks; API declared
   }
   assert.match(FARMER_LIB, /Megafarm: "Megafarm";/);
 
-  // Buying it: needs Dinosaurs, then Bone + Gold.
+  // Buying it: needs Cactus, then Pumpkin + Cactus.
   const s = W.createGame();
-  s.items.Bone = 1400;
-  s.items.Gold = 2400;
-  assert.equal(W.buyUnlock(s, "Megafarm").locked, "Dinosaurs");
-  s.unlocks.Dinosaurs = 1;
+  s.items.Pumpkin = 40000;
+  s.items.Cactus = 30000;
+  assert.equal(W.buyUnlock(s, "Megafarm").locked, "Cactus");
+  s.unlocks.Cactus = 1;
   assert.equal(W.buyUnlock(s, "Megafarm").ok, true);
-  assert.equal(s.items.Bone, 0);
-  assert.equal(s.items.Gold, 0);
+  assert.equal(s.items.Pumpkin, 0);
+  assert.equal(s.items.Cactus, 0);
   assert.equal(W.buyUnlock(s, "Megafarm").ok, false, "max level 1");
 });
 
@@ -442,88 +442,27 @@ test("spawn_drone() outside a running program fails cleanly", async () => {
   assert.ok(h.warns().some((w) => w === "spawn_drone(): only works inside a running program"), h.warns().join("\n"));
 });
 
-test("drones act on their own tile: maze measure() and dinosaur harvest per drone", async () => {
-  // Maze: each drone measures the treasure direction from where IT is.
-  const s = mega(7, { Mazes: 1, Fertilizer: 1 });
-  s.drone.x = 3;
-  s.drone.y = 3;
-  s.tiles[W.idx(s, 3, 3)].entity = { type: "Bush", progress: 1 };
-  s.items.Fertilizer = 1;
-  // An idle helper standing where a hedge will appear is lifted onto the start tile.
-  s.drones.push(W.newDrone(0, 1));
-  const h = harness(s);
+test("drones act on their own tile: each one's measure() reads the cactus under it", async () => {
+  const s = mega(5, { Cactus: 1 });
+  for (let x = 0; x < 5; x++) for (let y = 0; y < 5; y++) s.tiles[W.idx(s, x, y)].entity = { type: "Cactus", progress: 1, size: (x + 2 * y) % 10 };
+  const h = harness(s, { seed: 9 });
   h.run(`
-use_item(Items.Fertilizer);
-print("maze", num_drones());
-`);
-  // Run() dismisses idle helpers first, so this checks the plain single-drone maze;
-  // then the hedge rule directly:
-  await h.runFor(2000);
-  assert.deepEqual(h.prints(), ["maze 1"]);
-  assert.ok(s.maze);
-  W.clearFarm(s);
-  s.drone.x = 3;
-  s.drone.y = 3;
-  s.tiles[W.idx(s, 3, 3)].entity = { type: "Bush", progress: 1 };
-  s.items.Fertilizer = 1;
-  s.drones.push(W.newDrone(0, 1)); // (0,1): odd/even parity vs (3,3) → a wall tile
-  W.useItem(s, "Fertilizer", 1, seeded(3));
-  assert.ok(s.maze);
-  assert.deepEqual(positions(s), [[3, 3], [3, 3]], "a helper on a hedge joins the maze start");
-  W.resetDrones(s);
-
-  const h2 = harness(s, { seed: 9 });
-  h2.run(`
 const me = num_drones() === 1 ? 0 : 1;
 if (me === 0) spawn_drone();
-// Each drone walks a different way, then reports what measure() says from there.
-for (let i = 0; i < 6; i++) {
-  if (can_move(me === 0 ? North : South)) move(me === 0 ? North : South);
-  else if (can_move(me === 0 ? East : West)) move(me === 0 ? East : West);
-}
-print(me, get_pos_x(), get_pos_y(), measure());
+for (let i = 0; i < 3; i++) move(me === 0 ? North : East);
+print(me, get_pos_x(), get_pos_y(), measure(), measure(East));
 `);
-  await h2.runFor(20_000);
-  assert.equal(h2.finished(), "done");
-  const t = s.maze.treasure;
-  const lines = h2.prints().map((l) => l.split(" "));
+  await h.runFor(20_000);
+  assert.equal(h.finished(), "done");
+  const lines = h.prints().map((l) => l.split(" ").map(Number));
   assert.equal(lines.length, 2);
-  for (const [me, x, y, dir] of lines) {
-    const d = s.drones[Number(me)];
-    assert.deepEqual([d.x, d.y], [Number(x), Number(y)]);
-    const expected = W.withDrone(s, d, (st) => W.measure(st)) ?? "null";
-    assert.equal(dir, String(expected), `drone ${me} measured from its own tile`);
-    // And it agrees with the rule from that tile.
-    const dx = t.x - d.x;
-    const dy = t.y - d.y;
-    if (dx || dy) assert.equal(dir, Math.abs(dx) >= Math.abs(dy) ? (dx > 0 ? "East" : "West") : dy > 0 ? "North" : "South");
+  for (const [me, x, y, here, east] of lines) {
+    const d = s.drones[me];
+    assert.deepEqual([d.x, d.y], [x, y]);
+    assert.equal(here, (x + 2 * y) % 10, `drone ${me} measured its own tile`);
+    assert.equal(east, (((x + 1) % 5) + 2 * y) % 10, "and its own neighbour (wrapping)");
   }
-  assert.notDeepEqual(positions(s)[0], positions(s)[1]);
-
-  // Dinosaur: a helper harvesting the head credits the Bone once.
-  const g = mega(5, { Dinosaurs: 1 });
-  g.items.Gold = 24;
-  const h3 = harness(g, { seed: 5 });
-  h3.run(`
-const me = num_drones() === 1 ? 0 : 1;
-if (me === 0) {
-  move(East);
-  move(East);
-  spawn_drone(); // the helper starts on (2, 0)
-} else {
-  plant(Entities.Dinosaur);
-  print("hatched", get_entity_type());
-  if (get_entity_type() === Entities.Dinosaur) print("bone", harvest(), num_items(Items.Bone));
-}
-`);
-  await h3.runFor(10_000, () => h3.prints().length >= 2);
-  const p = h3.prints();
-  assert.equal(p[0], "hatched Dinosaur");
-  // The harvest lands 200 ms after hatching, before the first 300 ms step: 1² Bone, once.
-  assert.equal(p[1], "bone true 1");
-  assert.equal(g.items.Bone, 1);
-  assert.equal(g.dino, null);
-  h3.rt.stop();
+  assert.deepEqual(positions(s), [[0, 3], [3, 0]]);
 });
 
 test("save / load with 3 drones: positions round-trip, drones load idle; old saves → one drone", async () => {
@@ -572,7 +511,7 @@ for (let i = 0; i < me; i++) move(East);
   assert.deepEqual(positions(W.deserialize({ ...data, drones: "nope" })), [[1, 1]]);
 });
 
-test("example 9 (A bot per column) puts one bot on every column and farms with all of them", async () => {
+test("example 7 (A bot per column) puts one bot on every column and farms with all of them", async () => {
   const code = EXAMPLES.find((e) => e.id === "megafarm").code;
   assert.ok(EXAMPLES.find((e) => e.id === "megafarm").needs.includes("Megafarm"));
   const s = mega(6);

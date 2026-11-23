@@ -66,7 +66,7 @@ test("arena content: goals, bots with fixed ratings, the unlock set, get_arena_g
   assert.equal(WORLD_SIZES[ARENA_UNLOCKS.Expand], ARENA_SIZE);
   assert.equal(ARENA_UNLOCKS.Megafarm, 1);
   assert.equal(ARENA_UNLOCKS.Speed, 0);
-  assert.equal(ARENA_UNLOCKS.Mazes, 0, "no maze Gold in the arena");
+  assert.equal(ARENA_UNLOCKS.Rice, 0, "no Rice → Gold in the arena");
   assert.equal(FARMER_GLOBALS.get_arena_goal, "readonly");
   assert.match(FARMER_LIB, /declare function get_arena_goal\(\)/);
 });
@@ -233,7 +233,7 @@ test("isolation: the player's world, save, records and contracts are untouched b
   Object.assign(s.items, { Hay: 123, Wood: 45, Gold: 6 });
   s.clock = 777;
   C.ensureContracts(s, "2026-11-21");
-  R.addDinoHarvest(s, { bone: 9, level: 1, cut: 3, at: 1 });
+  R.addContractDone(s, { rewardItem: "Pumpkin", reward: 9 });
   s.arena = sanitizeArena({ rating: 1111, matches: [] });
   const before = JSON.stringify(W.serialize(s));
 

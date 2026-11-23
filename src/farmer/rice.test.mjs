@@ -401,7 +401,7 @@ test("trade(Items.Rice): 1 Rice → 1 Gold, n at a time; gated by the Rice unloc
   assert.equal(W.trade(s, "toString").ok, false, "prototype keys aren't trades");
 });
 
-test("contracts: Rice joins the pool only with the Rice unlock, tier between Pumpkin and Cactus, pays ≈1.5 Gold per Rice", () => {
+test("contracts: Rice joins the pool only with the Rice unlock, tier between Pumpkin and Cactus, pays 6 Pumpkins per Rice", () => {
   const base = { Carrots: 1, Pumpkins: 1, Cactus: 1 };
   const without = farm(6, base);
   without.unlocks.Rice = 0;
@@ -410,11 +410,12 @@ test("contracts: Rice joins the pool only with the Rice unlock, tier between Pum
   assert.deepEqual(C.contractPool(withRice), ["Hay", "Wood", "Carrot", "Pumpkin", "Rice", "Cactus"]);
   const info = C.CONTRACT_ITEMS.Rice;
   assert.ok(info.tier > C.CONTRACT_ITEMS.Pumpkin.tier && info.tier < C.CONTRACT_ITEMS.Cactus.tier);
-  // A rice contract pays 1.5 Gold per Rice: delivering beats selling.
-  assert.equal(info.value * C.BONUS_FACTOR, 1.5);
-  assert.ok(info.value * C.BONUS_FACTOR > RICE_GOLD);
-  assert.equal(C.contractReward("Rice", 100), 150);
-  assert.equal(info.reward, "Gold");
+  // BRIEF22: a rice contract pays 6 Pumpkins per Rice (the old 1.5 Gold at
+  // the table's 4 Pumpkins per Gold), more than its 1 Gold at the market.
+  assert.equal(info.value * C.BONUS_FACTOR, 6);
+  assert.ok((info.value * C.BONUS_FACTOR) / 4 > RICE_GOLD);
+  assert.equal(C.contractReward("Rice", 100), 600);
+  assert.equal(info.reward, "Pumpkin");
   assert.equal(info.needs, "Rice");
   // Over 60 days rice shows up with the unlock and never without it.
   const days = Array.from({ length: 60 }, (_, i) => new Date(Date.UTC(2026, 0, 1) + i * 86_400_000).toISOString().slice(0, 10));
@@ -432,7 +433,7 @@ test("contracts: Rice joins the pool only with the Rice unlock, tier between Pum
   withRice.items.Rice = c.amount;
   assert.equal(C.deliverContract(withRice, c.id).ok, true);
   assert.equal(withRice.items.Rice, 0);
-  assert.equal(withRice.items.Gold, c.reward);
+  assert.equal(withRice.items.Pumpkin, c.reward);
 });
 
 // ---------- weather (emergent, no special cases) ----------

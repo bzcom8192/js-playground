@@ -5,12 +5,10 @@
 // result object `{ ok, msg?, locked? }` so the runtime can log helpful hints.
 
 import {
-  APPLE_SPAWN_SECONDS,
   BUSH_YIELD,
   CACTUS_FACTOR,
   CARROT_YIELD,
   DEAD_PUMPKIN_CHANCE,
-  DINO_STEP_SECONDS,
   DIR_DELTA,
   ENTITY_INFO,
   FERTILIZER_PRICE,
@@ -18,7 +16,6 @@ import {
   GRASS_REGROW_DELAY,
   HAY_YIELD,
   ITEM_ORDER,
-  MAZE_GOLD_PER_TILE,
   PUMPKIN_FACTOR,
   RICE_DRY_WATER,
   RICE_GOLD,
@@ -38,12 +35,10 @@ import {
   WATER_PER_USE,
   WATER_PRICE,
   WORLD_SIZES,
-  appleCap,
   byLevel,
   maxDrones,
   priceText,
 } from "./constants.js";
-import { generateSeededMaze, mulberry32At, parseSeed, randomSeed, treasureDirection } from "./maze.js";
 import { emptyRecords, sanitizeRecords } from "./records.js";
 import { farmClock, sanitizeContracts } from "./contracts.js";
 import { emptyArena, sanitizeArena } from "./arenaRating.js";
@@ -52,11 +47,10 @@ import * as WX from "./weather.js";
 const ok = { ok: true };
 
 // ---------- events ----------
-// Score-relevant moments (maze spawned / solved, dinosaur harvested) are
-// reported to whoever wraps the world call in withEvents (the runtime, which
-// owns the tick/op counters and writes the records). World calls are
-// synchronous, so one module-level sink is enough; outside withEvents the
-// events are simply dropped.
+// Weather moments (a change of weather, a lightning strike) are reported to
+// whoever wraps the world call in withEvents (the page, around tick()). World
+// calls are synchronous, so one module-level sink is enough; outside
+// withEvents the events are simply dropped.
 let eventSink = null;
 const emit = (ev) => {
   if (eventSink) eventSink.push(ev);
@@ -106,27 +100,8 @@ export function createGame() {
     items: Object.fromEntries(ITEM_ORDER.map((k) => [k, 0])),
     unlocks: Object.fromEntries(UNLOCKS.map((u) => [u.id, 0])),
     waterTimer: 0,
-    // Active maze: { treasure: { x, y }, seed, start: { x, y } } or null. Walls
-    // are Hedge entities on the tiles. `seed` is null for a maze loaded from a
-    // save written before seeded mazes.
-    maze: null,
-    // The dinosaur: { body: [{x, y}, …] (head first), dir, stepTimer, appleTimer,
-    // seed, draws, start: { x, y } | null } or null. Every body tile holds a
-    // { type: "Dinosaur" } entity; apples are "Apple" entities. Its walk and its
-    // apples are drawn from mulberry32(seed); `draws` = draws used so far.
-    // `start` (where it hatched) is null for one from a save without seeds.
-    dino: null,
-    // Personal records (see records.js) and the seed the next maze will use
-    // (set from the Records window's "replay seed"; null = draw a random one).
+    // Save-level stats (see records.js: the contract totals).
     records: emptyRecords(),
-    pendingSeed: null,
-    // v5: the same for the next dinosaur, and a fixed seed for EVERY dinosaur of
-    // this world (the demo farm, the server's benchmark; never saved) or null.
-    pendingDinoSeed: null,
-    dinoSeed: null,
-    // The server's maze benchmark only (verify.js; never saved): { seed, x, y } —
-    // a maze grown on (x, y) has this seed. null on every other world.
-    benchMaze: null,
     // v3 phase 2: the farm clock in ticks (every run adds its run clock; see
     // contracts.js) and today's daily contracts ({ date, contracts } or null
     // until contracts.ensureContracts generates them).
@@ -294,7 +269,6 @@ export const weatherForecast = (state) => (state.weather ? WX.forecast(state.wea
 // Storm strike k of segment `seg`: destroy a few crops (the ground and its
 // water stay), and report which ones.
 function lightning(state, seg, k) {
-  if (state.maze) return;
   const crops = [];
   state.tiles.forEach((t, i) => {
     if (t.entity && WX.STRIKABLE.has(t.entity.type)) crops.push(i);
@@ -329,7 +303,7 @@ function simulate(state, dt, rng, fx) {
         const gt = effectiveGrowTime(state, x, y) || 1;
         e.progress += (dt * rate) / gt;
         if (e.progress >= 1) mature(tile, rng);
-      } else if (!e && tile.ground === "Grassland" && !state.maze) {
+      } else if (!e && tile.ground === "Grassland") {
         tile.regrow += dt;
         if (tile.regrow >= GRASS_REGROW_DELAY) {
           tile.regrow = 0;
@@ -344,7 +318,6 @@ function simulate(state, dt, rng, fx) {
       }
     }
   }
-  if (state.dino) dinoTick(state, dt);
   const wl = level(state, "Watering");
   if (wl > 0) {
     const interval = WATER_BASE_INTERVAL / wl;
@@ -358,14 +331,9 @@ function simulate(state, dt, rng, fx) {
 
 // ---------- drone actions ----------
 
-// Where move(dir) would take the drone, or null if it can't go there:
-// hedges are walls, and inside a maze the farm edge is a wall too (no wrap).
-function moveTarget(state, dir) {
-  const n = neighbor(state, state.drone.x, state.drone.y, dir, !state.maze);
-  if (!n) return null;
-  if (tileAt(state, n.x, n.y).entity?.type === "Hedge") return null;
-  return n;
-}
+// Where move(dir) would take the drone (the farm wraps at its edges), or null
+// for something that is not a direction.
+const moveTarget = (state, dir) => neighbor(state, state.drone.x, state.drone.y, dir);
 
 export const canMove = (state, dir) => !!moveTarget(state, dir);
 
@@ -446,10 +414,7 @@ export function harvest(state) {
   const { x, y } = state.drone;
   const tile = tileAt(state, x, y);
   const e = tile.entity;
-  if (!e || e.type === "Hedge") return false;
-  if (e.type === "Treasure") return harvestTreasure(state);
-  if (e.type === "Apple") return fail(APPLE_BLOCKED);
-  if (e.type === "Dinosaur") return harvestDino(state, x, y);
+  if (!e) return false;
   if (!isGrown(e)) {
     // Deviation: unripe Grass is left alone (returns false) so the very first
     // `while (true) { harvest(); }` program works at any speed.
@@ -511,7 +476,6 @@ export function harvest(state) {
 export function plant(state, type, rng = Math.random) {
   const info = ENTITY_INFO[type];
   if (!info || info.cost === null) return fail(`Can't plant ${String(type)}`);
-  if (state.maze) return fail(MAZE_BLOCKED);
   if (!isUnlocked(state, "Plant")) return fail("plant() is locked", "Plant");
   if (info.unlock && !isUnlocked(state, info.unlock)) {
     return fail(`${type} is locked`, info.unlock);
@@ -520,7 +484,6 @@ export function plant(state, type, rng = Math.random) {
   if (tile.entity && tile.entity.type !== "Grass") {
     return fail(`Tile already has ${tile.entity.type}`);
   }
-  if (type === "Dinosaur" && state.dino) return fail("only one dinosaur per farm — harvest the old one first");
   if (info.soil && tile.ground !== "Soil") return fail(`${type} needs Soil — till() first`);
   if (type === "Rice" && !(tile.water >= RICE_PLANT_WATER)) {
     return fail(`Rice needs a wet paddy: water ≥ ${RICE_PLANT_WATER} (this tile has ${tile.water.toFixed(2)}) — use_item(Items.Water) or wait for rain`);
@@ -529,19 +492,13 @@ export function plant(state, type, rng = Math.random) {
     return fail(`Not enough items for ${type} seed (${costText(info.cost)})`);
   }
   pay(state, info.cost);
-  if (type === "Dinosaur") {
-    hatchDino(state, rng);
-    return ok;
-  }
   tile.entity = makeEntity(type, rng);
   return ok;
 }
 
 export function till(state) {
   if (!isUnlocked(state, "Carrots")) return fail("till() is locked", "Carrots");
-  if (state.maze) return fail(MAZE_BLOCKED);
   const tile = droneTile(state);
-  if (isDinoTile(tile)) return fail(DINO_BLOCKED);
   tile.ground = tile.ground === "Soil" ? "Grassland" : "Soil";
   removeEntity(tile);
   return ok;
@@ -550,13 +507,11 @@ export function till(state) {
 // swap() does NOT wrap around edges (returns false there).
 export function swap(state, dir) {
   if (!isUnlocked(state, "Cactus")) return fail("swap() is locked", "Cactus");
-  if (state.maze) return fail(MAZE_BLOCKED);
   const { x, y } = state.drone;
   const n = neighbor(state, x, y, dir, false);
   if (!n) return fail("swap() can't cross the farm edge");
   const a = tileAt(state, x, y);
   const b = tileAt(state, n.x, n.y);
-  if (isDinoTile(a) || isDinoTile(b)) return fail(DINO_BLOCKED);
   [a.entity, b.entity] = [b.entity, a.entity];
   a.regrow = 0;
   b.regrow = 0;
@@ -565,8 +520,6 @@ export function swap(state, dir) {
 
 export function clearFarm(state) {
   state.tiles = Array.from({ length: state.size * state.size }, newTile);
-  state.maze = null;
-  state.dino = null;
   state.drone.x = 0;
   state.drone.y = 0;
 }
@@ -585,11 +538,6 @@ export function useItem(state, item, n = 1, rng = Math.random) {
     if (!isUnlocked(state, "Fertilizer")) return fail("Fertilizer is locked", "Fertilizer");
     if (state.items.Fertilizer < n) return fail("Not enough Fertilizer");
     const e = tile.entity;
-    if (e?.type === "Bush" && isGrown(e) && isUnlocked(state, "Mazes")) {
-      state.items.Fertilizer -= n;
-      spawnMaze(state, rng);
-      return ok;
-    }
     if (!e || isGrown(e)) return fail("Nothing growing here");
     state.items.Fertilizer -= n;
     const gt = effectiveGrowTime(state, state.drone.x, state.drone.y) || 1;
@@ -615,7 +563,6 @@ export function trade(state, item, n = 1) {
   const t = Object.hasOwn(TRADES, item) ? TRADES[item] : null;
   if (!t) return fail(`Can't trade ${String(item)} (only ${Object.keys(TRADES).join(", ")})`);
   if (!isUnlocked(state, t.unlock)) return fail(`${item} is locked`, t.unlock);
-  if (state.maze) return fail(MAZE_BLOCKED);
   const cost = times(t.cost, n);
   if (!canAfford(state, cost)) return fail(`Not enough items (${costText(cost)})`);
   pay(state, cost);
@@ -662,16 +609,14 @@ export const costText = (cost) => priceText(cost || {});
 
 // ---------- senses ----------
 
+// A Sunflower's petals or a Cactus's size, here or on the neighbour in `dir`
+// (wrapping like move()); null for anything else.
 export function measure(state, dir) {
   let { x, y } = state.drone;
   if (dir !== undefined && dir !== null) {
-    const n = neighbor(state, x, y, dir, !state.maze);
+    const n = neighbor(state, x, y, dir);
     if (!n) return null;
     ({ x, y } = n);
-  }
-  if (state.maze) {
-    const t = state.maze.treasure;
-    return treasureDirection(x, y, t.x, t.y);
   }
   const e = tileAt(state, x, y).entity;
   if (!e) return null;
@@ -727,17 +672,6 @@ function ensureDrones(state) {
   return state.drones;
 }
 
-// Inside a maze no drone may stand on a hedge (it couldn't be told apart from
-// being walled in). Any drone on a hedge moves to `to` (always a path tile).
-function liftDronesOffHedges(state, to) {
-  for (const d of allDrones(state)) {
-    if (tileAt(state, d.x, d.y).entity?.type === "Hedge") {
-      d.x = to.x;
-      d.y = to.y;
-    }
-  }
-}
-
 // ---------- persistence ----------
 
 export function serialize(state) {
@@ -751,38 +685,9 @@ export function serialize(state) {
     items: { ...state.items },
     unlocks: { ...state.unlocks },
     waterTimer: state.waterTimer,
-    // Active maze (walls/treasure are entities on the tiles below).
-    maze: state.maze
-      ? {
-          tx: state.maze.treasure.x,
-          ty: state.maze.treasure.y,
-          seed: state.maze.seed ?? null,
-          sx: state.maze.start?.x ?? null,
-          sy: state.maze.start?.y ?? null,
-        }
-      : null,
-    // The dinosaur's body chain (head first), its timers, its seed + the draws
-    // used (so it walks on exactly where it was) and its hatching tile;
-    // segments and apples are also entities on the tiles below. The demo
-    // farm's dinosaur is not persisted.
-    dino:
-      state.dino && !state.demo
-        ? {
-            body: state.dino.body.map((p) => [p.x, p.y]),
-            dir: state.dino.dir,
-            st: state.dino.stepTimer,
-            at: state.dino.appleTimer,
-            seed: parseSeed(state.dino.seed),
-            n: state.dino.draws ?? 0,
-            sx: state.dino.start?.x ?? null,
-            sy: state.dino.start?.y ?? null,
-          }
-        : null,
-    // v3: personal records + the pending replay seeds (v5: also the next
-    // dinosaur's). Older saves have none and load with empty records.
+    // v3: save-level stats (the contract totals; see records.js). BRIEF22:
+    // the maze / dinosaur records and the replay seeds are gone.
     records: sanitizeRecords(state.records),
-    pendingSeed: parseSeed(state.pendingSeed),
-    pendingDinoSeed: parseSeed(state.pendingDinoSeed),
     // v3 phase 2: farm clock + today's contracts. A demo farm's contracts are
     // only for show and never persisted (the demo is never saved anyway).
     clock: Math.floor(farmClock(state)),
@@ -800,6 +705,14 @@ export function serialize(state) {
   };
 }
 
+// BRIEF22 (Mazes and Dinosaurs removed): a save written before it loads like
+// any other; whatever it holds of them is simply not read back. The Mazes /
+// Dinosaurs levels and the Bone in the store room are dropped (only today's
+// unlocks and items are read), so are the maze / dinosaur records and the
+// replay seeds (records.js), and the save's `maze` / `dino` sections. A tile
+// with a Hedge, the Treasure, a dinosaur segment or an Apple loads as bare
+// ground (its ground and water as saved; Grassland grows grass again).
+// Nothing is refunded. Unknown entity types have always loaded this way.
 export function deserialize(data) {
   const base = createGame();
   // Weather is save-level too; a garbage / missing save is a new save.
@@ -832,7 +745,7 @@ export function deserialize(data) {
       const tile = newTile();
       tile.ground = t?.g === "S" ? "Soil" : "Grassland";
       tile.water = Math.max(0, Math.min(1, Number(t?.w) || 0));
-      if (t?.e && ENTITY_INFO[t.e.type]) {
+      if (t?.e && Object.hasOwn(ENTITY_INFO, t.e.type)) {
         tile.entity = { ...t.e, progress: Math.max(0, Math.min(1, Number(t.e.progress) || 0)) };
         if (tile.entity.type === "Rice") restoreRice(tile.entity);
       }
@@ -845,11 +758,6 @@ export function deserialize(data) {
   state.drone.y = Number.isInteger(dy) && dy >= 0 && dy < state.size ? dy : 0;
   restoreDrones(state, data.drones);
   state.waterTimer = Number(data.waterTimer) || 0;
-  restoreMaze(state, data.maze);
-  restoreDino(state, data.dino);
-  state.records = sanitizeRecords(data.records);
-  state.pendingSeed = parseSeed(data.pendingSeed);
-  state.pendingDinoSeed = parseSeed(data.pendingDinoSeed);
   return state;
 }
 
@@ -884,291 +792,4 @@ function restoreDrones(state, list) {
     const y = Number(p?.[1]);
     if (inside(x) && inside(y)) state.drones.push(newDrone(x, y));
   }
-}
-
-// ---------- mazes ----------
-
-const MAZE_BLOCKED = "not possible inside a maze — harvest the treasure (or clear()) first";
-
-/** Mazes level → Gold per treasure: farm tiles (size²) × the level's Gold per tile. */
-export const mazeGold = (state) => state.size * state.size * byLevel(MAZE_GOLD_PER_TILE, level(state, "Mazes"));
-
-/**
- * Turn the whole farm into a perfect hedge maze around the drone's tile.
- * The layout comes from a seed: the pending (replay) seed if one is set —
- * it is used once and cleared — otherwise a fresh random 32-bit seed drawn
- * from `rng`. Same seed + farm size + start tile → the same maze.
- * On the benchmark world (state.benchMaze) only the benchmark's start tile grows
- * the benchmark maze, and every bot is brought to the spawner, so none can wait
- * at a likely treasure tile before there is a maze.
- */
-export function spawnMaze(state, rng = Math.random) {
-  const { x, y } = state.drone;
-  const bench = state.benchMaze ?? null;
-  const fixed = bench && bench.x === x && bench.y === y ? parseSeed(bench.seed) : null;
-  const pending = bench ? null : parseSeed(state.pendingSeed);
-  const seed = fixed ?? pending ?? randomSeed(rng);
-  state.pendingSeed = null;
-  const { walls, treasure } = generateSeededMaze(state.size, x, y, seed);
-  state.tiles = walls.map((wall) => {
-    const t = newTile();
-    if (wall) t.entity = { type: "Hedge", progress: 1 };
-    return t;
-  });
-  tileAt(state, treasure.x, treasure.y).entity = { type: "Treasure", progress: 1 };
-  state.maze = { treasure: { ...treasure }, seed, start: { x, y } };
-  emit({ type: "mazeSpawn", maze: state.maze, seed, replay: pending !== null, size: state.size, start: { x, y } });
-  // Other drones (Megafarm) caught on a hedge join the drone that spawned it.
-  if (bench) for (const d of allDrones(state)) Object.assign(d, { x, y });
-  else liftDronesOffHedges(state, { x, y });
-  // Simplest rule that can't corrupt either: a maze replaces the whole farm,
-  // so the dinosaur and its apples are gone too (like clear()).
-  state.dino = null;
-}
-
-function harvestTreasure(state) {
-  const gold = mazeGold(state);
-  add(state, "Gold", gold);
-  emit({ type: "mazeSolve", maze: state.maze, level: Math.max(1, level(state, "Mazes")), size: state.size, gold });
-  // The maze disappears; the farm is left as empty Grassland (drone stays put).
-  state.tiles = Array.from({ length: state.size * state.size }, newTile);
-  state.maze = null;
-  return true;
-}
-
-// Accept a saved maze only if it is consistent with the loaded tiles;
-// otherwise drop it and strip any stray maze entities.
-function restoreMaze(state, m) {
-  state.maze = null;
-  const tx = Number(m?.tx);
-  const ty = Number(m?.ty);
-  const inside = (v) => Number.isInteger(v) && v >= 0 && v < state.size;
-  if (m && inside(tx) && inside(ty) && tileAt(state, tx, ty).entity?.type === "Treasure" &&
-      droneTile(state).entity?.type !== "Hedge") {
-    const sx = Number(m.sx);
-    const sy = Number(m.sy);
-    state.maze = {
-      treasure: { x: tx, y: ty },
-      seed: parseSeed(m.seed),
-      start: inside(sx) && inside(sy) ? { x: sx, y: sy } : null,
-    };
-    liftDronesOffHedges(state, state.drone);
-    for (let i = 0; i < state.tiles.length; i++) {
-      if (i !== idx(state, tx, ty) && state.tiles[i].entity?.type === "Treasure") state.tiles[i].entity = null;
-    }
-    return;
-  }
-  for (const t of state.tiles) {
-    if (t.entity?.type === "Hedge" || t.entity?.type === "Treasure") t.entity = null;
-  }
-}
-
-// ---------- dinosaurs ----------
-
-const DINO_BLOCKED = "not possible on the dinosaur or an apple";
-const APPLE_BLOCKED = "apples are for the dinosaur — it eats them by walking onto them";
-const DIRS = ["North", "East", "South", "West"];
-
-const isDinoTile = (tile) => tile.entity?.type === "Dinosaur" || tile.entity?.type === "Apple";
-
-/** Bone for cutting off `k` segments: k² × Dinosaurs level. */
-export const boneFor = (state, k) => k * k * Math.max(1, level(state, "Dinosaurs"));
-
-/** Tiles the dinosaur's head may step onto: empty ground, Grass (trampled) or an Apple (eaten). */
-function dinoCanEnter(tile) {
-  const e = tile.entity;
-  return !e || e.type === "Grass" || e.type === "Apple";
-}
-
-/** Index of (x, y) in the dinosaur's body (0 = head), or -1. */
-export function dinoSegment(state, x, y) {
-  if (!state.dino) return -1;
-  return state.dino.body.findIndex((p) => p.x === x && p.y === y);
-}
-
-/** Valid head moves right now: [{ dir, x, y, eat }]. No wrap; never into the body or a hedge. */
-export function dinoMoves(state) {
-  if (!state.dino) return [];
-  const head = state.dino.body[0];
-  const out = [];
-  for (const dir of DIRS) {
-    const n = neighbor(state, head.x, head.y, dir, false);
-    if (!n) continue;
-    const tile = tileAt(state, n.x, n.y);
-    if (!dinoCanEnter(tile)) continue;
-    out.push({ dir, x: n.x, y: n.y, eat: tile.entity?.type === "Apple" });
-  }
-  return out;
-}
-
-/**
- * Hatch the farm's dinosaur on tile (x, y) (default: the drone's). Everything
- * random about it comes from its seed: the world's fixed one (state.dinoSeed)
- * if there is one, else the pending (replay) seed — used once and cleared —
- * else a fresh random 32-bit seed drawn from `rng`.
- * Same seed + farm + hatching tile + bot actions → the same walk and apples.
- */
-export function hatchDino(state, rng = Math.random, { x, y } = state.drone) {
-  const fixed = parseSeed(state.dinoSeed);
-  const pending = fixed === null ? parseSeed(state.pendingDinoSeed) : null;
-  const seed = fixed ?? pending ?? randomSeed(rng);
-  if (fixed === null) state.pendingDinoSeed = null;
-  const tile = tileAt(state, x, y);
-  tile.entity = { type: "Dinosaur", progress: 1 };
-  tile.regrow = 0;
-  state.dino = { body: [{ x, y }], dir: "South", stepTimer: 0, appleTimer: 0, seed, draws: 0, start: { x, y } };
-  emit({ type: "dinoHatch", seed, replay: pending !== null });
-}
-
-/** The dinosaur's seed; one that has none yet (an old save) gets it here. */
-function seedOfDino(d, rng = Math.random) {
-  if (parseSeed(d.seed) === null) {
-    d.seed = randomSeed(rng);
-    d.draws = 0;
-    d.start = null;
-  }
-  return d.seed;
-}
-
-/** The dinosaur's own random stream: () => float in [0, 1), counted in `draws`. */
-const dinoRandom = (state) => () => mulberry32At(seedOfDino(state.dino), state.dino.draws++);
-
-/**
- * One autonomous step: the head moves to a random valid neighbour. Eating an
- * apple grows the body by one (the tail stays); otherwise the tail follows.
- * With no valid move the dinosaur stays put. Returns true if it moved.
- * rng: the dinosaur's own stream unless the caller brings one.
- */
-export function dinoStep(state, rng = dinoRandom(state)) {
-  const moves = dinoMoves(state);
-  if (!moves.length) return false;
-  const m = moves[Math.min(moves.length - 1, Math.floor(rng() * moves.length))];
-  const d = state.dino;
-  const tile = tileAt(state, m.x, m.y);
-  tile.entity = { type: "Dinosaur", progress: 1 };
-  tile.regrow = 0;
-  d.body.unshift({ x: m.x, y: m.y });
-  d.dir = m.dir;
-  if (!m.eat) {
-    const tail = d.body.pop();
-    removeEntity(tileAt(state, tail.x, tail.y));
-  }
-  return true;
-}
-
-/** Spawn one apple on a random empty (or grass) tile, if under the cap. */
-export function spawnApple(state, rng = dinoRandom(state)) {
-  let apples = 0;
-  const free = [];
-  state.tiles.forEach((t, i) => {
-    if (t.entity?.type === "Apple") apples++;
-    else if (!t.entity || t.entity.type === "Grass") free.push(i);
-  });
-  if (apples >= appleCap(state.size) || !free.length) return false;
-  const t = state.tiles[free[Math.min(free.length - 1, Math.floor(rng() * free.length))]];
-  t.entity = { type: "Apple", progress: 1 };
-  t.regrow = 0;
-  return true;
-}
-
-// Float sums of different frame lengths reach "due" a hair early or late.
-const DUE_EPS = 1e-9;
-
-// Steps and apples that came due happen in time order (an apple first when
-// both are due at the same moment), so the walk does not depend on how the
-// time was cut into frames.
-function dinoTick(state, dt) {
-  const d = state.dino;
-  d.appleTimer += dt;
-  d.stepTimer += dt;
-  for (;;) {
-    const apple = d.appleTimer - APPLE_SPAWN_SECONDS; // seconds overdue
-    const step = d.stepTimer - DINO_STEP_SECONDS;
-    if (apple < -DUE_EPS && step < -DUE_EPS) return;
-    if (apple >= step - DUE_EPS) {
-      d.appleTimer = Math.max(0, apple);
-      spawnApple(state);
-    } else {
-      d.stepTimer = Math.max(0, step);
-      dinoStep(state);
-    }
-  }
-}
-
-function removeApples(state) {
-  for (const t of state.tiles) if (t.entity?.type === "Apple") removeEntity(t);
-}
-
-/**
- * Harvest the body segment at (x, y): it and everything behind it (toward the
- * tail) is cut off, paying (segments removed)² × level Bone. Cutting the head
- * removes the whole dinosaur (and its apples), so a new one can be planted.
- */
-function harvestDino(state, x, y) {
-  const i = dinoSegment(state, x, y);
-  if (i < 0) {
-    removeEntity(tileAt(state, x, y)); // stray segment (can't happen in a consistent state)
-    return true;
-  }
-  const body = state.dino.body;
-  const cut = body.splice(i);
-  const bone = boneFor(state, cut.length);
-  add(state, "Bone", bone);
-  emit({
-    type: "dinoHarvest",
-    bone,
-    cut: cut.length,
-    level: Math.max(1, level(state, "Dinosaurs")),
-    seed: seedOfDino(state.dino),
-    start: state.dino.start ?? null,
-    size: state.size,
-  });
-  for (const p of cut) removeEntity(tileAt(state, p.x, p.y));
-  if (!body.length) {
-    state.dino = null;
-    removeApples(state);
-  }
-  return true;
-}
-
-// Accept a saved dinosaur only if its chain is consistent with the tiles
-// (in bounds, unique, each segment next to the one before, every segment tile
-// holds a Dinosaur, no maze). Otherwise drop it with its apples.
-function restoreDino(state, d) {
-  state.dino = null;
-  const n = state.size;
-  const raw = Array.isArray(d?.body) ? d.body : null;
-  const body = raw ? raw.map((p) => ({ x: Number(p?.[0]), y: Number(p?.[1]) })) : [];
-  const inside = (v) => Number.isInteger(v) && v >= 0 && v < n;
-  const seen = new Set();
-  let valid = !state.maze && body.length > 0;
-  for (let i = 0; valid && i < body.length; i++) {
-    const p = body[i];
-    if (!inside(p.x) || !inside(p.y) || seen.has(idx(state, p.x, p.y))) valid = false;
-    else if (tileAt(state, p.x, p.y).entity?.type !== "Dinosaur") valid = false;
-    else if (i > 0 && Math.abs(p.x - body[i - 1].x) + Math.abs(p.y - body[i - 1].y) !== 1) valid = false;
-    else seen.add(idx(state, p.x, p.y));
-  }
-  if (valid) {
-    const timer = (v, max) => {
-      const t = Number(v);
-      return Number.isFinite(t) && t >= 0 && t < max ? t : 0;
-    };
-    state.dino = {
-      body,
-      dir: DIRS.includes(d.dir) ? d.dir : "South",
-      stepTimer: timer(d.st, DINO_STEP_SECONDS),
-      appleTimer: timer(d.at, APPLE_SPAWN_SECONDS),
-      seed: parseSeed(d.seed),
-      draws: Number.isSafeInteger(d.n) && d.n >= 0 ? d.n : 0,
-      start: inside(d.sx) && inside(d.sy) ? { x: d.sx, y: d.sy } : null,
-    };
-    seedOfDino(state.dino); // saved before v5: it gets its seed now and keeps it
-  }
-  state.tiles.forEach((t, i) => {
-    const type = t.entity?.type;
-    if (type !== "Dinosaur" && type !== "Apple") return;
-    const keep = valid && (type === "Apple" || seen.has(i));
-    t.entity = keep ? { type, progress: 1 } : null;
-  });
 }

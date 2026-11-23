@@ -16,9 +16,8 @@ export function stripFields(game, stats, status, paused) {
   const tile = W.droneTile(game);
   const e = tile.entity;
   let what = e
-    ? `${ENTITY_INFO[e.type]?.icon ?? ""} ${e.type.replace("_", " ")}${e.progress < 1 ? ` ${Math.floor(e.progress * 100)}%` : ""}${dinoPart(game)} / ${tile.ground}`
+    ? `${ENTITY_INFO[e.type]?.icon ?? ""} ${e.type.replace("_", " ")}${e.progress < 1 ? ` ${Math.floor(e.progress * 100)}%` : ""} / ${tile.ground}`
     : tile.ground;
-  if (game.maze) what += ` · ${mazeNeighbours(game)}`;
   // Growing rice on a dry tile: how long it has been dry (it withers past the limit).
   if (e?.type === "Rice" && e.progress < 1 && e.dry > 0) what += ` · dry ${Math.floor(e.dry)}/${RICE_WITHER_TICKS}`;
   const fields = {
@@ -40,32 +39,6 @@ export function stripFields(game, stats, status, paused) {
   const weather = W.currentWeather(game);
   if (weather) fields.weather = weatherLabel(weather);
   return fields;
-}
-
-/** On a dinosaur segment: " head 1/5", " 3/5" or " tail 5/5" (segment from the head / length). */
-export function dinoPart(game) {
-  const i = W.dinoSegment(game, game.drone.x, game.drone.y);
-  if (i < 0) return "";
-  const len = game.dino.body.length;
-  const label = i === 0 ? " head" : i === len - 1 ? " tail" : "";
-  return `${label} ${i + 1}/${len}`;
-}
-
-const SHORT = { North: "N", East: "E", South: "S", West: "W" };
-
-/** In a maze: which neighbouring tiles are Hedge / Treasure, e.g. "🟩 Hedge N S W · 💰 Treasure E". */
-export function mazeNeighbours(game) {
-  const near = { Hedge: [], Treasure: [] };
-  for (const dir of ["North", "East", "South", "West"]) {
-    const n = W.neighbor(game, game.drone.x, game.drone.y, dir, false);
-    // The farm edge is a maze wall too.
-    const type = n ? W.tileAt(game, n.x, n.y).entity?.type : "Hedge";
-    if (near[type]) near[type].push(SHORT[dir]);
-  }
-  const parts = Object.entries(near)
-    .filter(([, dirs]) => dirs.length)
-    .map(([type, dirs]) => `${ENTITY_INFO[type].icon} ${type} ${dirs.join(" ")}`);
-  return parts.length ? parts.join(" · ") : "🧩 Maze";
 }
 
 /** Shallow equality for flat snapshot objects. */

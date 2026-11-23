@@ -105,9 +105,7 @@ test("pool respects unlocks: Hay/Wood always, each other item only with its unlo
     [{ Carrots: 1 }, ["Hay", "Wood", "Carrot"]],
     [{ Carrots: 1, Pumpkins: 1 }, ["Hay", "Wood", "Carrot", "Pumpkin"]],
     [{ Cactus: 1 }, ["Hay", "Wood", "Cactus"]],
-    [{ Mazes: 1 }, ["Hay", "Wood", "Gold"]],
-    [{ Dinosaurs: 1 }, ["Hay", "Wood", "Bone"]],
-    [ALL, ["Hay", "Wood", "Carrot", "Pumpkin", "Rice", "Cactus", "Gold", "Bone"]], // Rice: v3 phase 5
+    [ALL, ["Hay", "Wood", "Carrot", "Pumpkin", "Rice", "Cactus"]], // Rice: v3 phase 5; Gold / Bone gone in BRIEF22
   ];
   for (const [unlocks, pool] of cases) {
     const s = farm(6, unlocks);
@@ -116,12 +114,12 @@ test("pool respects unlocks: Hay/Wood always, each other item only with its unlo
     for (const d of days(60)) for (const c of C.generateContracts(s, d)) seen.add(c.item);
     assert.deepEqual([...seen].sort(), [...pool].sort(), `over 60 days every pool item and nothing else (${JSON.stringify(unlocks)})`);
   }
-  // A fresh farm: only Hay / Wood, paid in Gold; a 2-item pool repeats one.
+  // A fresh farm: only Hay / Wood, paid in Pumpkins; a 2-item pool repeats one.
   const fresh = C.generateContracts(W.createGame(), DAY);
-  assert.ok(fresh.every((c) => ["Hay", "Wood"].includes(c.item) && c.rewardItem === "Gold"));
-  // Top tiers (Gold, Bone) pay Bone; everything else pays Gold.
+  assert.ok(fresh.every((c) => ["Hay", "Wood"].includes(c.item) && c.rewardItem === "Pumpkin"));
+  // BRIEF22: the top tier (Cactus) pays Cactus; everything else pays Pumpkins.
   for (const [item, info] of Object.entries(C.CONTRACT_ITEMS)) {
-    assert.equal(info.reward, info.tier >= 4 ? "Bone" : "Gold", item);
+    assert.equal(info.reward, item === "Cactus" ? "Cactus" : "Pumpkin", item);
   }
 });
 
@@ -141,7 +139,7 @@ test("deliver happy path: items consumed, reward paid, status done, stats counte
   assert.equal(c.status, "done");
   assert.equal(s.records.contracts.completed, 1);
   assert.equal(s.records.contracts.bonus[c.rewardItem], c.reward);
-  assert.match(C.deliveredText(c), /^📜 Contract delivered: [\d,]+ \w+ → [\d,]+ (Gold|Bone)$/);
+  assert.match(C.deliveredText(c), /^📜 Contract delivered: [\d,]+ \w+ → [\d,]+ (Pumpkin|Cactus)$/);
   assert.equal(C.deliverContract(s, c.id).ok, false, "only once");
   assert.equal(s.records.contracts.completed, 1);
 });
@@ -302,7 +300,7 @@ test("save / load round-trip keeps contracts, clock and stats; old saves load wi
   const back = W.deserialize(JSON.parse(JSON.stringify(W.serialize(s))));
   assert.deepEqual(back.contracts, s.contracts);
   assert.equal(back.clock, 5_000);
-  assert.deepEqual(back.records.contracts, { completed: 1, bonus: { Gold: c.rewardItem === "Gold" ? c.reward : 0, Bone: c.rewardItem === "Bone" ? c.reward : 0 } });
+  assert.deepEqual(back.records.contracts, { completed: 1, bonus: { Pumpkin: c.rewardItem === "Pumpkin" ? c.reward : 0, Cactus: c.rewardItem === "Cactus" ? c.reward : 0 } });
   assert.deepEqual(W.serialize(W.deserialize(W.serialize(back))), W.serialize(back), "stable");
   // Old save (BRIEF9 era): no clock, no contracts, no contract stats.
   const old = W.serialize(s);

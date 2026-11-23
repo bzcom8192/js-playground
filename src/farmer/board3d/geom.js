@@ -257,13 +257,6 @@ export function leafScatter(lobes, count, size, seed, { shade = [0.68, 1.34], mi
   return sheet.build();
 }
 
-/** Single leaves where the caller wants them: [{ p, n (unit normal), color }]. */
-export function leafSheet(spots, size, r) {
-  const sheet = leafBuilder();
-  for (const { p, n, color } of spots) sheet.add(p, n, size, r, () => color);
-  return sheet.build();
-}
-
 /** Collects leaves, each one diamond lying on the plane with normal n at p. */
 function leafBuilder() {
   const pos = [];

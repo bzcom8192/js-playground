@@ -212,127 +212,8 @@ while (true) {
 `,
   },
   {
-    id: "maze",
-    name: "7. Hand on the hedge",
-    needs: ["Mazes", "Fertilizer", "Plant", "Senses"],
-    code: `// Hand on the hedge — needs: Hedge Labyrinth (Mazes), Compost Press
-// (Fertilizer), Seed Hopper (Plant), Sensor Mast (Senses).
-// Grow a bush, feed it until it becomes a labyrinth, then follow the hedge on
-// the right-hand side. A labyrinth without loops always gives way like that.
-const RIGHT = { North: East, East: South, South: West, West: North };
-const LEFT = { North: West, West: South, South: East, East: North };
-const BACK = { North: South, East: West, South: North, West: East };
-
-function in_maze() {
-  // In a labyrinth measure() answers with a direction, on the treasure with null.
-  return typeof measure() === "string" || get_entity_type() === Entities.Treasure;
-}
-
-function spawn_maze() {
-  if (get_entity_type() !== Entities.Bush) {
-    harvest();
-    plant(Entities.Bush);
-  }
-  while (!can_harvest()) {
-    spin_in_place(); // the bush needs a moment
-  }
-  if (num_items(Items.Fertilizer) < 1) {
-    trade(Items.Fertilizer);
-  }
-  use_item(Items.Fertilizer);
-}
-
-function solve_maze() {
-  let dir = measure() || North; // set off towards the treasure
-  while (get_entity_type() !== Entities.Treasure) {
-    // Right if we can, else ahead, else left, else back the way we came.
-    // move() into a hedge is simply false (can_move() would ask first).
-    for (const d of [RIGHT[dir], dir, LEFT[dir], BACK[dir]]) {
-      if (move(d)) {
-        dir = d;
-        break;
-      }
-    }
-  }
-  harvest(); // Gold! and the hedges are gone
-}
-
-while (true) {
-  if (!in_maze()) {
-    spawn_maze();
-  }
-  if (!in_maze()) {
-    print("No labyrinth today: out of Fertilizer, and of Pumpkins to buy it with.");
-    break;
-  }
-  solve_maze();
-  print("Gold:", num_items(Items.Gold));
-}
-`,
-  },
-  {
-    id: "dinosaur",
-    name: "8. Apple trail",
-    needs: ["Dinosaurs", "Plant", "Senses"],
-    code: `// Apple trail — needs: Dinosaur Egg (Dinosaurs), Seed Hopper (Plant), Sensor
-// Mast (Senses), and 24 Gold per egg.
-// An empty field, one egg, half a minute of apples: every apple adds a tile to
-// the animal. Then the bot drives every row and cuts wherever it bumps into
-// it. A cut takes that segment plus the tail behind it and pays the square.
-// Once all of it is cut, the next egg can go in.
-const GROW_SECONDS = 30;
-const n = get_world_size();
-
-function go_to(x, y) {
-  // Whichever way round is shorter (the field joins up at the edges).
-  while (get_pos_x() !== x) move((x - get_pos_x() + n) % n <= n / 2 ? East : West);
-  while (get_pos_y() !== y) move((y - get_pos_y() + n) % n <= n / 2 ? North : South);
-}
-
-function wait(seconds) {
-  const start = get_time();
-  while (get_time() - start < seconds) {
-    spin_in_place(); // the dinosaur does not wait for us
-  }
-}
-
-function sweep_and_cut() {
-  // Once over every tile, North up one column and South down the next.
-  go_to(0, 0);
-  for (let x = 0; x < n; x++) {
-    for (let i = 0; i < n; i++) {
-      if (get_entity_type() === Entities.Dinosaur) {
-        harvest();
-      }
-      if (i < n - 1) {
-        move(x % 2 === 0 ? North : South);
-      }
-    }
-    move(East);
-  }
-}
-
-clear(); // crops would be in its way
-while (true) {
-  go_to(0, 0);
-  // Only one dinosaur fits: false while some of the last one is left.
-  if (plant(Entities.Dinosaur)) {
-    wait(GROW_SECONDS);
-  } else if (num_items(Items.Gold) < get_cost(Entities.Dinosaur).Gold) {
-    print("No Gold for an egg: run example 7 for a while.");
-    break;
-  }
-  const before = num_items(Items.Bone);
-  sweep_and_cut();
-  if (num_items(Items.Bone) > before) {
-    print("Bone:", num_items(Items.Bone));
-  }
-}
-`,
-  },
-  {
     id: "megafarm",
-    name: "9. A bot per column",
+    name: "7. A bot per column",
     needs: ["Megafarm", "Senses"],
     code: `// A bot per column — needs: Bot Crew (Megafarm), Sensor Mast (Senses).
 // Each new bot begins THIS FILE at line 1, on the tile where it was put down.
@@ -365,7 +246,7 @@ while (true) {
   },
   {
     id: "rice",
-    name: "10. Rice to market",
+    name: "8. Rice to market",
     needs: ["Rice", "Watering", "Senses"],
     code: `// Rice to market — needs: Flooded Paddy (Rice), Rain Barrel (Watering), Sensor
 // Mast (Senses), and the Plough Blade for till().

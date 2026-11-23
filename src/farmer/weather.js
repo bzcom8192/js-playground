@@ -17,7 +17,7 @@
 // ---------- derivation (exact) ----------
 //   segment i      = ⌊tick / SEGMENT_TICKS⌋                 (1,200 ticks = 2 min)
 //   segSeed(i)     = hash32(seed, i)                         (see hash32 below)
-//   stream_i       = mulberry32(segSeed(i))                  (maze.js)
+//   stream_i       = mulberry32(segSeed(i))                  (rng.js)
 //   weather(i)     = pick(stream_i draw #1) over WEATHER_WEIGHTS, cumulative in
 //                    WEATHER_STATES order: Sunny 40 %, Rain 30 %, Storm 15 %,
 //                    Drought 15 %.
@@ -36,7 +36,7 @@
 //                    (below 5 ticks, where ±20 % holds no other whole number,
 //                    the error is exactly 1 tick).
 
-import { mulberry32, randomSeed } from "./maze.js";
+import { mulberry32, randomSeed } from "./rng.js";
 
 export const WEATHER_STATES = ["Sunny", "Rain", "Storm", "Drought"];
 export const WEATHER_WEIGHTS = { Sunny: 0.4, Rain: 0.3, Storm: 0.15, Drought: 0.15 };
@@ -56,7 +56,7 @@ export const DROUGHT_WET_WATER = 0.5; // …unless the tile's water is ≥ 0.5
 export const STORM_GROWTH = 1.5;
 export const STORM_STRIKES = 3; // lightning moments per storm segment
 export const STORM_MAX_TILES = 3; // each strikes 1…3 crop tiles
-/** Entities lightning can destroy (planted crops incl. Rice; grass, dead crops, maze, dinosaur are spared). */
+/** Entities lightning can destroy (planted crops incl. Rice; grass and dead crops are spared). */
 export const STRIKABLE = new Set(["Bush", "Tree", "Carrot", "Pumpkin", "Sunflower", "Cactus", "Rice"]);
 
 // Demo farm: a fixed seed (the demo is never saved). Segment 0 of it is Rain.

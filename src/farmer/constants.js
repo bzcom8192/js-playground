@@ -10,10 +10,6 @@ export const Entities = Object.freeze({
   Sunflower: "Sunflower",
   Cactus: "Cactus",
   Dead_Pumpkin: "Dead_Pumpkin",
-  Hedge: "Hedge",
-  Treasure: "Treasure",
-  Dinosaur: "Dinosaur",
-  Apple: "Apple",
   Rice: "Rice",
   Dead_Rice: "Dead_Rice",
 });
@@ -28,7 +24,6 @@ export const Items = Object.freeze({
   Fertilizer: "Fertilizer",
   Water: "Water",
   Gold: "Gold",
-  Bone: "Bone",
   Rice: "Rice",
 });
 
@@ -50,8 +45,6 @@ export const Unlocks = Object.freeze({
   Sunflowers: "Sunflowers",
   Fertilizer: "Fertilizer",
   Cactus: "Cactus",
-  Mazes: "Mazes",
-  Dinosaurs: "Dinosaurs",
   Megafarm: "Megafarm",
   Rice: "Rice",
 });
@@ -82,7 +75,6 @@ export const ITEM_ORDER = [
   "Fertilizer",
   "Water",
   "Gold",
-  "Bone",
 ];
 
 export const ITEM_ICONS = {
@@ -95,7 +87,6 @@ export const ITEM_ICONS = {
   Fertilizer: "🧪",
   Water: "💧",
   Gold: "🪙",
-  Bone: "🦴",
   Rice: "🌾",
 };
 
@@ -142,13 +133,6 @@ export const ENTITY_INFO = {
     soil: true,
     cost: null,
   },
-  // Maze tiles: created only by spawning a maze, never planted (cost: null).
-  Hedge: { icon: "🟩", growTime: 0, unlock: "Mazes", soil: false, cost: null },
-  Treasure: { icon: "💰", growTime: 0, unlock: "Mazes", soil: false, cost: null },
-  // Dinosaur: plant() hatches the (single) dinosaur; every body tile holds one.
-  // Apples only spawn by themselves while a dinosaur is alive (cost: null).
-  Dinosaur: { icon: "🦖", growTime: 0, unlock: "Dinosaurs", soil: false, cost: { Gold: 24 } },
-  Apple: { icon: "🍎", growTime: 0, unlock: "Dinosaurs", soil: false, cost: null },
   // Rice (v3 phase 5): a paddy crop. Soil with water ≥ RICE_PLANT_WATER to
   // plant; withers into Dead_Rice when kept dry (see the RICE_* knobs below).
   Rice: {
@@ -171,9 +155,6 @@ export const WATER_PER_USE = 0.25;
 export const FERTILIZER_SECONDS = 3;
 export const DEAD_PUMPKIN_CHANCE = 0.15;
 export const WATER_BASE_INTERVAL = 8; // s per Water item at Watering level 1
-export const DINO_STEP_SECONDS = 0.3; // game seconds per dinosaur step (3 world ticks of 100 ms)
-export const APPLE_SPAWN_SECONDS = 1.5; // game seconds between apple spawns while a dinosaur lives
-export const DEMO_DINO_SEED = 12; // every dinosaur on the demo farm has this seed (see hatchDino in world.js)
 // Rice (v3 phase 5). Ticks here are world ticks (0.1 s of farm time, the same
 // tick the weather counts — see weather.js), so 200 ticks = 20 s.
 export const RICE_PLANT_WATER = 0.5; // plant(Rice) needs tile water ≥ this
@@ -196,7 +177,6 @@ export const TREE_YIELD = Object.freeze([8, 8, 13, 21, 32, 48]); // Wood, by Tre
 export const CARROT_YIELD = Object.freeze([2, 2, 3, 5, 8, 12]); // per plant, by Carrots level
 export const PUMPKIN_FACTOR = Object.freeze([1, 1, 2, 3, 5, 8]); // × the block's k³, by Pumpkins level
 export const CACTUS_FACTOR = Object.freeze([1, 1, 2, 4]); // × the bench's n or n², by Cactus level
-export const MAZE_GOLD_PER_TILE = Object.freeze([2, 2, 3, 5]); // Gold per farm tile, by Mazes level
 // Power per sunflower = SUNFLOWER_POWER × ⌊√flowers⌋, and × SUNFLOWER_BONUS for the
 // one with the most petals among at least SUNFLOWER_MIN.
 export const SUNFLOWER_POWER = 2;
@@ -204,8 +184,6 @@ export const SUNFLOWER_BONUS = 6;
 export const SUNFLOWER_MIN = 10;
 /** The table's value for `level`, clamped to its ends. */
 export const byLevel = (table, level) => table[Math.max(0, Math.min(table.length - 1, level))];
-/** Max apples on the farm at once: one per 16 tiles, at least 1 (12×12 → 9). */
-export const appleCap = (size) => Math.max(1, Math.floor((size * size) / 16));
 
 /** "1 Wood + 2 Hay" */
 export const priceText = (cost) => Object.entries(cost).map(([k, v]) => `${v} ${k}`).join(" + ");
@@ -367,31 +345,16 @@ export const UNLOCKS = [
     cost: (l) => [{ Pumpkin: 320 }, { Pumpkin: 900, Cactus: 160 }, { Pumpkin: 2600, Cactus: 700 }][l],
   },
   {
-    id: "Mazes",
-    name: "Hedge Labyrinth",
-    icon: "🧩",
-    desc: `Fertilizer on a full-grown Bush sends hedges over the whole farm. Find the treasure inside: ${yieldText(MAZE_GOLD_PER_TILE)} Gold per farm tile at level 1–3.`,
-    requires: "Cactus",
-    maxLevel: 3,
-    cost: (l) => [{ Cactus: 2400, Pumpkin: 3000 }, { Cactus: 6500, Gold: 500 }, { Cactus: 16000, Gold: 1800 }][l],
-  },
-  {
-    id: "Dinosaurs",
-    name: "Dinosaur Egg",
-    icon: "🦕",
-    desc: `plant(Entities.Dinosaur) for ${priceText(ENTITY_INFO.Dinosaur.cost)}. It wanders, eats apples and gets longer; cut it anywhere for Bone = (segments cut)² × level.`,
-    requires: "Mazes",
-    maxLevel: 3,
-    cost: (l) => [{ Gold: 1100, Cactus: 7000 }, { Gold: 2600, Bone: 650 }, { Gold: 7500, Bone: 2400 }][l],
-  },
-  {
     id: "Megafarm",
     name: "Bot Crew",
     icon: "🏭",
     desc: "spawn_bot() puts another bot on your tile with the same program. One per farm column at most (12 on 12×12), sharing one farm and one store room.",
-    requires: "Dinosaurs",
+    // BRIEF22: chained after Cactus (Mazes and Dinosaurs are gone) and paid in
+    // the late crops instead of 1400 Bone + 2400 Gold, for about the farm time
+    // the old price took (≈1,700 s on 8×8 at Overclock 3; see RESULT22.md).
+    requires: "Cactus",
     maxLevel: 1,
-    cost: () => ({ Bone: 1400, Gold: 2400 }),
+    cost: () => ({ Pumpkin: 40000, Cactus: 30000 }),
   },
 ];
 
@@ -412,9 +375,5 @@ export const ENTITY_UNLOCK = {
   Pumpkin: "Pumpkins",
   Sunflower: "Sunflowers",
   Cactus: "Cactus",
-  Hedge: "Mazes",
-  Treasure: "Mazes",
-  Dinosaur: "Dinosaurs",
-  Apple: "Dinosaurs",
   Rice: "Rice",
 };

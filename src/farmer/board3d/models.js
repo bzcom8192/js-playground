@@ -1,11 +1,11 @@
 // Farm models built only from three.js primitives and code-made meshes.
 //
 // Every static model (wheat patch, rice paddy, bush, tree, carrots, pumpkin, sunflower,
-// cactus, maze hedge, treasure chest, apple, dinosaur segment) is ONE merged,
-// vertex-coloured geometry, so a model costs one draw call. Geometries are cached
-// per variant and shared by every tile that shows that model; the kit owns
-// and disposes them. Crops live in crops.js, hedge, chest, apple and dinosaur in
-// setpieces.js, the bot in bot.js, tiles and the planter box in planter.js, the canvas textures in textures.js.
+// cactus) is ONE merged, vertex-coloured geometry, so a model costs one draw call.
+// Geometries are cached per variant and shared by every tile that shows that model;
+// the kit owns and disposes them. Crops live in crops.js, the bot in bot.js, tiles
+// and the planter box in planter.js, the canvas textures in textures.js.
+// (BRIEF22 removed the maze hedge, treasure chest, apple and dinosaur set pieces.)
 import * as THREE from "three";
 import { DRONE_BAND_0, statusLight } from "../droneBands.js";
 import { botBodyGeometry, botWheelGeometry, BOT_PARTS, LIGHT_POS, WHEEL_PARTS } from "./bot.js";
@@ -21,7 +21,6 @@ import {
 } from "./crops.js";
 import { rng } from "./geom.js";
 import { frameGeometry, planksGeometry, planterSize, slabGeometry, tileGeometry } from "./planter.js";
-import { appleGeometry, dinoBodyGeometry, dinoHeadGeometry, dinoTailGeometry, hedgeGeometry, treasureGeometry } from "./setpieces.js";
 import { blobShadowTexture, grainTexture, grassTexture, plankTexture, soilTexture, waterTexture } from "./textures.js";
 
 export { rng };
@@ -56,10 +55,8 @@ export function createModelKit() {
   const leafy = own(new THREE.MeshLambertMaterial({ vertexColors: true }));
   // Crops made mostly of single-sheet leaves and stalks.
   const blades = own(new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }));
-  // Pumpkins, cacti and the dinosaur get a soft waxy highlight.
+  // Pumpkins and cacti get a soft waxy highlight.
   const rind = own(new THREE.MeshPhongMaterial({ vertexColors: true, shininess: 22, specular: "#33261f" }));
-  // The chest's brass and the apple's skin: a tighter, brighter highlight.
-  const glossy = own(new THREE.MeshPhongMaterial({ vertexColors: true, shininess: 60, specular: "#5a4c38" }));
   const wheatBase = own(new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, color: "#efc985" }));
   const trim = own(new THREE.MeshLambertMaterial({ vertexColors: true }));
   // The bot: painted metal, bare metal, rubber, glass.
@@ -177,22 +174,6 @@ export function createModelKit() {
         obj.rotation.y = v * 2.1;
         break;
       }
-      case "Hedge":
-        obj = meshOf(geo(`hedge${v}`, () => hedgeGeometry(601 + v)), leafy, { receive: false });
-        break;
-      case "Treasure":
-        obj = meshOf(geo("treasure", () => treasureGeometry()), glossy);
-        obj.rotation.y = -0.18; // a slight turn so the lid and lock both read
-        break;
-      case "Apple":
-        obj = meshOf(geo("apple", () => appleGeometry()), glossy);
-        obj.rotation.y = v * 1.3;
-        break;
-      case "Dinosaur":
-        // The scene draws the dinosaur as one animated chain (buildDinoSegment);
-        // a lone segment model is still available for generic callers.
-        obj = meshOf(dinoGeo("body"), rind);
-        break;
       default:
         return null;
     }
@@ -202,31 +183,6 @@ export function createModelKit() {
     wrap.userData.type = e.type;
     wrap.userData.wheatMaterial = obj.userData.wheatMaterial || null;
     return wrap;
-  }
-
-  const DINO_PARTS = ["head", "body", "legs", "tail"];
-  const dinoGeo = (p) =>
-    geo(`dino-${p}`, () =>
-      p === "head" ? dinoHeadGeometry() : p === "tail" ? dinoTailGeometry() : dinoBodyGeometry(p === "legs"),
-    );
-
-  /**
-   * One dinosaur segment, `part` = "head" | "body" | "legs" (body with feet) | "tail".
-   * Front (+z) points at the segment ahead; the scene sets position/yaw/scale.
-   */
-  function buildDinoSegment(p) {
-    const m = meshOf(dinoGeo(DINO_PARTS.includes(p) ? p : "body"), rind);
-    const wrap = new THREE.Group();
-    wrap.add(m);
-    wrap.userData.type = "Dinosaur";
-    wrap.userData.part = p;
-    return wrap;
-  }
-  /** Swap a segment's shape in place (e.g. the old tail becomes body after a meal). */
-  function setDinoPart(obj, p) {
-    if (obj.userData.part === p) return;
-    obj.userData.part = p;
-    obj.children[0].geometry = dinoGeo(DINO_PARTS.includes(p) ? p : "body");
   }
 
   /** One pumpkin spanning a k×k group of tiles (a finer mesh, shared by all giants). */
@@ -370,8 +326,6 @@ export function createModelKit() {
   return {
     buildEntity,
     buildGiantPumpkin,
-    buildDinoSegment,
-    setDinoPart,
     buildTile,
     setTileGround,
     buildWater,

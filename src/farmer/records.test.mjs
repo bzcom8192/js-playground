@@ -1,11 +1,12 @@
-// v3 phase 1: run metrics (ops / ticks / program size), seeded mazes,
-// personal records (maze + dinosaur), persistence and export / import.
+// v3 phase 1: run metrics (ops / ticks / program size), seeds, the save-level
+// records (since BRIEF22: the contract totals only), persistence and export /
+// import.
 // Run with: npm run test:farmer
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import * as W from "./world.js";
 import * as R from "./records.js";
-import { generateSeededMaze, mulberry32, parseSeed, randomSeed } from "./maze.js";
+import { parseSeed } from "./rng.js";
 import { WORLD_SIZES } from "./constants.js";
 import { createRuntime } from "./runtime.js";
 import { buildExport, parseImport } from "./saveData.js";
@@ -20,15 +21,6 @@ function farm(n, unlocks = {}) {
   s.size = n;
   s.tiles = Array.from({ length: n * n }, W.newTile);
   Object.assign(s.unlocks, { Senses: 1, Plant: 1, ...unlocks });
-  return s;
-}
-
-/** A farm ready to spawn a maze: grown Bush under the drone, Fertilizer in stock. */
-function mazeReady(n = 6, { mazes = 1, at = [0, 0] } = {}) {
-  const s = farm(n, { Fertilizer: 1, Mazes: mazes });
-  s.items.Fertilizer = 10;
-  [s.drone.x, s.drone.y] = at;
-  W.droneTile(s).entity = { type: "Bush", progress: 1 };
   return s;
 }
 
@@ -49,30 +41,6 @@ function runtime(s, opts = {}) {
   });
   return { rt, logs };
 }
-
-// Spawns a maze and solves it with a depth-first search.
-const SOLVER = `use_item(Items.Fertilizer);
-const seen = new Set();
-const back = { North: South, South: North, East: West, West: East };
-const key = () => get_pos_x() + "," + get_pos_y();
-function dfs() {
-  if (get_entity_type() === Entities.Treasure) {
-    harvest();
-    return true;
-  }
-  seen.add(key());
-  for (const d of [North, East, South, West]) {
-    if (!can_move(d)) continue;
-    move(d);
-    if (!seen.has(key()) && dfs()) return true;
-    move(back[d]);
-  }
-  return false;
-}
-dfs();
-`;
-
-const layout = (s) => s.tiles.map((t) => t.entity?.type ?? ".").join("");
 
 // ---------- ops counter ----------
 
@@ -144,57 +112,7 @@ test("program size: non-empty lines and characters of the main file", async () =
   assert.deepEqual([rt.stats().lines, rt.stats().chars], [2, 18], "defaults to the run code");
 });
 
-// ---------- seeded mazes ----------
-
-test("seeded mazes: same seed + size + start → identical layout and treasure; other seeds differ", () => {
-  for (const n of WORLD_SIZES.filter((k) => k >= 3)) {
-    const a = generateSeededMaze(n, 0, 0, 123456789);
-    const b = generateSeededMaze(n, 0, 0, 123456789);
-    assert.deepEqual(a, b, `size ${n}`);
-  }
-  const base = generateSeededMaze(12, 0, 0, 1);
-  let differ = 0;
-  for (let seed = 2; seed < 22; seed++) {
-    const m = generateSeededMaze(12, 0, 0, seed);
-    if (m.walls.join() !== base.walls.join()) differ++;
-  }
-  assert.equal(differ, 20, "every other seed gives a different 12×12 layout");
-
-  // Through the world: pending seed on two separate farms.
-  const games = [mazeReady(8), mazeReady(8)];
-  for (const g of games) {
-    g.pendingSeed = 987654321;
-    assert.equal(W.useItem(g, "Fertilizer", 1, () => 0.5).ok, true);
-    assert.equal(g.maze.seed, 987654321);
-    assert.equal(g.pendingSeed, null, "the pending seed is used once");
-  }
-  assert.equal(layout(games[0]), layout(games[1]));
-  assert.deepEqual(games[0].maze.treasure, games[1].maze.treasure);
-  const other = mazeReady(8);
-  other.pendingSeed = 987654322;
-  W.useItem(other, "Fertilizer");
-  assert.notEqual(layout(other), layout(games[0]));
-});
-
-test("seeded mazes: without a pending seed a random 32-bit seed is drawn and replays exactly", () => {
-  const s = mazeReady(10, { at: [3, 5] });
-  const rng = mulberry32(42);
-  const expected = randomSeed(mulberry32(42));
-  W.useItem(s, "Fertilizer", 1, rng);
-  assert.equal(s.maze.seed, expected);
-  assert.ok(Number.isInteger(s.maze.seed) && s.maze.seed >= 0 && s.maze.seed <= 0xffffffff);
-  assert.deepEqual(s.maze.start, { x: 3, y: 5 });
-  const replay = mazeReady(10, { at: [3, 5] });
-  replay.pendingSeed = s.maze.seed;
-  W.useItem(replay, "Fertilizer", 1, Math.random);
-  assert.equal(layout(replay), layout(s));
-  assert.deepEqual(replay.maze.treasure, s.maze.treasure);
-  // The Mazes level does not change the layout (only the Gold).
-  const l3 = mazeReady(10, { mazes: 3, at: [3, 5] });
-  l3.pendingSeed = s.maze.seed;
-  W.useItem(l3, "Fertilizer");
-  assert.equal(layout(l3), layout(s));
-});
+// ---------- seeds ----------
 
 test("seeds: parseSeed accepts 0 … 2³²−1 (numbers or digit strings) only", () => {
   assert.equal(parseSeed("123456789"), 123456789);
@@ -206,216 +124,76 @@ test("seeds: parseSeed accepts 0 … 2³²−1 (numbers or digit strings) only",
   }
 });
 
-test("seeds: the maze seed and the pending seed survive a save round-trip", () => {
-  const s = mazeReady(6);
-  s.pendingSeed = 77;
-  W.useItem(s, "Fertilizer");
-  s.pendingSeed = 555;
-  const back = W.deserialize(JSON.parse(JSON.stringify(W.serialize(s))));
-  assert.equal(back.maze.seed, 77);
-  assert.deepEqual(back.maze.start, { x: 0, y: 0 });
-  assert.equal(back.pendingSeed, 555);
-  const junk = { ...W.serialize(s), pendingSeed: "nope" };
-  assert.equal(W.deserialize(junk).pendingSeed, null);
+// ---------- records: the contract totals ----------
+
+const done = (rewardItem, reward) => ({ rewardItem, reward });
+
+test("records: only the contract totals, counted per reward item", () => {
+  const s = farm(3);
+  assert.deepEqual(s.records, { contracts: { completed: 0, bonus: { Pumpkin: 0, Cactus: 0 } } });
+  assert.deepEqual(R.addContractDone(s, done("Pumpkin", 12)), { recorded: true });
+  R.addContractDone(s, done("Cactus", 40));
+  R.addContractDone(s, done("Pumpkin", 3));
+  assert.deepEqual(s.records.contracts, { completed: 3, bonus: { Pumpkin: 15, Cactus: 40 } });
+  for (const gone of ["addMazeAttempt", "addDinoHarvest", "betterMaze", "hasRecords", "histogram", "MAX_ATTEMPTS", "copyRecords"]) assert.equal(R[gone], undefined, gone);
 });
 
-// ---------- maze records ----------
-
-test("maze solve in a run writes a record: seed, ticks and ops inside the maze, program size", async () => {
-  const s = mazeReady(6, { mazes: 2 });
-  const { rt, logs } = runtime(s, { rng: mulberry32(9) });
-  const program = R.programSize(SOLVER);
-  assert.equal(await rt.run(SOLVER, { program }), "done", JSON.stringify(logs.filter((l) => l.kind === "error")));
-  assert.equal(s.items.Gold, 36 * 3);
-  const seedLog = logs.find((l) => l.text.startsWith("Maze seed: "));
-  assert.ok(seedLog, "the seed is announced in the Log");
-  const entry = s.records.mazes["2"];
-  assert.ok(entry, JSON.stringify(s.records));
-  assert.equal(entry.attempts.length, 1);
-  const a = entry.attempts[0];
-  assert.equal(entry.best, a);
-  assert.equal(String(a.seed), seedLog.text.slice("Maze seed: ".length));
-  const st = rt.stats();
-  // Counters at the spawn: before use_item's ticks, after its op. At the
-  // solve: before harvest's ticks (the last action), after its op.
-  assert.equal(a.ticks, st.runTicks - 200);
-  assert.equal(a.ops, st.ops - 1);
-  assert.deepEqual(
-    { level: a.level, size: a.size, sx: a.sx, sy: a.sy, lines: a.lines, chars: a.chars, at: a.at },
-    { level: 2, size: 6, sx: 0, sy: 0, lines: program.lines, chars: program.chars, at: 1_700_000_000_000 },
-  );
-  assert.ok(logs.some((l) => /^🏁 Maze solved in [\d,]+ ticks · [\d,]+ ops — new best for Mazes level 2!$/.test(l.text)));
-
-  // Replaying the same seed from the same tile with the same program → the same numbers.
-  const again = mazeReady(6, { mazes: 2 });
-  again.pendingSeed = a.seed;
-  const r2 = runtime(again);
-  await r2.rt.run(SOLVER, { program });
-  const b = again.records.mazes["2"].attempts[0];
-  assert.deepEqual({ ...b, at: 0 }, { ...a, at: 0 });
-  assert.ok(r2.logs.some((l) => l.text === `Maze seed: ${a.seed} (replay)`));
-});
-
-test("a maze spawned before the run is solved but not recorded", async () => {
-  const s = mazeReady(4);
-  W.useItem(s, "Fertilizer");
-  const { rt, logs } = runtime(s);
-  await rt.run(SOLVER.replace("use_item(Items.Fertilizer);", ""));
-  assert.ok(s.items.Gold > 0);
-  assert.deepEqual(s.records.mazes, {});
-  assert.ok(logs.some((l) => l.text.includes("not timed")));
-});
-
-test("best per level: fewest ticks, tie → fewest ops; levels are separate", () => {
-  const s = W.createGame();
-  const att = (level, ticks, ops, seed = 1) => ({ level, seed, size: 6, sx: 0, sy: 0, ticks, ops, lines: 1, chars: 1, at: 0 });
-  assert.equal(R.addMazeAttempt(s, att(1, 500, 50)).best, true);
-  assert.equal(R.addMazeAttempt(s, att(1, 600, 10)).best, false, "more ticks loses even with fewer ops");
-  assert.equal(R.addMazeAttempt(s, att(1, 500, 60)).best, false, "tie on ticks, more ops");
-  assert.equal(R.addMazeAttempt(s, att(1, 500, 40, 2)).best, true, "tie on ticks, fewer ops wins");
-  assert.equal(R.addMazeAttempt(s, att(1, 499, 999, 3)).best, true);
-  assert.equal(R.addMazeAttempt(s, att(2, 9000, 9000)).best, true, "first attempt on level 2");
-  assert.equal(s.records.mazes["1"].best.seed, 3);
-  assert.equal(s.records.mazes["1"].attempts.length, 5);
-  assert.equal(s.records.mazes["2"].best.ticks, 9000);
-});
-
-test("attempt history is capped at the last 100 per level; the best survives the cap", () => {
-  const s = W.createGame();
-  const att = (ticks, seed) => ({ level: 1, seed, size: 6, sx: 0, sy: 0, ticks, ops: 1, lines: 1, chars: 1, at: seed });
-  R.addMazeAttempt(s, att(10, 0)); // the best, soon pushed out of the history
-  for (let i = 1; i < 130; i++) R.addMazeAttempt(s, att(1000 + i, i));
-  const e = s.records.mazes["1"];
-  assert.equal(e.attempts.length, R.MAX_ATTEMPTS);
-  assert.equal(e.attempts[0].seed, 30);
-  assert.equal(e.attempts.at(-1).seed, 129);
-  assert.equal(e.best.ticks, 10);
-  const back = W.deserialize(JSON.parse(JSON.stringify(W.serialize(s))));
-  assert.equal(back.records.mazes["1"].best.ticks, 10);
-  assert.equal(back.records.mazes["1"].attempts.length, 100);
-  // A hand-edited save with too many attempts is trimmed on load.
-  const big = W.serialize(s);
-  big.records.mazes["1"].attempts = Array.from({ length: 150 }, (_, i) => att(2000 + i, i));
-  assert.equal(W.deserialize(big).records.mazes["1"].attempts.length, 100);
-});
-
-// ---------- dinosaur records ----------
-
-function dinoFarm() {
-  const s = farm(6, { Dinosaurs: 2 });
-  const cells = [[0, 0], [1, 0], [2, 0], [3, 0]];
-  for (const [x, y] of cells) W.tileAt(s, x, y).entity = { type: "Dinosaur", progress: 1 };
-  s.dino = { body: cells.map(([x, y]) => ({ x, y })), dir: "West", stepTimer: 0, appleTimer: 0, seed: 4242, draws: 9, start: { x: 5, y: 2 } };
-  return s;
-}
-
-test("dinosaur harvest writes the best single Bone haul with level, cut length and seed", async () => {
-  const s = dinoFarm();
-  s.drone.x = 1; // segment 2 of 4 → cuts 3 → 3² × L2 = 18 Bone
-  const { rt, logs } = runtime(s);
-  await rt.run("harvest()");
-  assert.equal(s.items.Bone, 18);
-  const rec = { bone: 18, level: 2, cut: 3, seed: 4242, size: 6, sx: 5, sy: 2, at: 1_700_000_000_000 };
-  assert.deepEqual(s.records.dino, rec);
-  assert.deepEqual(W.deserialize(JSON.parse(JSON.stringify(W.serialize(s)))).records.dino, rec, "the seed is saved with the record");
-  assert.ok(logs.some((l) => l.text === "🦴 New best dinosaur harvest: 18 Bone (3 cut)"));
-  s.drone.x = 0; // the head: 1 segment left → 2 Bone, not a record
-  await rt.run("harvest()");
-  assert.equal(s.items.Bone, 20);
-  assert.equal(s.records.dino.bone, 18);
-});
-
-test("dinosaur records: no seed in an old save stays so; a damaged seed or tile is dropped", () => {
-  const load = (dino) => R.sanitizeRecords({ dino }).dino;
-  const old = { bone: 50, level: 1, cut: 7, at: 3 };
-  assert.deepEqual(load(old), old);
-  for (const seed of [-1, 2 ** 32, 1.5, "x", null]) assert.deepEqual(load({ ...old, seed, size: 6, sx: 0, sy: 0 }), old, String(seed));
-  assert.deepEqual(load({ ...old, seed: 0, size: 6, sx: 0, sy: 5 }), { ...old, seed: 0, size: 6, sx: 0, sy: 5 });
-  // Alive before seeds existed: a seed, but no hatching tile.
-  for (const [sx, sy] of [[null, null], [3, null], ["x", 1], [undefined, undefined]]) {
-    assert.deepEqual(load({ ...old, seed: 9, size: 6, sx, sy }), { ...old, seed: 9, size: 6, sx: null, sy: null });
-  }
-});
-
-// ---------- persistence ----------
-
-test("old saves without records (or seeds) load with empty records", () => {
-  const s = mazeReady(6);
-  W.useItem(s, "Fertilizer");
+test("old saves without records load with empty ones; damaged records → empty", () => {
+  const s = farm(3);
+  R.addContractDone(s, done("Pumpkin", 9));
   const old = JSON.parse(JSON.stringify(W.serialize(s)));
   delete old.records;
-  delete old.pendingSeed;
-  delete old.maze.seed;
-  delete old.maze.sx;
-  delete old.maze.sy;
-  const back = W.deserialize(old);
-  assert.deepEqual(back.records, R.emptyRecords());
-  assert.equal(back.pendingSeed, null);
-  assert.ok(back.maze, "the old maze still loads");
-  assert.equal(back.maze.seed, null);
-  for (const junk of [null, 5, "x", { mazes: 7, dino: "big" }, { mazes: { 1: { attempts: [{ seed: -4 }] } } }]) {
+  assert.deepEqual(W.deserialize(old).records, R.emptyRecords());
+  for (const junk of [null, 5, "x", { contracts: 7 }, { contracts: { completed: -3, bonus: { Pumpkin: "lots" } } }]) {
     assert.deepEqual(W.deserialize({ ...W.serialize(s), records: junk }).records, R.emptyRecords(), JSON.stringify(junk));
   }
 });
 
-test("export / import round-trips records; old export files without records still import", async () => {
-  const s = mazeReady(6);
-  const { rt } = runtime(s);
-  await rt.run(SOLVER);
-  R.addDinoHarvest(s, { bone: 50, level: 1, cut: 5, at: 1 });
-  s.pendingSeed = 4242;
-  const recs = JSON.parse(JSON.stringify(s.records));
-  assert.equal(recs.mazes["1"].attempts.length, 1);
+test("a pre-BRIEF22 save's maze / dino records, replay seeds and Gold / Bone bonus are dropped; the contract count stays", () => {
+  const s = farm(3);
+  const save = {
+    ...JSON.parse(JSON.stringify(W.serialize(s))),
+    records: {
+      mazes: { 1: { best: { level: 1, seed: 7, size: 6, sx: 0, sy: 0, ticks: 900, ops: 9, lines: 3, chars: 40, at: 1 }, attempts: [] } },
+      dino: { bone: 192, level: 3, cut: 8, at: 1, seed: 4188, size: 12, sx: 6, sy: 6 },
+      contracts: { completed: 11, bonus: { Gold: 400, Bone: 30 } },
+    },
+    pendingSeed: 424242,
+    pendingDinoSeed: 12,
+  };
+  const back = W.deserialize(save);
+  assert.deepEqual(back.records, { contracts: { completed: 11, bonus: { Pumpkin: 0, Cactus: 0 } } });
+  for (const k of ["pendingSeed", "pendingDinoSeed", "dinoSeed", "maze", "dino", "benchMaze"]) assert.equal(k in back, false, k);
+  const again = W.serialize(back);
+  for (const k of ["pendingSeed", "pendingDinoSeed", "maze", "dino"]) assert.equal(k in again, false, `not written back: ${k}`);
+});
 
+test("export / import round-trips the records; old export files without records still import", () => {
+  const s = farm(3);
+  R.addContractDone(s, done("Cactus", 288));
+  s.items.Gold = 77;
   const file = JSON.stringify(buildExport({ save: W.serialize(s), files: null }));
   const parsed = parseImport(file);
   assert.equal(parsed.ok, true);
   const loaded = W.deserialize(parsed.save);
-  assert.deepEqual(JSON.parse(JSON.stringify(loaded.records)), recs);
-  assert.equal(loaded.pendingSeed, 4242);
+  assert.deepEqual(loaded.records, s.records);
   assert.deepEqual(W.serialize(W.deserialize(W.serialize(loaded))), W.serialize(loaded), "stable");
 
   const oldSave = W.serialize(s);
   delete oldSave.records;
-  delete oldSave.pendingSeed;
   const oldFile = parseImport(JSON.stringify(buildExport({ save: oldSave })));
   assert.equal(oldFile.ok, true);
   const oldLoaded = W.deserialize(oldFile.save);
   assert.deepEqual(oldLoaded.records, R.emptyRecords());
-  assert.equal(oldLoaded.items.Gold, s.items.Gold);
+  assert.equal(oldLoaded.items.Gold, 77);
 });
 
-test("demo mode writes no records (maze solve or dinosaur harvest)", async () => {
+test("demo mode writes no records", async () => {
   const d = createDemoGame();
   assert.equal(d.demo, true);
-  W.droneTile(d).entity = { type: "Bush", progress: 1 };
   const { rt, logs } = runtime(d);
-  assert.equal(await rt.run(SOLVER), "done", JSON.stringify(logs.filter((l) => l.kind === "error")));
-  assert.ok(logs.some((l) => l.text.startsWith("🏁 Maze solved")), "still solved and timed in the Log");
-  for (const [x, y] of [[0, 0], [1, 0]]) W.tileAt(d, x, y).entity = { type: "Dinosaur", progress: 1 };
-  d.dino = { body: [{ x: 0, y: 0 }, { x: 1, y: 0 }], dir: "West", stepTimer: 0, appleTimer: 0 };
-  d.drone.x = 0;
-  d.drone.y = 0;
-  const bone = d.items.Bone;
-  await rt.run("harvest()");
-  assert.ok(d.items.Bone > bone);
+  assert.equal(await rt.run("harvest(); move(North); harvest();"), "done", JSON.stringify(logs.filter((l) => l.kind === "error")));
   assert.deepEqual(d.records, R.emptyRecords());
-  assert.equal(R.addMazeAttempt(d, { level: 1, seed: 1, ticks: 1, ops: 1 }).recorded, false);
-  assert.equal(R.addDinoHarvest(d, { bone: 1 }).recorded, false);
-});
-
-// ---------- histogram ----------
-
-test("histogram: ≤10 equal-width buckets from min to max, every attempt counted once", () => {
-  assert.deepEqual(R.histogram([]), []);
-  assert.deepEqual(R.histogram([500, 500]), [{ from: 500, to: 500, count: 2 }]);
-  const vals = Array.from({ length: 100 }, (_, i) => 1000 + i * 37);
-  const h = R.histogram(vals);
-  assert.ok(h.length <= 10 && h.length >= 9);
-  assert.equal(h.reduce((n, b) => n + b.count, 0), 100);
-  assert.equal(h[0].from, 1000);
-  assert.equal(h.at(-1).to, Math.max(...vals));
-  for (let i = 1; i < h.length; i++) assert.equal(h[i].from, h[i - 1].to + 1);
-  for (const v of vals) assert.equal(h.filter((b) => v >= b.from && v <= b.to).length, 1);
-  assert.deepEqual(R.histogram([1, 2, 3]).map((b) => b.count), [1, 1, 1], "small spans: one bucket per value");
+  assert.equal(R.addContractDone(d, done("Pumpkin", 5)).recorded, false);
+  assert.deepEqual(d.records, R.emptyRecords());
 });

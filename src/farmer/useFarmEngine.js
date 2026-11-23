@@ -250,28 +250,6 @@ export default function useFarmEngine() {
     [save],
   );
 
-  /** Records window: the seed the next maze uses (null = random). Saved at once. */
-  const setPendingSeed = useCallback(
-    (seed) => {
-      exitDemo();
-      gameRef.current.pendingSeed = seed;
-      dirtyRef.current = true;
-      save();
-    },
-    [exitDemo, save],
-  );
-
-  /** Records window: the seed the next dinosaur hatches with (null = random). Saved at once. */
-  const setPendingDinoSeed = useCallback(
-    (seed) => {
-      exitDemo();
-      gameRef.current.pendingDinoSeed = seed;
-      dirtyRef.current = true;
-      save();
-    },
-    [exitDemo, save],
-  );
-
   /** Contracts window: the Deliver button (same code path as deliver_contract). */
   const deliverContract = useCallback(
     (id) => {
@@ -379,8 +357,6 @@ export default function useFarmEngine() {
     isRunning,
     importSave,
     clearFarm,
-    setPendingSeed,
-    setPendingDinoSeed,
     deliverContract,
     recordArenaMatch,
     buy,

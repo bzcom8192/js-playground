@@ -14,11 +14,7 @@ type ItemType = keyof typeof Items;
 type GroundType = keyof typeof Grounds;
 type UnlockType = keyof typeof Unlocks;
 
-/**
- * Everything that can stand on a tile. Hedge and Treasure exist only inside a
- * maze, each tile of the dinosaur reads as Dinosaur, and Apples turn up while
- * a dinosaur is alive. Dead_Pumpkin / Dead_Rice are spoiled: harvest() clears them.
- */
+/** Everything that can stand on a tile. Dead_Pumpkin / Dead_Rice are spoiled: harvest() clears them. */
 declare const Entities: {
 ${names(Entities)}
 };
@@ -48,11 +44,7 @@ declare const West: "West";
 
 /**
  * Gather whatever grows on the bot's tile. A ripe plant goes into the store
- * room; an unripe one is lost (young grass is spared).
- * Maze Treasure: pays Gold for every farm tile, then the maze is gone.
- * Dinosaur: cuts this segment and all the tail behind it
- * → Bone = (segments cut)² × Dinosaurs level (from the head: all of it).
- * Apples stay where they are (false). Costs 200 ticks.
+ * room; an unripe one is lost (young grass is spared). Costs 200 ticks.
  * @returns true when there was something to gather.
  */
 declare function harvest(): boolean;
@@ -62,41 +54,31 @@ declare function harvest(): boolean;
  * for on the spot (see get_cost). Grass on the tile makes room.
  * Entities.Rice (Rice upgrade, 3 Carrots): the tile's water must be ≥ 0.5.
  * Below 0.2 it stops growing, and more than 200 dry world ticks in a row
- * (20 s) turn it into Dead_Rice. Ripe: 4 Rice (7 at level 2).
- * Entities.Dinosaur (Dinosaurs upgrade, 24 Gold): a dinosaur one tile long. It
- * wanders on its own and gets longer with each apple. One per farm. 200 ticks.
+ * (20 s) turn it into Dead_Rice. Ripe: 4 Rice (7 at level 2). 200 ticks.
  */
 declare function plant(entity: EntityType): boolean;
-/**
- * Drive one tile. Leaving one side of the farm enters on the opposite side. A
- * Hedge stops the bot: it stays put and you get false. Inside a maze the farm
- * edge stops it too. 200 ticks.
- */
+/** Drive one tile. Leaving one side of the farm enters on the opposite side. 200 ticks. */
 declare function move(direction: Direction): boolean;
-/** Is the way free? On the open farm always; not into a Hedge or over a maze's outer edge. */
+/** Is the way free? Always, for a direction: nothing on the farm blocks the bot. */
 declare function can_move(direction: Direction): boolean;
-/** Turn Grassland into Soil or back; whatever stood on the tile is removed. Needs Carrots. Not inside a maze, not on the dinosaur or an apple. 200 ticks. */
+/** Turn Grassland into Soil or back; whatever stood on the tile is removed. Needs Carrots. 200 ticks. */
 declare function till(): boolean;
-/** Start over with a bare Grassland farm (a maze or dinosaur goes too) and bring this bot to (0, 0). 200 ticks. */
+/** Start over with a bare Grassland farm and bring this bot to (0, 0). 200 ticks. */
 declare function clear(): boolean;
 /**
  * Trade places between this tile's plant and the neighbour's; growth, petals
- * and size travel along. Never across the farm edge (false). Needs Cactus. Not
- * inside a maze, not with the dinosaur or an apple. 200 ticks.
+ * and size travel along. Never across the farm edge (false). Needs Cactus. 200 ticks.
  */
 declare function swap(direction: Direction): boolean;
 /**
  * Apply items to the bot's tile.
  * Items.Water: +0.25 water each (growth ×(1 + 4×water)).
- * Items.Fertilizer: 3 s of growth each. On a full-grown Bush, with Mazes, it
- * grows a hedge maze over the entire farm instead (a dinosaur and its apples
- * vanish with the old field).
+ * Items.Fertilizer: 3 s of growth each, on a plant that is still growing.
  */
 declare function use_item(item: ItemType, n?: number): boolean;
 /**
  * Deal with the market n times. It sells Fertilizer (3 Pumpkins) and Water
- * (2 Carrots), and buys Items.Rice for 1 Gold each (Rice upgrade).
- * Closed while you are in a maze. 200 ticks.
+ * (2 Carrots), and buys Items.Rice for 1 Gold each (Rice upgrade). 200 ticks.
  */
 declare function trade(item: ItemType, n?: number): boolean;
 /** Buy the next level of an upgrade if the store room covers it. 200 ticks. */
@@ -108,7 +90,7 @@ declare function do_a_flip(): boolean;
 
 // ---------- sensors (no waiting, 1 tick) ----------
 
-/** Is the plant here full-grown? (The dinosaur always counts, an apple never does.) Needs Senses. */
+/** Is the plant here full-grown? Needs Senses. */
 declare function can_harvest(): boolean | null;
 /** What stands on this tile, or null. Needs Senses. */
 declare function get_entity_type(): EntityType | null;
@@ -122,11 +104,9 @@ declare function get_pos_y(): number | null;
 declare function get_water(): number | null;
 /**
  * A Sunflower's petals (7–15) or a Cactus's size (0–9), here or one tile over
- * in \`direction\`; null for other plants. Needs Senses.
- * Inside a maze: the Direction towards the Treasure from that tile. The longer
- * axis decides and a tie goes East/West; null on the Treasure.
+ * in \`direction\` (wrapping like move()); null for other plants. Needs Senses.
  */
-declare function measure(direction?: Direction): number | Direction | null;
+declare function measure(direction?: Direction): number | null;
 /** Tiles along one side of the farm. */
 declare function get_world_size(): number;
 /** How much of an item is in the store room. */
@@ -175,7 +155,7 @@ interface Contract {
   amount: number;
   /** Bonus paid on delivery (in rewardItem). */
   reward: number;
-  /** "Gold" or "Bone". */
+  /** "Pumpkin", or "Cactus" for a Cactus contract. */
   rewardItem: ItemType;
   /** Farm-clock ticks until it expires (0 once done / expired). */
   ticksLeft: number;
